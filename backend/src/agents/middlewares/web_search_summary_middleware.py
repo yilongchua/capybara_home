@@ -1,0 +1,251 @@
+"""Web search summarization middleware — condenses large web_search results inline.
+
+When a web_search tool returns more than ``web_search_summary.summary_threshold_chars`` characters,
+this middleware makes a fast LLM call (Haiku, configurable timeout) to produce a
+concise summary and replaces the ToolMessage content before it lands in state.
+This prevents web_search from inflating the context window on every round.
+
+The original character count is logged via runtime_events so operators can tune
+the threshold.
+
+Async path: `awrap_tool_call` uses `model.ainvoke()` and `asyncio.wait_for` so
+N concurrent web_search results can summarize in parallel via the model
+endpoint's load-balancer (Olla). The sync path retains the daemon-thread
+fallback for embedded / non-async callers.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import threading
+from typing import Any, override
+
+from langchain.agents import AgentState
+from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import ToolMessage
+from langgraph.prebuilt.tool_node import ToolCallRequest
+from langgraph.types import Command
+
+from src.agents.middlewares.runtime_events import append_runtime_event
+from src.config.web_search_summary_config import get_web_search_summary_config
+from src.models import ModelRouter, create_chat_model
+
+logger = logging.getLogger(__name__)
+
+_SUMMARY_PROMPT_TEMPLATE = """\
+You are a research assistant. The following text is the raw result of a web search query.
+Summarize it into a concise, factual paragraph (max 250 words) that captures all key findings.
+Preserve: specific numbers, dates, names, URLs that are clearly important.
+Do NOT add commentary, opinions, or phrases like "The search results show...".
+Start directly with the key information.
+
+Search query: {query}
+
+Raw results:
+{raw_content}
+"""
+
+_SUMMARY_SUFFIX = "\n\n[Summarized by web_search_summary_middleware — original: {orig_chars} chars]"
+
+
+def _run_with_timeout(fn, timeout: float) -> Any:
+    """Run fn() in a daemon thread with a hard timeout."""
+    result_holder: list[Any] = [None]
+    exc_holder: list[BaseException | None] = [None]
+
+    def worker():
+        try:
+            result_holder[0] = fn()
+        except Exception as e:  # noqa: BLE001
+            exc_holder[0] = e
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        raise TimeoutError(f"Web search summary timed out after {timeout}s")
+    if exc_holder[0] is not None:
+        raise exc_holder[0]
+    return result_holder[0]
+
+
+class WebSearchSummaryMiddleware(AgentMiddleware[AgentState]):
+    """Summarizes oversized web_search tool results before they enter the context window.
+
+    Handles both sync and async tool calls. Summarization only triggers when:
+    - The tool name matches a web_search tool (see _WEB_SEARCH_TOOL_NAMES)
+    - The result content exceeds ``web_search_summary.summary_threshold_chars``
+    If the LLM call fails or times out, the original (possibly truncated) content is kept.
+    """
+
+    _WEB_SEARCH_TOOL_NAMES = frozenset(
+        {
+            "web_search",
+            "search",
+            "searxng",
+            "tavily_search_results_json",
+            "duckduckgo_search",
+        }
+    )
+
+    def __init__(self, *, router: ModelRouter, requested_model: str | None):
+        super().__init__()
+        self._router = router
+        self._requested_model = requested_model
+        self._config = get_web_search_summary_config()
+
+    def _is_web_search(self, tool_name: str | None) -> bool:
+        if not tool_name:
+            return False
+        lower = tool_name.lower()
+        return lower in self._WEB_SEARCH_TOOL_NAMES or "web_search" in lower or "searx" in lower
+
+    def _build_prompt_and_model(self, query: str, content: str) -> tuple[str, str]:
+        prompt = _SUMMARY_PROMPT_TEMPLATE.replace("{query}", query).replace("{raw_content}", content)
+        model_name = self._router.resolve("planner", requested_model=self._requested_model)
+        return prompt, model_name
+
+    def _record_summarized(self, runtime: Any, tool_name: str, orig_chars: int, result: str, model_name: str) -> None:
+        append_runtime_event(
+            runtime,
+            {
+                "source": "web_search_summary",
+                "tool": tool_name,
+                "decision": "summarized",
+                "orig_chars": orig_chars,
+                "summary_chars": len(result),
+                "model": model_name,
+            },
+        )
+
+    def _summarize(self, query: str, content: str, runtime: Any, tool_name: str) -> str | None:
+        orig_chars = len(content)
+        if orig_chars <= self._config.summary_threshold_chars:
+            return None
+
+        prompt, model_name = self._build_prompt_and_model(query, content)
+
+        def _call_llm() -> str:
+            model = create_chat_model(name=model_name, thinking_enabled=False)
+            response = model.invoke(prompt)
+            raw = response.content if isinstance(response.content, str) else str(response.content)
+            return raw.strip()
+
+        try:
+            summary = _run_with_timeout(_call_llm, timeout=self._config.timeout_seconds)
+        except TimeoutError:
+            logger.warning("Web search summary timed out for tool '%s'; keeping original", tool_name)
+            append_runtime_event(runtime, {"source": "web_search_summary", "tool": tool_name, "decision": "timeout_skipped", "orig_chars": orig_chars})
+            return None
+        except Exception:
+            logger.exception("Web search summary failed for tool '%s'; keeping original", tool_name)
+            return None
+
+        suffix = _SUMMARY_SUFFIX.replace("{orig_chars}", str(orig_chars))
+        result = summary + suffix
+        self._record_summarized(runtime, tool_name, orig_chars, result, model_name)
+        return result
+
+    async def _asummarize(self, query: str, content: str, runtime: Any, tool_name: str) -> str | None:
+        """Async summarize: uses model.ainvoke + asyncio.wait_for so N concurrent
+        web_search results don't serialize through the event loop. The sync path
+        used Thread.join(timeout) inside an async middleware, which blocked the
+        loop for up to `timeout_seconds` per call — three concurrent searches
+        thus waited 3x in series and routinely hit `decision=timeout_skipped`
+        (see thread-cd90decb finding #3).
+        """
+        orig_chars = len(content)
+        if orig_chars <= self._config.summary_threshold_chars:
+            return None
+
+        prompt, model_name = self._build_prompt_and_model(query, content)
+
+        async def _acall_llm() -> str:
+            model = create_chat_model(name=model_name, thinking_enabled=False)
+            response = await model.ainvoke(prompt)
+            raw = response.content if isinstance(response.content, str) else str(response.content)
+            return raw.strip()
+
+        try:
+            summary = await asyncio.wait_for(_acall_llm(), timeout=self._config.timeout_seconds)
+        except TimeoutError:
+            logger.warning("Web search summary timed out for tool '%s'; keeping original", tool_name)
+            append_runtime_event(runtime, {"source": "web_search_summary", "tool": tool_name, "decision": "timeout_skipped", "orig_chars": orig_chars})
+            return None
+        except Exception:
+            logger.exception("Web search summary failed for tool '%s'; keeping original", tool_name)
+            return None
+
+        suffix = _SUMMARY_SUFFIX.replace("{orig_chars}", str(orig_chars))
+        result = summary + suffix
+        self._record_summarized(runtime, tool_name, orig_chars, result, model_name)
+        return result
+
+    def _process_result(self, request: ToolCallRequest, result: ToolMessage | Command) -> ToolMessage | Command:
+        if not isinstance(result, ToolMessage):
+            return result
+        content = getattr(result, "content", "")
+        if not isinstance(content, str):
+            return result
+        tool_name = str(request.tool_call.get("name") or "")
+        if not self._is_web_search(tool_name):
+            return result
+        if not self._config.enabled:
+            return result
+        if len(content) <= self._config.summary_threshold_chars:
+            return result
+
+        query = str((request.tool_call.get("args") or {}).get("query") or "")
+        summary = self._summarize(query, content, request.runtime, tool_name)
+        if summary is None:
+            return result
+
+        return ToolMessage(
+            content=summary,
+            tool_call_id=getattr(result, "tool_call_id", "") or request.tool_call.get("id", ""),
+            name=tool_name or getattr(result, "name", None),
+        )
+
+    async def _aprocess_result(self, request: ToolCallRequest, result: ToolMessage | Command) -> ToolMessage | Command:
+        if not isinstance(result, ToolMessage):
+            return result
+        content = getattr(result, "content", "")
+        if not isinstance(content, str):
+            return result
+        tool_name = str(request.tool_call.get("name") or "")
+        if not self._is_web_search(tool_name):
+            return result
+        if not self._config.enabled:
+            return result
+        if len(content) <= self._config.summary_threshold_chars:
+            return result
+
+        query = str((request.tool_call.get("args") or {}).get("query") or "")
+        summary = await self._asummarize(query, content, request.runtime, tool_name)
+        if summary is None:
+            return result
+
+        return ToolMessage(
+            content=summary,
+            tool_call_id=getattr(result, "tool_call_id", "") or request.tool_call.get("id", ""),
+            name=tool_name or getattr(result, "name", None),
+        )
+
+    @override
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler,
+    ) -> ToolMessage | Command:
+        result = handler(request)
+        return self._process_result(request, result)
+
+    @override
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler,
+    ) -> ToolMessage | Command:
+        result = await handler(request)
+        return await self._aprocess_result(request, result)

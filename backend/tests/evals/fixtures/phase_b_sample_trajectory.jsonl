@@ -1,0 +1,6 @@
+{"ts": 1.0, "event": "before_agent", "payload": {}}
+{"ts": 2.0, "event": "middleware_event", "payload": {"source": "planner_middleware", "decision": "plan_created"}}
+{"ts": 3.0, "event": "before_model", "payload": {}}
+{"ts": 4.0, "event": "tool_call_start", "payload": {"tool": "write_todos"}}
+{"ts": 5.0, "event": "tool_call_end", "payload": {"tool": "write_todos"}}
+{"ts": 6.0, "event": "middleware_event", "payload": {"source": "evaluator_middleware", "decision": "llm_verdict", "verdict": "PASS"}}

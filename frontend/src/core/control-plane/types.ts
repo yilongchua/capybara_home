@@ -1,0 +1,527 @@
+export type PipelineRunStatus =
+  | "draft"
+  | "pending_approval"
+  | "approved"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "rejected";
+
+export type PipelineStepStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped";
+
+export interface TriggerEvent {
+  id: string;
+  source: string;
+  channel_name?: string | null;
+  chat_id?: string | null;
+  user_id?: string | null;
+  classification: string;
+  status: string;
+  message: string;
+  masked_message: string;
+  pipeline_template_id?: string | null;
+  pipeline_run_id?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PipelineStepDefinition {
+  id: string;
+  name: string;
+  kind: string;
+  stop_on_error: boolean;
+  config: Record<string, unknown>;
+}
+
+export interface PipelineTemplate {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  requires_approval: boolean;
+  trigger_sources: string[];
+  default_inputs: Record<string, unknown>;
+  steps: PipelineStepDefinition[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PipelineStepRun {
+  id: string;
+  step_id: string;
+  name: string;
+  kind: string;
+  status: PipelineStepStatus;
+  logs: string[];
+  output: Record<string, unknown>;
+  error?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface PipelineRun {
+  id: string;
+  template_id?: string | null;
+  template_name: string;
+  trigger_event_id?: string | null;
+  status: PipelineRunStatus;
+  summary: string;
+  requires_approval: boolean;
+  approval_request_id?: string | null;
+  inputs: Record<string, unknown>;
+  masked_inputs: Record<string, unknown>;
+  steps: PipelineStepRun[];
+  alerts: string[];
+  artifacts: string[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface ApprovalRequest {
+  id: string;
+  pipeline_run_id: string;
+  title: string;
+  description: string;
+  options: string[];
+  status: "pending" | "approved" | "rejected" | "expired";
+  requested_at: string;
+  resolved_at?: string | null;
+  resolution_note?: string | null;
+  requested_by: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface FeedbackEvent {
+  id: string;
+  target_type: string;
+  target_id: string;
+  value: "up" | "down";
+  comment: string;
+  source: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AuditEvent {
+  id: string;
+  kind: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CreatePipelineRunRequest {
+  template_id?: string;
+  steps?: PipelineStepDefinition[];
+  inputs?: Record<string, unknown>;
+  trigger_event_id?: string;
+  summary?: string;
+  requires_approval?: boolean;
+  metadata?: Record<string, unknown>;
+  auto_start?: boolean;
+}
+
+export interface ResolveApprovalRequest {
+  approve: boolean;
+  note?: string;
+  auto_start?: boolean;
+}
+
+export interface CreateFeedbackRequest {
+  target_type: string;
+  target_id: string;
+  value: "up" | "down";
+  comment?: string;
+  source?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface IntegrationHealth {
+  healthy: boolean;
+  status_code?: number;
+  url?: string;
+  reason?: string;
+  error?: string;
+}
+
+export interface ToolBackendStatus {
+  enabled: boolean;
+  base_url?: string | null;
+  secrets_ready: boolean;
+  health: IntegrationHealth;
+}
+
+export interface MCPServerStatus {
+  enabled: boolean;
+  type: string;
+  url?: string | null;
+  description: string;
+  health: IntegrationHealth;
+}
+
+export interface FolderSyncTarget {
+  id: string;
+  path: string;
+  recursive: boolean;
+  file_globs: string[];
+  upload_to_onyx: boolean;
+  connector_prefix: string;
+  enabled: boolean;
+}
+
+export interface FolderSyncManifest {
+  target_id?: string | null;
+  root: string;
+  files: Array<{
+    path: string;
+    name: string;
+    size_bytes: number;
+    upload_to_onyx: boolean;
+    connector_prefix: string;
+  }>;
+  file_count: number;
+  skipped_files?: Array<{ path: string; reason: string }>;
+  prepared_for_onyx: boolean;
+  onyx_ingestion?: {
+    enabled: boolean;
+    base_url?: string;
+    reason?: string;
+    attempted: number;
+    succeeded: number;
+    failed: Array<{ path: string; reason: string }>;
+  };
+}
+
+export interface LoginScraperStatus {
+  id: string;
+  enabled: boolean;
+  mode: string;
+  allowed_domains: string[];
+  credentials_ready: boolean;
+}
+
+export interface SchedulerState {
+  id: string;
+  last_run_at?: string | null;
+  next_run_at?: string | null;
+  last_status: string;
+  last_run_id?: string | null;
+}
+
+export interface SchedulerJobConfig {
+  id: string;
+  name: string;
+  pipeline_template_id: string;
+  interval_seconds: number;
+  schedule_type?: "interval" | "daily_time";
+  daily_time?: string | null;
+  enabled: boolean;
+  inputs?: Record<string, unknown>;
+  requires_approval?: boolean | null;
+  source?: "config" | "runtime" | string;
+}
+
+export interface AutoresearchObjective {
+  id: string;
+  objective_id: string;
+  topic: string;
+  endpoint_goal: string;
+  status: "active" | "paused_denied" | "completed_endpoint";
+  scheduler_job_id?: string | null;
+  schedule_daily_time: string;
+  template_id: string;
+  source_thread_id?: string | null;
+  latest_run_id?: string | null;
+  latest_sufficiency_score?: number | null;
+  latest_sufficiency_decision?: string | null;
+  latest_blocking_checks: string[];
+  latest_next_actions: string[];
+  recommended_tasks: string[];
+  recommended_queries: string[];
+  milestones: Array<Record<string, unknown>>;
+  pause_reason?: string | null;
+  progress_markdown_path?: string | null;
+  progress_json_path?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StartAutoresearchObjectiveRequest {
+  topic: string;
+  endpoint_goal: string;
+  thread_id?: string;
+  objective_id?: string;
+  daily_time?: string;
+  bootstrap?: boolean;
+  summary?: string;
+}
+
+export interface StartAutoresearchObjectiveResponse {
+  objective: AutoresearchObjective;
+  bootstrap_run?: PipelineRun | null;
+  scheduled_time: string;
+}
+
+export interface DeleteAutoresearchObjectiveResponse {
+  deleted: boolean;
+  objective_id: string;
+  removed_scheduler_jobs: string[];
+  purge_result: Record<string, unknown>;
+}
+
+export interface VaultStatusResponse {
+  summary: Record<string, unknown>;
+  counts: Record<string, unknown>;
+  memory: Record<string, unknown>;
+  progress: Record<string, unknown>;
+  sufficiency: Record<string, unknown>;
+  action_items: Record<string, unknown>;
+  objectives: Record<string, unknown>;
+}
+
+export interface VaultSearchItem {
+  rank: number;
+  score: number;
+  id?: string | null;
+  kind?: string | null;
+  title?: string | null;
+  path?: string | null;
+  snippet?: string | null;
+  updated_at?: string | null;
+}
+
+export interface VaultSearchResponse {
+  query: string;
+  total: number;
+  items: VaultSearchItem[];
+}
+
+export interface VaultActionItem {
+  kind: string;
+  priority: string;
+  title: string;
+  detail: string;
+  created_at: string;
+  status: string;
+  objective_id?: string | null;
+}
+
+export interface VaultActionItemsResponse {
+  generated_at: string;
+  counts: Record<string, unknown>;
+  items: VaultActionItem[];
+}
+
+export interface VaultSufficiencyRequest {
+  objective_id: string;
+  topic?: string;
+  min_score?: number;
+}
+
+export interface VaultSufficiencyResponse {
+  generated_at: string;
+  objective_id: string;
+  topic: string;
+  score: number;
+  decision: string;
+  blocking_checks: string[];
+  reasons: string[];
+  recommended_actions: string[];
+  min_score: number;
+  auto_pause_recommended: boolean;
+  sufficient_streak: number;
+  progress: Record<string, unknown>;
+}
+
+export interface PipelineArtifactContent {
+  name: string;
+  content_type: string;
+  content: string;
+}
+
+export interface IntegrationStatusResponse {
+  generated_at: string;
+  channels: {
+    service_running: boolean;
+    channels: Record<string, { enabled: boolean; running: boolean }>;
+  };
+  tool_backends: Record<string, ToolBackendStatus>;
+  mcp_servers: Record<string, MCPServerStatus>;
+  folder_sync_targets: FolderSyncTarget[];
+  audit_log: AuditEvent[];
+  login_scrapers: LoginScraperStatus[];
+  scheduler: {
+    enabled: boolean;
+    jobs: SchedulerJobConfig[];
+    state: SchedulerState[];
+    autoresearch_objectives?: AutoresearchObjective[];
+  };
+}
+
+export interface SelfImproverDraftProposal {
+  id: string;
+  skill_name: string;
+  category: string;
+  skill_path: string;
+  confidence: number;
+  summary: string;
+  recommended_addition: string;
+  risk_flags: string[];
+  evidence: Record<string, unknown>;
+  validation: {
+    frontmatter_ok: boolean;
+    parse_ok: boolean;
+    issues: string[];
+  };
+  diff_preview: string;
+}
+
+export interface SelfImproverDraftReport {
+  version: string;
+  generated_at: string;
+  run_id: string;
+  signal_window: {
+    lookback_days: number;
+    since: string;
+    until: string;
+  };
+  limits: {
+    max_proposals: number;
+    max_diff_lines: number;
+  };
+  counts: {
+    skills_total: number;
+    skills_with_signals: number;
+    proposals: number;
+    skipped: number;
+  };
+  proposals: SelfImproverDraftProposal[];
+  skipped: Array<Record<string, unknown>>;
+}
+
+export type ProposalApprovalStatus =
+  | "pending"
+  | "applied"
+  | "rejected"
+  | "apply_failed";
+
+export interface ProposalApprovalItem {
+  id: string;
+  run_id: string;
+  proposal_id: string;
+  run_template_name: string;
+  run_status: PipelineRunStatus;
+  run_created_at: string;
+  run_updated_at: string;
+  status: ProposalApprovalStatus;
+  note?: string | null;
+  error?: string | null;
+  resolved_at?: string | null;
+  updated_at?: string | null;
+  applied_path?: string | null;
+  proposal: SelfImproverDraftProposal;
+}
+
+export interface ResolveProposalApprovalRequest {
+  approve: boolean;
+  note?: string;
+}
+
+export interface SchedulerRuntimeJobCreateRequest {
+  name: string;
+  pipeline_template_id: string;
+  daily_time: string;
+  enabled?: boolean;
+  inputs?: Record<string, unknown>;
+  requires_approval?: boolean | null;
+}
+
+export type IntegrationServiceId =
+  | "llm"
+  | "comfyui"
+  | "lightrag"
+  | "websearch";
+
+export interface IntegrationServiceStatus {
+  id: IntegrationServiceId;
+  label: string;
+  base_url: string | null;
+  host: string | null;
+  port: number | null;
+  healthy: boolean;
+  status_code?: number;
+  error?: string | null;
+  can_start: boolean;
+  can_stop?: boolean;
+  docker_online?: boolean;
+  phase?: "starting" | "running" | "healthy" | "degraded" | "failed";
+  last_failure_reason?: string | null;
+  last_transition_at?: string;
+}
+
+export interface IntegrationServicesStatusResponse {
+  generated_at: string;
+  docker_desktop_online?: boolean;
+  docker_desktop_error?: string | null;
+  docker_services?: Array<{
+    name: string;
+    status: string;
+    online: boolean;
+  }>;
+  required_core_services?: string[];
+  readiness_summary?: {
+    all_ready: boolean;
+    healthy_count: number;
+    required_count: number;
+    stability_target_seconds: number;
+  };
+  services: IntegrationServiceStatus[];
+}
+
+export interface IntegrationServiceStartResponse {
+  job_id: string;
+  status: "queued" | "running" | "success" | "failed";
+  accepted: boolean;
+  message: string;
+}
+
+export interface IntegrationServiceToggleResponse {
+  service_id: string;
+  accepted: boolean;
+  action: "start" | "stop";
+  status: string;
+  message: string;
+  job_id?: string;
+}
+
+export interface StartupStep {
+  service_id: string;
+  phase: "starting" | "running" | "healthy" | "degraded" | "failed";
+  ok: boolean | null;
+  detail: string;
+  updated_at: string;
+}
+
+export interface StartupJob {
+  id: string;
+  target_service: string;
+  command: string;
+  status: "queued" | "running" | "success" | "failed";
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  steps: StartupStep[];
+  logs_tail: string[];
+  error?: string | null;
+}

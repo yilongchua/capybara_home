@@ -1,0 +1,12 @@
+export const REFRESH_INTERVAL_ACTIVE = 2000;
+export const REFRESH_INTERVAL_IDLE = 30_000;
+export const REFRESH_INTERVAL_LRT = 3000;
+
+export const MOUNTED_FOLDER_STALE_TIME = 5_000;
+export const MOUNTED_FOLDER_REFRESH_HAS_DATA = 10_000;
+export const MOUNTED_FOLDER_REFRESH_EMPTY = 120_000;
+
+export const FILE_PREVIEW_STALE_TIME = 5 * 60 * 1000;
+
+export const CSV_ROW_LIMIT = 500;
+export const MS_PER_MINUTE = 60_000;

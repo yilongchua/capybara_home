@@ -1,0 +1,32 @@
+"use client";
+
+import { useParams, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+
+import { uuid } from "@/core/utils/uuid";
+
+export function useThreadChat() {
+  const { thread_id: threadIdFromPath } = useParams<{ thread_id: string }>();
+  const searchParams = useSearchParams();
+  const [threadId, setThreadId] = useState(() => {
+    // Keep initial SSR/CSR render deterministic for hydration.
+    // We generate a real UUID for `/new` only after mount.
+    return threadIdFromPath;
+  });
+
+  const [isNewThread, setIsNewThread] = useState(
+    () => threadIdFromPath === "new",
+  );
+
+  useEffect(() => {
+    if (threadIdFromPath === "new") {
+      setIsNewThread(true);
+      setThreadId(uuid());
+      return;
+    }
+    setIsNewThread(false);
+    setThreadId(threadIdFromPath);
+  }, [threadIdFromPath]);
+  const isMock = searchParams.get("mock") === "true";
+  return { threadId, isNewThread, setIsNewThread, isMock };
+}

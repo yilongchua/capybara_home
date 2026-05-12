@@ -1,0 +1,786 @@
+import logging
+from collections import Counter, deque
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
+from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware
+from langchain_core.runnables import RunnableConfig
+
+from src.agents.lead_agent.prompt import apply_prompt_template
+from src.agents.lead_agent.todo_prompts import TODO_LIST_SYSTEM_PROMPT, TODO_LIST_TOOL_DESCRIPTION
+from src.agents.memory.dreamy_state_preservation_hook import dreamy_state_preservation_hook
+from src.agents.memory.summarization_hook import memory_flush_hook
+from src.agents.middlewares.activity_timeline_middleware import ActivityTimelineMiddleware
+from src.agents.middlewares.autoresearch_middleware import AutoresearchMiddleware
+from src.agents.middlewares.clarification_middleware import ClarificationMiddleware
+from src.agents.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware
+from src.agents.middlewares.dreamy_bootstrap_middleware import DreamyBootstrapMiddleware
+from src.agents.middlewares.dreamy_execution_middleware import DreamyExecutionMiddleware
+from src.agents.middlewares.dreamy_intent_middleware import DreamyIntentMiddleware
+from src.agents.middlewares.dreamy_mount_middleware import DreamyMountMiddleware
+from src.agents.middlewares.dreamy_poc_middleware import DreamyPocMiddleware
+from src.agents.middlewares.dreamy_watchdog_middleware import DreamyWatchdogMiddleware
+from src.agents.middlewares.evaluator_middleware import EvaluatorMiddleware
+from src.agents.middlewares.execution_trace_middleware import ExecutionTraceMiddleware
+from src.agents.middlewares.hooks_middleware import HooksMiddleware
+from src.agents.middlewares.loop_detection_middleware import LoopDetectionMiddleware
+from src.agents.middlewares.memory_middleware import MemoryMiddleware
+from src.agents.middlewares.metrics_middleware import MetricsMiddleware
+from src.agents.middlewares.model_timeout_middleware import ModelTimeoutMiddleware
+from src.agents.middlewares.permission_middleware import PermissionMiddleware
+from src.agents.middlewares.plan_evaluator_middleware import PlanEvaluatorMiddleware
+from src.agents.middlewares.plan_execution_gate_middleware import PlanExecutionGateMiddleware
+from src.agents.middlewares.planner_middleware import PlannerMiddleware
+from src.agents.middlewares.pro_followup_middleware import PlanFollowupMiddleware
+from src.agents.middlewares.progress_guard_middleware import ProgressGuardMiddleware
+from src.agents.middlewares.question_generation_middleware import QuestionGenerationMiddleware
+from src.agents.middlewares.resume_state_middleware import ResumeStateMiddleware
+from src.agents.middlewares.retry_policy_middleware import RetryPolicyMiddleware
+from src.agents.middlewares.scratchpad_task_memory_middleware import ScratchpadTaskMemoryMiddleware
+from src.agents.middlewares.search_privacy_middleware import SearchPrivacyMiddleware
+from src.agents.middlewares.skill_disclosure_middleware import SkillDisclosureMiddleware
+from src.agents.middlewares.steering_middleware import SteeringMiddleware
+from src.agents.middlewares.subagent_limit_middleware import SubagentLimitMiddleware
+from src.agents.middlewares.summarization_middleware import CapybaraSummarizationMiddleware
+from src.agents.middlewares.thread_data_middleware import ThreadDataMiddleware
+from src.agents.middlewares.title_middleware import TitleMiddleware
+from src.agents.middlewares.todo_dag_middleware import TodoDagMiddleware
+from src.agents.middlewares.todo_middleware import TodoMiddleware
+from src.agents.middlewares.tool_disclosure_middleware import ToolDisclosureMiddleware
+from src.agents.middlewares.tool_result_truncation_middleware import ToolResultTruncationMiddleware
+from src.agents.middlewares.trajectory_middleware import TrajectoryMiddleware
+from src.agents.middlewares.uploads_middleware import UploadsMiddleware
+from src.agents.middlewares.view_image_middleware import ViewImageMiddleware
+from src.agents.middlewares.web_search_summary_middleware import WebSearchSummaryMiddleware
+from src.agents.middlewares.work_mode_middleware import _create_work_mode
+from src.agents.middlewares.write_file_artifact_middleware import WriteFileArtifactMiddleware
+from src.agents.thread_state import ThreadState
+from src.config.agents_config import load_agent_config
+from src.config.app_config import get_app_config
+from src.config.evaluator_config import get_evaluator_config
+from src.config.execution_trace_config import get_execution_trace_config
+from src.config.handoffs_config import get_handoffs_config
+from src.config.harness_config import get_harness_config
+from src.config.hooks_config import get_hooks_config
+from src.config.loop_detection_config import get_loop_detection_config
+from src.config.memory_config import get_memory_config
+from src.config.planner_config import get_planner_config
+from src.config.resume_config import get_resume_config
+from src.config.retry_config import get_retry_config
+from src.config.scratchpad_config import get_scratchpad_config
+from src.config.sprint_contracts_config import get_sprint_contracts_config
+from src.config.subagents_config import get_subagents_app_config
+from src.config.summarization_config import get_summarization_config
+from src.config.task_memory_config import get_task_memory_config
+from src.config.todos_config import get_todos_config
+from src.config.tool_disclosure_config import get_tool_disclosure_config
+from src.config.web_search_summary_config import get_web_search_summary_config
+from src.models import ModelRouter, create_chat_model
+from src.sandbox.middleware import SandboxMiddleware
+
+logger = logging.getLogger(__name__)
+
+_FRACTIONAL_SUMMARIZATION_PROFILE_ERROR = "Model profile information is required to use fractional token limits"
+_ALLOWED_RUNTIME_MODES = frozenset({"work", "plan"})
+
+
+def _normalize_runtime_mode(raw_mode: object) -> str:
+    mode = str(raw_mode or "").strip().lower()
+    if not mode:
+        return "work"
+    if mode in {"pro", "fast"}:
+        raise ValueError(
+            "Invalid runtime mode '"
+            + mode
+            + "'. Supported modes are 'work' and 'plan'. Please update the client to send mode='plan' for planning runs.",
+        )
+    if mode not in _ALLOWED_RUNTIME_MODES:
+        raise ValueError(
+            "Invalid runtime mode '"
+            + mode
+            + "'. Supported modes are 'work' and 'plan'.",
+        )
+    return mode
+
+
+def _contains_fraction_threshold(trigger: tuple | list[tuple] | None, keep: tuple) -> bool:
+    if keep and keep[0] == "fraction":
+        return True
+    if trigger is None:
+        return False
+    if isinstance(trigger, tuple):
+        return bool(trigger and trigger[0] == "fraction")
+    return any(t and t[0] == "fraction" for t in trigger)
+
+
+def _drop_fraction_from_trigger(trigger: tuple | list[tuple] | None) -> tuple | list[tuple] | None:
+    if trigger is None:
+        return None
+    if isinstance(trigger, tuple):
+        return None if trigger and trigger[0] == "fraction" else trigger
+    filtered = [t for t in trigger if not (t and t[0] == "fraction")]
+    return filtered or None
+
+
+def _resolve_model_name(requested_model_name: str | None = None) -> str:
+    """Resolve a runtime model name safely, falling back to default if invalid."""
+    app_config = get_app_config()
+    default_model_name = app_config.models[0].name if app_config.models else None
+    if default_model_name is None:
+        raise ValueError("No chat models are configured. Please configure at least one model in config.yaml.")
+
+    if requested_model_name and app_config.get_model_config(requested_model_name):
+        return requested_model_name
+
+    if requested_model_name and requested_model_name != default_model_name:
+        logger.warning(f"Model '{requested_model_name}' not found in config; fallback to default model '{default_model_name}'.")
+    return default_model_name
+
+
+def _create_summarization_middleware(*, mode: str = "", dreamy_mode: bool = False) -> CapybaraSummarizationMiddleware | None:
+    """Create and configure the summarization middleware from config."""
+    config = get_summarization_config()
+
+    if not config.enabled:
+        return None
+    if config.trim_tokens_to_summarize is None:
+        logger.warning("Summarization is enabled with trim_tokens_to_summarize unset; large contexts may be summarized without pre-trimming.")
+
+    normalized_mode = "dreamy" if dreamy_mode else mode
+    legacy_mode_aliases = {"work": "fast", "plan": "pro"}
+    mode_override = config.modes.get(normalized_mode) or config.modes.get(legacy_mode_aliases.get(normalized_mode, normalized_mode))
+
+    # Prepare trigger parameter
+    trigger = None
+    mode_trigger = mode_override.trigger if mode_override and mode_override.trigger is not None else config.trigger
+    if mode_trigger is not None:
+        if isinstance(mode_trigger, list):
+            trigger = [t.to_tuple() for t in mode_trigger]
+        else:
+            trigger = mode_trigger.to_tuple()
+
+    # Prepare keep parameter
+    mode_keep = mode_override.keep if mode_override and mode_override.keep is not None else config.keep
+    keep = mode_keep.to_tuple()
+
+    # Prepare model parameter
+    if config.model_name:
+        model = create_chat_model(name=config.model_name, thinking_enabled=False)
+    else:
+        model = create_chat_model(thinking_enabled=False)
+
+    # Prepare kwargs
+    kwargs = {
+        "model": model,
+        "trigger": trigger,
+        "keep": keep,
+    }
+
+    trim_tokens_to_summarize = mode_override.trim_tokens_to_summarize if mode_override and mode_override.trim_tokens_to_summarize is not None else config.trim_tokens_to_summarize
+    if trim_tokens_to_summarize is not None:
+        kwargs["trim_tokens_to_summarize"] = trim_tokens_to_summarize
+
+    summary_prompt = mode_override.summary_prompt if mode_override and mode_override.summary_prompt is not None else config.summary_prompt
+    if summary_prompt is not None:
+        kwargs["summary_prompt"] = summary_prompt
+
+    hooks = [memory_flush_hook] if get_memory_config().enabled else []
+    if dreamy_mode:
+        hooks.append(dreamy_state_preservation_hook)
+
+    try:
+        return CapybaraSummarizationMiddleware(
+            **kwargs,
+            before_summarization=hooks,
+        )
+    except ValueError as exc:
+        # Some provider-backed chat models do not expose profile.max_input_tokens.
+        # In that case LangChain rejects any fractional trigger/keep thresholds.
+        if _FRACTIONAL_SUMMARIZATION_PROFILE_ERROR not in str(exc):
+            raise
+
+        trigger_without_fraction = _drop_fraction_from_trigger(trigger)
+        fallback_keep = keep
+        keep_was_fraction = bool(keep and keep[0] == "fraction")
+        if keep_was_fraction:
+            fallback_keep = ("messages", 20)
+
+        had_fraction = _contains_fraction_threshold(trigger, keep)
+        if not had_fraction:
+            raise
+
+        if trigger_without_fraction is None:
+            fallback_trigger_tokens = int(trim_tokens_to_summarize or 8000)
+            if fallback_trigger_tokens <= 0:
+                fallback_trigger_tokens = 8000
+            trigger_without_fraction = ("tokens", fallback_trigger_tokens)
+            logger.warning(
+                "Summarization config only had fractional thresholds but model profile is unavailable; falling back to trigger=('tokens', %s).",
+                fallback_trigger_tokens,
+            )
+        else:
+            logger.warning(
+                "Summarization config used fractional thresholds but model profile is unavailable; retrying with non-fractional trigger/keep values.",
+            )
+
+        fallback_kwargs = {
+            **kwargs,
+            "trigger": trigger_without_fraction,
+            "keep": fallback_keep,
+        }
+        return CapybaraSummarizationMiddleware(
+            **fallback_kwargs,
+            before_summarization=hooks,
+        )
+
+
+def _create_todo_list_middleware(is_plan_mode: bool) -> TodoMiddleware | None:
+    """Create the legacy flat-list TodoMiddleware when plan mode is active."""
+    if not is_plan_mode:
+        return None
+    return TodoMiddleware(
+        system_prompt=TODO_LIST_SYSTEM_PROMPT,
+        tool_description=TODO_LIST_TOOL_DESCRIPTION,
+    )
+
+
+@dataclass
+class MiddlewareSpec:
+    name: str
+    factory: Callable[[], AgentMiddleware | None]
+    after: set[str] = field(default_factory=set)
+    before: set[str] = field(default_factory=set)
+    # Lower priority runs earlier among siblings with no dependency edges between
+    # them. Defaults to 0. Use this when deterministic ordering matters but
+    # adding an explicit `after={...}` edge would over-constrain the DAG.
+    priority: int = 0
+
+
+def _topological_sort_middleware_specs(specs: list[MiddlewareSpec]) -> list[MiddlewareSpec]:
+    by_name = {spec.name: spec for spec in specs}
+    if len(by_name) != len(specs):
+        counts = Counter(spec.name for spec in specs)
+        duplicate_names = [name for name, count in counts.items() if count > 1]
+        raise ValueError(f"Duplicate middleware names found in registry: {duplicate_names}")
+
+    graph: dict[str, set[str]] = {name: set() for name in by_name}
+    in_degree: dict[str, int] = {name: 0 for name in by_name}
+
+    def add_edge(src: str, dst: str) -> None:
+        if dst not in graph[src]:
+            graph[src].add(dst)
+            in_degree[dst] += 1
+
+    for spec in specs:
+        for dependency in spec.after:
+            if dependency not in by_name:
+                raise ValueError(f"Middleware '{spec.name}' depends on unknown middleware '{dependency}'")
+            add_edge(dependency, spec.name)
+        for dependency in spec.before:
+            if dependency not in by_name:
+                raise ValueError(f"Middleware '{spec.name}' references unknown middleware '{dependency}' in before")
+            add_edge(spec.name, dependency)
+
+    def _rank(name: str) -> tuple[int, str]:
+        # Tie-break first on explicit priority, then alphabetically for stability.
+        return (by_name[name].priority, name)
+
+    queue = deque(sorted([name for name, degree in in_degree.items() if degree == 0], key=_rank))
+    ordered_names: list[str] = []
+    while queue:
+        current = queue.popleft()
+        ordered_names.append(current)
+        for neighbor in sorted(graph[current], key=_rank):
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                queue.append(neighbor)
+
+    if len(ordered_names) != len(specs):
+        unresolved = [name for name, degree in in_degree.items() if degree > 0]
+        raise ValueError(f"Middleware dependency cycle detected: {unresolved}")
+
+    return [by_name[name] for name in ordered_names]
+
+
+@dataclass
+class _RegistryContext:
+    """Dependencies shared across middleware factory functions.
+
+    Bundling them into one dataclass keeps the factory signatures uniform and
+    makes it obvious which inputs each factory actually reads — replacing the
+    previous pattern of closure capture over 6+ local variables.
+    """
+
+    is_plan_mode: bool
+    is_work_mode: bool
+    subagent_enabled: bool
+    max_concurrent_subagents: int
+    max_primary_per_turn: int
+    model_name: str | None
+    agent_name: str | None
+    model_config: object | None
+    router: ModelRouter
+
+
+def _create_todo(ctx: _RegistryContext) -> AgentMiddleware | None:
+    if not ctx.is_plan_mode:
+        return None
+    if get_todos_config().dag_enabled:
+        return TodoDagMiddleware()
+    return _create_todo_list_middleware(ctx.is_plan_mode)
+
+
+def _create_planner(ctx: _RegistryContext) -> AgentMiddleware | None:
+    planner_cfg = get_planner_config()
+    if not ctx.is_plan_mode or not planner_cfg.enabled:
+        return None
+    return PlannerMiddleware(
+        router=ctx.router,
+        requested_model=ctx.model_name,
+        max_plan_steps=planner_cfg.max_plan_steps,
+        dag_enabled=get_todos_config().dag_enabled,
+        handoffs_config=get_handoffs_config(),
+        sprint_contracts_config=get_sprint_contracts_config(),
+        research_fanout=planner_cfg.research_fanout,
+        research_fanout_min_todos=planner_cfg.research_fanout_min_todos,
+    )
+
+
+def _create_evaluator(ctx: _RegistryContext) -> AgentMiddleware | None:
+    evaluator_cfg = get_evaluator_config()
+    if not ctx.is_plan_mode or not evaluator_cfg.enabled:
+        return None
+    return EvaluatorMiddleware(
+        router=ctx.router,
+        requested_model=ctx.model_name,
+        max_attempts=evaluator_cfg.max_attempts,
+        handoffs_config=get_handoffs_config(),
+    )
+
+
+def _create_plan_evaluator(ctx: _RegistryContext) -> AgentMiddleware | None:
+    planner_cfg = get_planner_config()
+    evaluator_cfg = get_evaluator_config()
+    if not ctx.is_plan_mode or not planner_cfg.enabled:
+        return None
+    return PlanEvaluatorMiddleware(
+        router=ctx.router,
+        requested_model=ctx.model_name,
+        timeout_seconds=evaluator_cfg.plan_evaluator_timeout_seconds,
+    )
+
+
+def _create_web_search_summary(ctx: _RegistryContext) -> AgentMiddleware | None:
+    if not get_web_search_summary_config().enabled:
+        return None
+    return WebSearchSummaryMiddleware(router=ctx.router, requested_model=ctx.model_name)
+
+
+def _create_view_image(ctx: _RegistryContext) -> AgentMiddleware | None:
+    if ctx.model_config is not None and getattr(ctx.model_config, "supports_vision", False):
+        return ViewImageMiddleware()
+    return None
+
+
+def _create_subagent_limit(ctx: _RegistryContext) -> AgentMiddleware | None:
+    if not ctx.subagent_enabled:
+        return None
+    return SubagentLimitMiddleware(
+        max_concurrent=ctx.max_concurrent_subagents,
+        router=ctx.router,
+        requested_model=ctx.model_name,
+        max_primary_per_turn=ctx.max_primary_per_turn,
+    )
+
+
+def _create_hooks(_ctx: _RegistryContext) -> AgentMiddleware | None:
+    hooks_cfg = get_hooks_config()
+    if not any((hooks_cfg.SessionStart, hooks_cfg.PreToolUse, hooks_cfg.PostToolUse, hooks_cfg.FileChanged)):
+        return None
+    return HooksMiddleware(hooks_cfg)
+
+
+def _create_retry(_ctx: _RegistryContext) -> AgentMiddleware | None:
+    retry_cfg = get_retry_config()
+    if not retry_cfg.enabled:
+        return None
+    return RetryPolicyMiddleware(retry_cfg)
+
+
+def _create_loop_detection(_ctx: _RegistryContext) -> AgentMiddleware | None:
+    cfg = get_loop_detection_config()
+    if not cfg.enabled:
+        return None
+    return LoopDetectionMiddleware(
+        warn_threshold=cfg.warn_threshold,
+        hard_limit=cfg.hard_limit,
+        window_size=cfg.window_size,
+        max_tracked_threads=cfg.max_tracked_threads,
+        tool_freq_warn=cfg.tool_freq_warn,
+        tool_freq_hard_limit=cfg.tool_freq_hard_limit,
+    )
+
+
+def _create_tool_disclosure(_ctx: _RegistryContext) -> AgentMiddleware | None:
+    cfg = get_tool_disclosure_config()
+    if not cfg.enabled:
+        return None
+    return ToolDisclosureMiddleware(cfg)
+
+
+def _create_scratchpad_task_memory(_ctx: _RegistryContext) -> AgentMiddleware | None:
+    scratchpad_cfg = get_scratchpad_config()
+    task_memory_cfg = get_task_memory_config()
+    if not scratchpad_cfg.enabled and not task_memory_cfg.enabled:
+        return None
+    return ScratchpadTaskMemoryMiddleware(scratchpad_cfg, task_memory_cfg)
+
+
+def _create_resume_state(_ctx: _RegistryContext) -> AgentMiddleware | None:
+    resume_cfg = get_resume_config()
+    if not resume_cfg.enabled:
+        return None
+    return ResumeStateMiddleware(resume_cfg)
+
+
+def _create_title(ctx: _RegistryContext) -> AgentMiddleware | None:
+    return TitleMiddleware(model_name=ctx.router.resolve("title", requested_model=ctx.model_name))
+
+
+def _create_memory(ctx: _RegistryContext) -> AgentMiddleware | None:
+    return MemoryMiddleware(agent_name=ctx.agent_name)
+
+
+def _create_execution_trace(ctx: _RegistryContext) -> AgentMiddleware | None:
+    if not get_execution_trace_config().enabled:
+        return None
+    return ExecutionTraceMiddleware()
+
+
+#: Plumbing middlewares kept when ``harness.enabled=false``. These four are the
+#: minimum set that the frontend, sandbox, and tool executor hard-depend on.
+#: Everything else (permissions, hooks, planner/evaluator, metrics, etc.) is
+#: dropped as part of the kill-switch.
+_HARNESS_MINIMAL_MIDDLEWARES: frozenset[str] = frozenset({"thread_data", "sandbox", "dangling_tool_call", "execution_trace", "activity_timeline", "clarification"})
+
+
+def _build_middleware_registry(
+    config: RunnableConfig,
+    model_name: str | None,
+    agent_name: str | None = None,
+    model_router: ModelRouter | None = None,
+) -> list[MiddlewareSpec]:
+    cfg = config.get("configurable") or {}
+    app_config = get_app_config()
+    subagents_cfg = get_subagents_app_config()
+    dreamy_mode = bool(cfg.get("dreamy_mode", False))
+    mode = _normalize_runtime_mode(cfg.get("mode", ""))
+    explicit_plan_mode = bool(cfg.get("is_plan_mode", False))
+    ctx = _RegistryContext(
+        is_plan_mode=explicit_plan_mode or mode == "plan",
+        is_work_mode=(mode == "work"),
+        subagent_enabled=False if dreamy_mode else cfg.get("subagent_enabled", False),
+        max_concurrent_subagents=cfg.get("max_concurrent_subagents", 3),
+        max_primary_per_turn=int(getattr(subagents_cfg, "max_primary_per_turn", 2)),
+        model_name=model_name,
+        agent_name=agent_name,
+        model_config=app_config.get_model_config(model_name) if model_name else None,
+        router=model_router or ModelRouter(app_config=app_config),
+    )
+
+    def bind(fn):
+        return lambda: fn(ctx)
+
+    specs = [
+        MiddlewareSpec("thread_data", lambda: ThreadDataMiddleware()),
+        MiddlewareSpec("steering", lambda: SteeringMiddleware(), after={"thread_data"}, before={"uploads"}),
+        MiddlewareSpec("dreamy_watchdog", lambda: DreamyWatchdogMiddleware(), after={"thread_data"}),
+        MiddlewareSpec("dreamy_intent", lambda: DreamyIntentMiddleware(), after={"thread_data", "dreamy_watchdog"}),
+        MiddlewareSpec("dreamy_bootstrap", lambda: DreamyBootstrapMiddleware(), after={"thread_data", "dreamy_intent", "dreamy_watchdog"}),
+        MiddlewareSpec("dreamy_poc", lambda: DreamyPocMiddleware(), after={"dreamy_bootstrap", "thread_data", "dreamy_watchdog"}),
+        MiddlewareSpec("dreamy_execution", lambda: DreamyExecutionMiddleware(), after={"dreamy_poc", "thread_data", "sandbox", "dreamy_watchdog"}),
+        MiddlewareSpec("uploads", lambda: UploadsMiddleware(), after={"thread_data"}),
+        MiddlewareSpec("dreamy_mount", lambda: DreamyMountMiddleware(), after={"uploads", "thread_data"}),
+        MiddlewareSpec("sandbox", lambda: SandboxMiddleware(), after={"thread_data", "dreamy_intent", "dreamy_bootstrap"}),
+        MiddlewareSpec("autoresearch", lambda: AutoresearchMiddleware(), after={"sandbox"}),
+        MiddlewareSpec("write_file_artifact", lambda: WriteFileArtifactMiddleware(), after={"sandbox"}),
+        MiddlewareSpec("dangling_tool_call", lambda: DanglingToolCallMiddleware(), after={"sandbox"}),
+        MiddlewareSpec("work_mode", bind(_create_work_mode), after={"dangling_tool_call"}, before={"search_privacy"}),
+        MiddlewareSpec("search_privacy", lambda: SearchPrivacyMiddleware(), after={"dangling_tool_call"}),
+        MiddlewareSpec("plan_execution_gate", lambda: PlanExecutionGateMiddleware(), after={"search_privacy"}, before={"permissions"}),
+        MiddlewareSpec("permissions", lambda: PermissionMiddleware(), after={"search_privacy"}),
+        MiddlewareSpec("tool_disclosure", bind(_create_tool_disclosure), after={"permissions"}),
+        MiddlewareSpec("hooks", bind(_create_hooks), after={"tool_disclosure"}),
+        MiddlewareSpec("summarization", lambda: _create_summarization_middleware(mode=mode, dreamy_mode=dreamy_mode), after={"search_privacy"}),
+        MiddlewareSpec("skill_disclosure", lambda: SkillDisclosureMiddleware(), after={"summarization"}),
+        MiddlewareSpec("planner", bind(_create_planner), after={"skill_disclosure"}),
+        MiddlewareSpec("plan_evaluator", bind(_create_plan_evaluator), after={"planner"}),
+        MiddlewareSpec("web_search_summary", bind(_create_web_search_summary), after={"tool_result_truncation"}),
+        MiddlewareSpec("todo", bind(_create_todo), after={"plan_evaluator"}),
+        MiddlewareSpec("title", bind(_create_title), after={"todo"}),
+        MiddlewareSpec("question_generation", lambda: QuestionGenerationMiddleware(), after={"title"}),
+        MiddlewareSpec("memory", bind(_create_memory), after={"question_generation"}),
+        MiddlewareSpec("view_image", bind(_create_view_image), after={"memory"}),
+        MiddlewareSpec("retry", bind(_create_retry), after={"view_image"}),
+        # Bound LLM call duration. Sits between retry (so retried calls are
+        # also bounded) and subagent_limit. See routing.timeouts in config.yaml.
+        MiddlewareSpec("model_timeout", lambda: ModelTimeoutMiddleware(), after={"retry"}),
+        # Cap tool-result size so context can't balloon round over round.
+        MiddlewareSpec("tool_result_truncation", lambda: ToolResultTruncationMiddleware(), after={"model_timeout"}),
+        MiddlewareSpec("subagent_limit", bind(_create_subagent_limit), after={"retry", "model_timeout", "tool_result_truncation"}),
+        MiddlewareSpec("evaluator", bind(_create_evaluator), after={"subagent_limit"}),
+        MiddlewareSpec("scratchpad_task_memory", bind(_create_scratchpad_task_memory), after={"evaluator"}),
+        MiddlewareSpec("resume_state", bind(_create_resume_state), after={"scratchpad_task_memory"}),
+        MiddlewareSpec("progress_guard", lambda: ProgressGuardMiddleware(), after={"resume_state"}),
+        MiddlewareSpec("plan_followup", lambda: PlanFollowupMiddleware(), after={"progress_guard", "evaluator"}),
+        # LoopDetectionMiddleware complements ProgressGuard: ProgressGuard detects stalls by
+        # inspecting outputs (unchanged artifacts/todos/files), while LoopDetection detects
+        # repetitive inputs (identical call-pattern hashes and per-tool-type frequency saturation).
+        MiddlewareSpec("loop_detection", bind(_create_loop_detection), after={"plan_followup"}),
+        # TrajectoryMiddleware must be the OUTERMOST wrap_*_call wrapper so it observes
+        # the synthetic timeout/error responses produced by ModelTimeoutMiddleware and
+        # other inner middlewares (otherwise it sees CancelledError propagating from
+        # asyncio.wait_for and reports `result_count=0, timed_out=False` for genuine
+        # timeouts — see audit thread-cd90decb). Spec order = wrap order: first = outer.
+        # The trade-off is that runtime events emitted in `before_model` of inner
+        # middlewares (planner, summarization, etc.) are drained at the end of the
+        # cycle (`after_model`, which runs in reversed spec order) instead of at the
+        # next `before_model`. Events still appear in the trajectory, just later.
+        MiddlewareSpec("trajectory", lambda: TrajectoryMiddleware(), after={"thread_data"}),
+        MiddlewareSpec("execution_trace", bind(_create_execution_trace), after={"trajectory", "loop_detection"}),
+        MiddlewareSpec("activity_timeline", lambda: ActivityTimelineMiddleware(), after={"execution_trace"}),
+        MiddlewareSpec("metrics", lambda: MetricsMiddleware(), after={"activity_timeline"}),
+        MiddlewareSpec(
+            "clarification",
+            lambda: ClarificationMiddleware(),
+            after={"metrics", "permissions", "memory", "subagent_limit", "progress_guard", "loop_detection", "evaluator", "execution_trace", "activity_timeline"},
+        ),
+    ]
+
+    # Harness-level kill switch. When disabled, strip the spec list to the
+    # plumbing subset and re-point clarification's dependencies so the
+    # topological sort still places it last with no dangling edges.
+    if not get_harness_config().enabled:
+        logger.warning("Harness kill-switch active: running with minimal middleware subset %s.", sorted(_HARNESS_MINIMAL_MIDDLEWARES))
+        kept = [spec for spec in specs if spec.name in _HARNESS_MINIMAL_MIDDLEWARES]
+        minimal_names = {spec.name for spec in kept}
+        for spec in kept:
+            spec.after = spec.after & minimal_names
+            spec.before = spec.before & minimal_names
+        return kept
+
+    return specs
+
+
+def _build_middlewares(
+    config: RunnableConfig,
+    model_name: str | None,
+    agent_name: str | None = None,
+    model_router: ModelRouter | None = None,
+):
+    """Build middleware chain based on runtime configuration.
+
+    Args:
+        config: Runtime configuration containing configurable options like is_plan_mode.
+        agent_name: If provided, MemoryMiddleware will use per-agent memory storage.
+
+    Returns:
+        List of middleware instances.
+    """
+    specs = _build_middleware_registry(config, model_name=model_name, agent_name=agent_name, model_router=model_router)
+    ordered_specs = _topological_sort_middleware_specs(specs)
+
+    middlewares: list[AgentMiddleware] = []
+    for spec in ordered_specs:
+        middleware = spec.factory()
+        if middleware is None:
+            continue
+        middlewares.append(middleware)
+    return middlewares
+
+
+@dataclass
+class _RuntimeParams:
+    """Unpacked ``configurable`` fields + resolved agent metadata."""
+
+    thinking_enabled: bool
+    reasoning_effort: str | None
+    requested_model_name: str | None
+    mode: str
+    plan_behavior: str
+    background_followup: bool
+    is_plan_mode: bool
+    subagent_enabled: bool
+    max_concurrent_subagents: int
+    max_primary_per_turn: int
+    is_bootstrap: bool
+    agent_name: str | None
+    agent_config: object | None  # AgentConfig | None — avoid circular import
+
+
+def _extract_runtime_params(config: RunnableConfig) -> _RuntimeParams:
+    cfg = config.get("configurable") or {}
+    is_bootstrap = cfg.get("is_bootstrap", False)
+    agent_name = cfg.get("agent_name")
+    agent_config = load_agent_config(agent_name) if not is_bootstrap else None
+    mode = _normalize_runtime_mode(cfg.get("mode", ""))
+    dreamy_mode = bool(cfg.get("dreamy_mode", False))
+    plan_behavior = str(cfg.get("plan_behavior", "") or "").strip().lower()
+    subagents_cfg = get_subagents_app_config()
+    return _RuntimeParams(
+        thinking_enabled=cfg.get("thinking_enabled", True),
+        reasoning_effort=cfg.get("reasoning_effort", None),
+        requested_model_name=cfg.get("model_name") or cfg.get("model"),
+        mode=mode,
+        plan_behavior=plan_behavior or ("plan_foreground" if mode == "plan" else "work_interactive"),
+        background_followup=bool(cfg.get("background_followup", False)),
+        is_plan_mode=bool(cfg.get("is_plan_mode", False)) or (mode == "plan"),
+        subagent_enabled=False if dreamy_mode else cfg.get("subagent_enabled", False),
+        max_concurrent_subagents=cfg.get("max_concurrent_subagents", 3),
+        max_primary_per_turn=int(getattr(subagents_cfg, "max_primary_per_turn", 2)),
+        is_bootstrap=is_bootstrap,
+        agent_name=agent_name,
+        agent_config=agent_config,
+    )
+
+
+def _resolve_generator_model(params: _RuntimeParams, router: ModelRouter) -> str:
+    """Resolve the generator model name with fallback semantics."""
+    agent_config = params.agent_config
+    agent_model_name = agent_config.model if agent_config and getattr(agent_config, "model", None) else _resolve_model_name()
+    requested_or_agent = params.requested_model_name or agent_model_name
+    return router.resolve("generator", requested_model=requested_or_agent)
+
+
+def _reconcile_thinking_flags(params: _RuntimeParams, model_name: str, model_config) -> tuple[bool, str | None]:
+    """Downgrade ``thinking_enabled`` to False if the resolved model lacks support.
+
+    When thinking is disabled we also clear ``reasoning_effort`` — it is only
+    meaningful while thinking is active, and some providers reject it otherwise.
+    """
+    thinking_enabled = params.thinking_enabled
+    reasoning_effort = params.reasoning_effort
+    if thinking_enabled and not model_config.supports_thinking:
+        logger.debug(f"Thinking mode is enabled but model '{model_name}' does not support it; fallback to non-thinking mode.")
+        thinking_enabled = False
+        reasoning_effort = None
+    return thinking_enabled, reasoning_effort
+
+
+def _inject_trace_metadata(
+    config: RunnableConfig,
+    *,
+    params: _RuntimeParams,
+    model_name: str,
+    thinking_enabled: bool,
+    reasoning_effort: str | None,
+) -> None:
+    """Attach LangSmith trace tags to the RunnableConfig in place."""
+    if "metadata" not in config:
+        config["metadata"] = {}
+    config["metadata"].update(
+        {
+            "agent_name": params.agent_name or "default",
+            "model_name": model_name or "default",
+            "generator_model_name": model_name or "default",
+            "thinking_enabled": thinking_enabled,
+            "reasoning_effort": reasoning_effort,
+            "mode": params.mode or "default",
+            "plan_behavior": params.plan_behavior,
+            "background_followup": params.background_followup,
+            "is_plan_mode": params.is_plan_mode,
+            "subagent_enabled": params.subagent_enabled,
+        }
+    )
+
+
+def make_lead_agent(config: RunnableConfig):
+    # Lazy import to avoid circular dependency
+    from src.tools import get_available_tools
+    from src.tools.builtins import setup_agent
+
+    params = _extract_runtime_params(config)
+    dreamy_mode = bool((config.get("configurable") or {}).get("dreamy_mode", False))
+
+    app_config = get_app_config()
+    router = ModelRouter(app_config=app_config)
+    model_name = _resolve_generator_model(params, router)
+    model_config = app_config.get_model_config(model_name) if model_name else None
+    if model_config is None:
+        raise ValueError("No chat model could be resolved. Please configure at least one model in config.yaml or provide a valid 'model_name'/'model' in the request.")
+    thinking_enabled, reasoning_effort = _reconcile_thinking_flags(params, model_name, model_config)
+
+    logger.info(
+        "Create Agent(%s) -> thinking_enabled: %s, reasoning_effort: %s, model_name: %s, is_plan_mode: %s, subagent_enabled: %s, max_concurrent_subagents: %s",
+        params.agent_name or "default",
+        thinking_enabled,
+        reasoning_effort,
+        model_name,
+        params.is_plan_mode,
+        params.subagent_enabled,
+        params.max_concurrent_subagents,
+    )
+
+    _inject_trace_metadata(
+        config,
+        params=params,
+        model_name=model_name,
+        thinking_enabled=thinking_enabled,
+        reasoning_effort=reasoning_effort,
+    )
+
+    chat_model = create_chat_model(
+        name=model_name,
+        thinking_enabled=thinking_enabled,
+        reasoning_effort=reasoning_effort,
+    )
+
+    if params.is_bootstrap:
+        # Bootstrap mode is the initial custom-agent-creation flow. We deliberately
+        # scope the prompt to a single "bootstrap" skill entry (rather than the full
+        # enabled catalogue) so the model focuses on constructing the new agent's
+        # SOUL.md / tool_groups without getting distracted by the broader skill
+        # surface. The `setup_agent` tool handles persistence; once the user's
+        # custom agent is saved, regular runs drop this branch and see the full
+        # skill catalogue via apply_prompt_template's default path.
+        system_prompt = apply_prompt_template(
+            subagent_enabled=params.subagent_enabled,
+            max_concurrent_subagents=params.max_concurrent_subagents,
+            available_skills=set(["bootstrap"]),
+            plan_mode=params.mode == "plan",
+            background_followup=params.background_followup,
+        )
+        return create_agent(
+            model=chat_model,
+            tools=get_available_tools(model_name=model_name, subagent_enabled=params.subagent_enabled) + [setup_agent],
+            middleware=_build_middlewares(config, model_name=model_name, model_router=router),
+            system_prompt=system_prompt,
+            state_schema=ThreadState,
+        )
+
+    # Default lead agent (unchanged behavior)
+    agent_config = params.agent_config
+    return create_agent(
+        model=chat_model,
+        tools=get_available_tools(
+            model_name=model_name,
+            groups=agent_config.tool_groups if agent_config else None,
+            subagent_enabled=params.subagent_enabled,
+        ),
+        middleware=_build_middlewares(
+            config,
+            model_name=model_name,
+            agent_name=params.agent_name,
+            model_router=router,
+        ),
+        system_prompt=apply_prompt_template(
+            subagent_enabled=params.subagent_enabled,
+            max_concurrent_subagents=params.max_concurrent_subagents,
+            agent_name=params.agent_name,
+            dreamy_mode=dreamy_mode,
+            plan_mode=params.mode == "plan",
+            background_followup=params.background_followup,
+        ),
+        state_schema=ThreadState,
+    )

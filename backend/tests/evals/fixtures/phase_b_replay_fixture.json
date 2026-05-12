@@ -1,0 +1,13 @@
+{
+  "trajectory_file": "phase_b_sample_trajectory.jsonl",
+  "required_events": [
+    "before_agent",
+    "before_model",
+    "tool_call_start",
+    "tool_call_end",
+    "middleware_event"
+  ],
+  "forbidden_events": [
+    "nonexistent_event"
+  ]
+}

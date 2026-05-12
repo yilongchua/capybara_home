@@ -1,0 +1,225 @@
+"""Tests for steering and explicit execute-plan gateway routes."""
+
+import asyncio
+
+import pytest
+from fastapi import HTTPException
+
+from src.gateway.routers.steering import (
+    ExecutePlanRequest,
+    SteerRequest,
+    compact_thread,
+    execute_plan,
+    steer_thread,
+)
+
+
+class _ThreadsClient:
+    def __init__(self, values: dict | None = None):
+        self.calls = []
+        self._values = values or {}
+
+    async def get_state(self, thread_id: str):  # noqa: ARG002
+        return {"values": self._values}
+
+    async def update_state(self, thread_id: str, values: dict):
+        self.calls.append((thread_id, values))
+        self._values = {**self._values, **values}
+
+
+class _Client:
+    def __init__(self, threads: _ThreadsClient):
+        self.threads = threads
+
+
+def _messages(count: int) -> list[dict]:
+    rows: list[dict] = []
+    for i in range(count):
+        msg_type = "human" if i % 2 == 0 else "ai"
+        rows.append({"id": f"m{i}", "type": msg_type, "content": f"message {i}"})
+    return rows
+
+
+def test_steer_thread_router_success(monkeypatch):
+    threads = _ThreadsClient()
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(threads))
+    monkeypatch.setattr(
+        "src.gateway.routers.steering.enqueue_steering_intent",
+        lambda **kwargs: {
+            "status": "accepted",
+            "intent": {
+                "intent_id": kwargs["intent_id"],
+                "message": kwargs["message"],
+                "created_at": "2026-05-08T00:00:00Z",
+            },
+        },
+    )
+
+    response = asyncio.run(
+        steer_thread(
+            "thread-1",
+            SteerRequest(message="Please avoid broad refactors."),
+        )
+    )
+
+    assert response.acknowledged is True
+    assert response.thread_id == "thread-1"
+    assert response.status == "accepted"
+    assert isinstance(response.intent_id, str)
+
+
+def test_steer_thread_router_idempotent_on_existing_intent(monkeypatch):
+    threads = _ThreadsClient()
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(threads))
+    monkeypatch.setattr(
+        "src.gateway.routers.steering.enqueue_steering_intent",
+        lambda **kwargs: {
+            "status": "duplicate",
+            "intent": {
+                "intent_id": kwargs["intent_id"],
+                "message": kwargs["message"],
+                "created_at": "2026-05-08T00:00:00Z",
+            },
+        },
+    )
+
+    response = asyncio.run(
+        steer_thread(
+            "thread-1",
+            SteerRequest(message="existing message", intent_id="intent-1"),
+        )
+    )
+
+    assert response.acknowledged is True
+    assert response.intent_id == "intent-1"
+    assert response.status == "duplicate"
+
+
+def test_steer_thread_router_conflict_on_same_intent_different_message(monkeypatch):
+    threads = _ThreadsClient()
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(threads))
+    monkeypatch.setattr(
+        "src.gateway.routers.steering.enqueue_steering_intent",
+        lambda **kwargs: {
+            "status": "conflict",
+            "intent": {
+                "intent_id": kwargs["intent_id"],
+                "message": "existing message",
+                "created_at": "2026-05-08T00:00:00Z",
+            },
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            steer_thread(
+                "thread-1",
+                SteerRequest(message="different message", intent_id="intent-1"),
+            )
+        )
+    assert exc.value.status_code == 409
+
+
+def test_steer_thread_router_rejects_blank_message():
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(steer_thread("thread-1", SteerRequest(message="   ")))
+    assert exc.value.status_code == 422
+
+
+def test_steer_thread_router_maps_not_found(monkeypatch):
+    class _NotFoundError(Exception):
+        status_code = 404
+
+    class _FailingThreadsClient:
+        async def get_state(self, thread_id: str):  # noqa: ARG002
+            raise _NotFoundError("missing")
+
+        async def update_state(self, thread_id: str, values: dict):  # noqa: ARG002
+            raise _NotFoundError("missing")
+
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(_FailingThreadsClient()))
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(steer_thread("missing-thread", SteerRequest(message="Steer me")))
+    assert exc.value.status_code == 404
+
+
+def test_execute_plan_conflict_when_clarification_pending(monkeypatch):
+    threads = _ThreadsClient(values={"plan": {"plan_id": "plan-1", "status": "draft", "clarification_pending": True}})
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(threads))
+
+    response = asyncio.run(execute_plan("thread-1", ExecutePlanRequest(plan_id="plan-1")))
+    assert response.acknowledged is False
+    assert response.status == "conflict"
+
+
+def test_execute_plan_accepts_draft_plan(monkeypatch):
+    threads = _ThreadsClient(
+        values={
+            "plan": {"plan_id": "plan-1", "status": "draft", "title": "Plan"},
+            "plan_history": [{"plan_id": "plan-1", "title": "Plan", "status": "draft"}],
+        }
+    )
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(threads))
+
+    response = asyncio.run(execute_plan("thread-1", ExecutePlanRequest(plan_id="plan-1")))
+    assert response.acknowledged is True
+    assert response.status == "accepted"
+    assert response.plan_status == "approved"
+    assert threads.calls, "execute endpoint should persist approved plan state"
+
+
+def test_execute_plan_duplicate_for_already_approved(monkeypatch):
+    threads = _ThreadsClient(values={"plan": {"plan_id": "plan-1", "status": "approved"}})
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(threads))
+
+    response = asyncio.run(execute_plan("thread-1", ExecutePlanRequest(plan_id="plan-1")))
+    assert response.status == "duplicate"
+    assert response.plan_status == "approved"
+
+
+def test_execute_plan_conflict_when_plan_missing(monkeypatch):
+    threads = _ThreadsClient(values={})
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(threads))
+
+    response = asyncio.run(execute_plan("thread-1", ExecutePlanRequest()))
+    assert response.acknowledged is False
+    assert response.status == "conflict"
+
+
+def test_compact_thread_router_success(monkeypatch):
+    threads = _ThreadsClient(values={"messages": _messages(20)})
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(threads))
+
+    response = asyncio.run(compact_thread("thread-1"))
+    assert response.status == "accepted"
+    assert response.compressed_messages > 0
+    assert response.kept_messages > 0
+    assert threads.calls
+
+
+def test_compact_thread_router_noop_for_short_history(monkeypatch):
+    threads = _ThreadsClient(values={"messages": _messages(8)})
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(threads))
+
+    response = asyncio.run(compact_thread("thread-1"))
+    assert response.status == "no_op"
+    assert threads.calls == []
+
+
+def test_compact_thread_router_maps_not_found(monkeypatch):
+    class _NotFoundError(Exception):
+        status_code = 404
+
+    class _FailingThreadsClient:
+        async def get_state(self, thread_id: str):  # noqa: ARG002
+            raise _NotFoundError("missing")
+
+        async def update_state(self, thread_id: str, values: dict):  # noqa: ARG002
+            raise _NotFoundError("missing")
+
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(_FailingThreadsClient()))
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(compact_thread("missing-thread"))
+    assert exc.value.status_code == 404

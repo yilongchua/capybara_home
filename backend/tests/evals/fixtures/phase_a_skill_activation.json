@@ -1,0 +1,18 @@
+{
+  "name": "phase_a_skill_activation",
+  "input": {
+    "messages": [
+      {
+        "type": "human",
+        "content": "Use /Excel to analyze the uploaded spreadsheet."
+      }
+    ],
+    "configurable": {
+      "is_plan_mode": false,
+      "subagent_enabled": false
+    }
+  },
+  "assertions": {
+    "must_emit_system_reminder_name": "active_skills"
+  }
+}

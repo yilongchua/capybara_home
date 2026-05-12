@@ -1,0 +1,494 @@
+import { getBackendBaseURL } from "@/core/config";
+
+import type {
+  ApprovalRequest,
+  CreateFeedbackRequest,
+  CreatePipelineRunRequest,
+  FeedbackEvent,
+  FolderSyncManifest,
+  IntegrationServiceStartResponse,
+  IntegrationServiceToggleResponse,
+  IntegrationServicesStatusResponse,
+  IntegrationStatusResponse,
+  PipelineRun,
+  PipelineTemplate,
+  PipelineArtifactContent,
+  ProposalApprovalItem,
+  ResolveApprovalRequest,
+  ResolveProposalApprovalRequest,
+  SchedulerRuntimeJobCreateRequest,
+  StartAutoresearchObjectiveRequest,
+  StartAutoresearchObjectiveResponse,
+  DeleteAutoresearchObjectiveResponse,
+  AutoresearchObjective,
+  SelfImproverDraftReport,
+  StartupJob,
+  VaultSearchResponse,
+  VaultActionItemsResponse,
+  VaultSufficiencyRequest,
+  VaultSufficiencyResponse,
+  VaultStatusResponse,
+} from "./types";
+
+async function parseError(response: Response, fallback: string) {
+  const err = (await response.json().catch(() => ({}))) as { detail?: string };
+  throw new Error(err.detail ?? fallback);
+}
+
+export async function listPipelineTemplates(): Promise<PipelineTemplate[]> {
+  const response = await fetch(`${getBackendBaseURL()}/api/pipelines`);
+  if (!response.ok) {
+    await parseError(response, `Failed to load pipelines: ${response.statusText}`);
+  }
+  const data = (await response.json()) as { items: PipelineTemplate[] };
+  return data.items;
+}
+
+export interface ListPipelineRunsParams {
+  threadId?: string;
+  statuses?: string[];
+  limit?: number;
+}
+
+export async function listPipelineRuns(params?: ListPipelineRunsParams): Promise<PipelineRun[]> {
+  const qs = new URLSearchParams();
+  if (params?.threadId) {
+    qs.set("thread_id", params.threadId);
+  }
+  if (params?.statuses && params.statuses.length > 0) {
+    qs.set("status", params.statuses.join(","));
+  }
+  if (typeof params?.limit === "number") {
+    qs.set("limit", String(params.limit));
+  }
+  const url = `${getBackendBaseURL()}/api/pipelines/runs${qs.size > 0 ? `?${qs.toString()}` : ""}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    await parseError(response, `Failed to load pipeline runs: ${response.statusText}`);
+  }
+  const data = (await response.json()) as { items: PipelineRun[] };
+  return data.items;
+}
+
+export async function createPipelineRun(
+  request: CreatePipelineRunRequest,
+): Promise<PipelineRun> {
+  const response = await fetch(`${getBackendBaseURL()}/api/pipelines/runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    await parseError(response, `Failed to create pipeline run: ${response.statusText}`);
+  }
+  return response.json() as Promise<PipelineRun>;
+}
+
+export async function startPipelineRun(runId: string): Promise<PipelineRun> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/pipelines/runs/${runId}/start`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to start pipeline run: ${response.statusText}`);
+  }
+  return response.json() as Promise<PipelineRun>;
+}
+
+export async function getPipelineRunArtifact(
+  runId: string,
+  artifactName: string,
+): Promise<SelfImproverDraftReport> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/pipelines/runs/${runId}/artifacts/${encodeURIComponent(artifactName)}`,
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to load pipeline artifact: ${response.statusText}`);
+  }
+  return response.json() as Promise<SelfImproverDraftReport>;
+}
+
+export async function getPipelineRunArtifactContent(
+  runId: string,
+  artifactName: string,
+): Promise<PipelineArtifactContent> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/pipelines/runs/${runId}/artifacts/${encodeURIComponent(artifactName)}/content`,
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to load artifact content: ${response.statusText}`);
+  }
+  return response.json() as Promise<PipelineArtifactContent>;
+}
+
+export async function listAutoresearchObjectives(): Promise<AutoresearchObjective[]> {
+  const response = await fetch(`${getBackendBaseURL()}/api/pipelines/autoresearch`);
+  if (!response.ok) {
+    await parseError(response, `Failed to load autoresearch objectives: ${response.statusText}`);
+  }
+  const data = (await response.json()) as { items: AutoresearchObjective[] };
+  return data.items;
+}
+
+export async function startAutoresearchObjective(
+  request: StartAutoresearchObjectiveRequest,
+): Promise<StartAutoresearchObjectiveResponse> {
+  const response = await fetch(`${getBackendBaseURL()}/api/pipelines/autoresearch/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    await parseError(response, `Failed to start autoresearch objective: ${response.statusText}`);
+  }
+  return response.json() as Promise<StartAutoresearchObjectiveResponse>;
+}
+
+export async function pauseAutoresearchObjective(
+  objectiveId: string,
+  reason = "denied",
+): Promise<AutoresearchObjective> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/pipelines/autoresearch/${encodeURIComponent(objectiveId)}/pause`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    },
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to pause autoresearch objective: ${response.statusText}`);
+  }
+  return response.json() as Promise<AutoresearchObjective>;
+}
+
+export async function resumeAutoresearchObjective(
+  objectiveId: string,
+): Promise<AutoresearchObjective> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/pipelines/autoresearch/${encodeURIComponent(objectiveId)}/resume`,
+    {
+      method: "POST",
+    },
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to resume autoresearch objective: ${response.statusText}`);
+  }
+  return response.json() as Promise<AutoresearchObjective>;
+}
+
+export async function deleteAutoresearchObjective(
+  objectiveId: string,
+): Promise<DeleteAutoresearchObjectiveResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/pipelines/autoresearch/${encodeURIComponent(objectiveId)}`,
+    {
+      method: "DELETE",
+    },
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to delete autoresearch objective: ${response.statusText}`);
+  }
+  return response.json() as Promise<DeleteAutoresearchObjectiveResponse>;
+}
+
+export async function getVaultStatus(): Promise<VaultStatusResponse> {
+  const response = await fetch(`${getBackendBaseURL()}/api/vault/status`);
+  if (!response.ok) {
+    await parseError(response, `Failed to load vault status: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultStatusResponse>;
+}
+
+export async function searchVault(
+  query: string,
+  limit = 10,
+): Promise<VaultSearchResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/vault/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to search vault: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultSearchResponse>;
+}
+
+export async function getVaultActionItems(limit = 100): Promise<VaultActionItemsResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/vault/action-items?limit=${Math.max(1, Math.min(500, limit))}`,
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to load vault action items: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultActionItemsResponse>;
+}
+
+export async function evaluateVaultSufficiency(
+  request: VaultSufficiencyRequest,
+): Promise<VaultSufficiencyResponse> {
+  const response = await fetch(`${getBackendBaseURL()}/api/vault/sufficiency/evaluate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    await parseError(response, `Failed to evaluate vault sufficiency: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultSufficiencyResponse>;
+}
+
+export async function listApprovals(): Promise<ApprovalRequest[]> {
+  const response = await fetch(`${getBackendBaseURL()}/api/approvals`);
+  if (!response.ok) {
+    await parseError(response, `Failed to load approvals: ${response.statusText}`);
+  }
+  const data = (await response.json()) as { items: ApprovalRequest[] };
+  return data.items;
+}
+
+export async function resolveApproval(
+  approvalId: string,
+  request: ResolveApprovalRequest,
+): Promise<PipelineRun> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/approvals/${approvalId}/resolve`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    },
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to resolve approval: ${response.statusText}`);
+  }
+  return response.json() as Promise<PipelineRun>;
+}
+
+export async function listProposalApprovals(): Promise<ProposalApprovalItem[]> {
+  const response = await fetch(`${getBackendBaseURL()}/api/approvals/proposals`);
+  if (!response.ok) {
+    await parseError(
+      response,
+      `Failed to load proposal approvals: ${response.statusText}`,
+    );
+  }
+  const data = (await response.json()) as { items: ProposalApprovalItem[] };
+  return data.items;
+}
+
+export async function resolveProposalApproval(
+  runId: string,
+  proposalId: string,
+  request: ResolveProposalApprovalRequest,
+): Promise<ProposalApprovalItem> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/approvals/proposals/${encodeURIComponent(runId)}/${encodeURIComponent(proposalId)}/resolve`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    },
+  );
+  if (!response.ok) {
+    await parseError(
+      response,
+      `Failed to resolve proposal approval: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<ProposalApprovalItem>;
+}
+
+export async function listFeedback(): Promise<FeedbackEvent[]> {
+  const response = await fetch(`${getBackendBaseURL()}/api/feedback`);
+  if (!response.ok) {
+    await parseError(response, `Failed to load feedback: ${response.statusText}`);
+  }
+  const data = (await response.json()) as { items: FeedbackEvent[] };
+  return data.items;
+}
+
+export async function createFeedback(
+  request: CreateFeedbackRequest,
+): Promise<FeedbackEvent> {
+  const response = await fetch(`${getBackendBaseURL()}/api/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    await parseError(response, `Failed to submit feedback: ${response.statusText}`);
+  }
+  return response.json() as Promise<FeedbackEvent>;
+}
+
+export async function getIntegrationStatus(): Promise<IntegrationStatusResponse> {
+  const response = await fetch(`${getBackendBaseURL()}/api/integrations/status`);
+  if (!response.ok) {
+    await parseError(
+      response,
+      `Failed to load integrations status: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<IntegrationStatusResponse>;
+}
+
+export async function getIntegrationServicesStatus(): Promise<IntegrationServicesStatusResponse> {
+  const response = await fetch(`${getBackendBaseURL()}/api/integrations/services`);
+  if (!response.ok) {
+    await parseError(
+      response,
+      `Failed to load integration services status: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<IntegrationServicesStatusResponse>;
+}
+
+export async function startIntegrationService(
+  serviceId: string,
+): Promise<IntegrationServiceStartResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/integrations/services/${serviceId}/start`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    await parseError(
+      response,
+      `Failed to start integration service: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<IntegrationServiceStartResponse>;
+}
+
+export async function setIntegrationServiceEnabled(
+  serviceId: string,
+  enabled: boolean,
+): Promise<IntegrationServiceToggleResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/integrations/services/${serviceId}/set-enabled`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    },
+  );
+  if (!response.ok) {
+    await parseError(
+      response,
+      `Failed to set integration service state: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<IntegrationServiceToggleResponse>;
+}
+
+export async function getStartupJob(jobId: string): Promise<StartupJob> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/integrations/startup-jobs/${jobId}`,
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to load startup job: ${response.statusText}`);
+  }
+  return response.json() as Promise<StartupJob>;
+}
+
+export async function startAllIntegrationServices(): Promise<IntegrationServiceStartResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/integrations/services/start-all`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    await parseError(
+      response,
+      `Failed to start all integration services: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<IntegrationServiceStartResponse>;
+}
+
+export async function runSchedulerJob(jobId: string): Promise<PipelineRun> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/integrations/scheduler/${jobId}/run`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    await parseError(
+      response,
+      `Failed to run scheduler job: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<PipelineRun>;
+}
+
+export async function createRuntimeSchedulerJob(
+  request: SchedulerRuntimeJobCreateRequest,
+) {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/integrations/scheduler/jobs`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    },
+  );
+  if (!response.ok) {
+    await parseError(
+      response,
+      `Failed to create runtime scheduler job: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<Record<string, unknown>>;
+}
+
+export async function deleteRuntimeSchedulerJob(jobId: string) {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/integrations/scheduler/jobs/${encodeURIComponent(jobId)}`,
+    { method: "DELETE" },
+  );
+  if (!response.ok) {
+    await parseError(
+      response,
+      `Failed to delete runtime scheduler job: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<{ deleted: boolean; job_id: string }>;
+}
+
+export async function updateRuntimeSchedulerJob(
+  jobId: string,
+  patch: { daily_time?: string; endpoint_goal?: string },
+) {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/integrations/scheduler/jobs/${encodeURIComponent(jobId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+  if (!response.ok) {
+    await parseError(
+      response,
+      `Failed to update scheduler job: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<Record<string, unknown>>;
+}
+
+export async function updateRuntimeSchedulerJobTime(jobId: string, dailyTime: string) {
+  return updateRuntimeSchedulerJob(jobId, { daily_time: dailyTime });
+}
+
+export async function reingestFolderSyncTarget(
+  targetId: string,
+): Promise<FolderSyncManifest> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/integrations/folder-sync/${targetId}/ingest`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    await parseError(
+      response,
+      `Failed to re-ingest folder sync target: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<FolderSyncManifest>;
+}

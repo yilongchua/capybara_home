@@ -1,0 +1,19 @@
+{
+  "name": "phase_a_seeded_stall",
+  "input": {
+    "messages": [
+      {
+        "type": "human",
+        "content": "Keep checking the same status file until it changes."
+      }
+    ],
+    "configurable": {
+      "is_plan_mode": false,
+      "subagent_enabled": false
+    }
+  },
+  "assertions": {
+    "must_emit_runtime_event": "progress_guard_warning",
+    "must_not_terminate": true
+  }
+}

@@ -1,0 +1,172 @@
+# Capybara Home - Unified Development Environment
+
+.PHONY: help config check install dev dev-daemon start stop clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway local-stack-start local-stack-stop local-stack-restart local-stack-status local-stack-logs e2e-workflow-modes
+
+help:
+	@echo "Capybara Home Development Commands:"
+	@echo "  make config          - Generate local config files (aborts if config already exists)"
+	@echo "  make check           - Check if all required tools are installed"
+	@echo "  make install         - Install all dependencies (frontend + backend)"
+	@echo "  make setup-sandbox   - Pre-pull sandbox container image (recommended)"
+	@echo "  make dev             - Start all services in development mode (with hot-reloading)"
+	@echo "  make dev-daemon      - Start all services in background (daemon mode)"
+	@echo "  make start           - Start all services in production mode (optimized, no hot-reloading)"
+	@echo "  make stop            - Stop all running services"
+	@echo "  make clean           - Clean up processes and temporary files"
+	@echo ""
+	@echo "Docker Development Commands:"
+	@echo "  make docker-init     - Build the custom k3s image (with pre-cached sandbox image)"
+	@echo "  make docker-start    - Start Docker services (mode-aware from config.yaml, localhost:2026)"
+	@echo "  make docker-stop     - Stop Docker development services"
+	@echo "  make docker-logs     - View Docker development logs"
+	@echo "  make docker-logs-frontend - View Docker frontend logs"
+	@echo "  make docker-logs-gateway - View Docker gateway logs"
+	@echo ""
+	@echo "Local Research Stack Commands:"
+	@echo "  make local-stack-start   - Start local research stack (+ optional llama.cpp / ComfyUI)"
+	@echo "  make local-stack-stop    - Stop the full local research stack"
+	@echo "  make local-stack-restart - Restart the full local research stack"
+	@echo "  make local-stack-status  - Show stack status and endpoint checks"
+	@echo "  make local-stack-logs    - Print service-specific log commands"
+	@echo "  make e2e-workflow-modes - Run workflow E2E smoke test for ultra/pro/reason/fast modes"
+
+config:
+	@if [ -f config.yaml ] || [ -f config.yml ] || [ -f configure.yml ]; then \
+		echo "Error: configuration file already exists (config.yaml/config.yml/configure.yml). Aborting."; \
+		exit 1; \
+	fi
+	@cp config.example.yaml config.yaml
+	@test -f .env || cp .env.example .env
+	@test -f frontend/.env || cp frontend/.env.example frontend/.env
+
+# Check required tools
+check:
+	@./scripts/check.sh
+
+# Install all dependencies
+install:
+	@echo "Installing backend dependencies..."
+	@cd backend && uv sync
+	@echo "Installing frontend dependencies..."
+	@cd frontend && pnpm install
+	@echo "✓ All dependencies installed"
+	@echo ""
+	@echo "=========================================="
+	@echo "  Optional: Pre-pull Sandbox Image"
+	@echo "=========================================="
+	@echo ""
+	@echo "If you plan to use Docker/Container-based sandbox, you can pre-pull the image:"
+	@echo "  make setup-sandbox"
+	@echo ""
+
+# Pre-pull sandbox Docker image (optional but recommended)
+setup-sandbox:
+	@echo "=========================================="
+	@echo "  Pre-pulling Sandbox Container Image"
+	@echo "=========================================="
+	@echo ""
+	@IMAGE=$$(grep -A 20 "# sandbox:" config.yaml 2>/dev/null | grep "image:" | awk '{print $$2}' | head -1); \
+	if [ -z "$$IMAGE" ]; then \
+		IMAGE="enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest"; \
+		echo "Using default image: $$IMAGE"; \
+	else \
+		echo "Using configured image: $$IMAGE"; \
+	fi; \
+	echo ""; \
+	if command -v container >/dev/null 2>&1 && [ "$$(uname)" = "Darwin" ]; then \
+		echo "Detected Apple Container on macOS, pulling image..."; \
+		container pull "$$IMAGE" || echo "⚠ Apple Container pull failed, will try Docker"; \
+	fi; \
+	if command -v docker >/dev/null 2>&1; then \
+		echo "Pulling image using Docker..."; \
+		docker pull "$$IMAGE"; \
+		echo ""; \
+		echo "✓ Sandbox image pulled successfully"; \
+	else \
+		echo "✗ Neither Docker nor Apple Container is available"; \
+		echo "  Please install Docker: https://docs.docker.com/get-docker/"; \
+		exit 1; \
+	fi
+
+# Start all services in development mode (with hot-reloading)
+dev:
+	@./scripts/serve.sh --dev
+
+# Start all services in production mode (with optimizations)
+start:
+	@./scripts/serve.sh --prod
+
+# Start all services in daemon mode (background)
+dev-daemon:
+	@./scripts/start-daemon.sh
+
+# Stop all services
+stop:
+	@echo "Stopping all services..."
+	@-pkill -f "langgraph dev" 2>/dev/null || true
+	@-pkill -f "uvicorn src.gateway.app:app" 2>/dev/null || true
+	@-pkill -f "next dev" 2>/dev/null || true
+	@-pkill -f "next start" 2>/dev/null || true
+	@-pkill -f "next-server" 2>/dev/null || true
+	@-nginx -c $(PWD)/docker/nginx/nginx.local.conf -p $(PWD) -s quit 2>/dev/null || true
+	@sleep 1
+	@-pkill -9 nginx 2>/dev/null || true
+	@echo "Cleaning up sandbox containers..."
+	@-./scripts/cleanup-containers.sh capybara-home-sandbox 2>/dev/null || true
+	@echo "✓ All services stopped"
+
+# Clean up
+clean: stop
+	@echo "Cleaning up..."
+	@-rm -rf backend/.capybara-home 2>/dev/null || true
+	@-rm -rf backend/.langgraph_api 2>/dev/null || true
+	@-rm -rf logs/*.log 2>/dev/null || true
+	@echo "✓ Cleanup complete"
+
+# ==========================================
+# Docker Development Commands
+# ==========================================
+
+# Initialize Docker containers and install dependencies
+docker-init:
+	@./scripts/docker.sh init
+
+# Start Docker development environment
+docker-start:
+	@./scripts/docker.sh start
+
+# Stop Docker development environment
+docker-stop:
+	@./scripts/docker.sh stop
+
+# View Docker development logs
+docker-logs:
+	@./scripts/docker.sh logs
+
+# View Docker development logs
+docker-logs-frontend:
+	@./scripts/docker.sh logs --frontend
+docker-logs-gateway:
+	@./scripts/docker.sh logs --gateway
+
+# ==========================================
+# Local Research Stack Commands
+# ==========================================
+
+local-stack-start:
+	@./scripts/local-stack.sh start
+
+local-stack-stop:
+	@./scripts/local-stack.sh stop
+
+local-stack-restart:
+	@./scripts/local-stack.sh restart
+
+local-stack-status:
+	@./scripts/local-stack.sh status
+
+local-stack-logs:
+	@./scripts/local-stack.sh logs
+
+e2e-workflow-modes:
+	@PYTHONPATH=backend backend/.venv/bin/python scripts/test_workflow_modes_e2e.py

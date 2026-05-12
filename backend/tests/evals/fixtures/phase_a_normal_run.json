@@ -1,0 +1,19 @@
+{
+  "name": "phase_a_normal_run",
+  "input": {
+    "messages": [
+      {
+        "type": "human",
+        "content": "List files in the workspace and summarize what you find."
+      }
+    ],
+    "configurable": {
+      "is_plan_mode": false,
+      "subagent_enabled": false
+    }
+  },
+  "assertions": {
+    "tool_calls_any_of": ["ls", "read_file"],
+    "must_not_contain": ["permission_denied"]
+  }
+}

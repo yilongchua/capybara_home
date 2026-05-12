@@ -1,0 +1,9 @@
+{
+  "name": "coding",
+  "baseline_pass_rate": 0.5,
+  "fixtures": [
+    {
+      "path": "phase_b_replay_fixture.json"
+    }
+  ]
+}

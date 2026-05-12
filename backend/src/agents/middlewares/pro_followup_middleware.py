@@ -1,0 +1,234 @@
+"""Background follow-up scheduler for Plan mode."""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from datetime import UTC, datetime
+from typing import Any, NotRequired, override
+
+from langchain.agents import AgentState
+from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import HumanMessage
+from langgraph.config import get_config, get_stream_writer
+from langgraph.runtime import Runtime
+
+from src.agents.middlewares.runtime_events import append_runtime_event
+from src.agents.thread_state import BackgroundFollowupJob
+
+logger = logging.getLogger(__name__)
+
+# Thread-safe store for background job failures so they can be surfaced to the
+# user on the next model turn (since SSE writers are only usable inside a run).
+_failed_jobs: dict[str, tuple[str, str]] = {}  # thread_id -> (job_id, error_msg)
+_failed_jobs_lock = threading.Lock()
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+class PlanFollowupState(AgentState):
+    background_followups: NotRequired[list[BackgroundFollowupJob] | None]
+
+
+def _message_text(message: Any) -> str:
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return "\n".join(parts).strip()
+    return ""
+
+
+def _latest_message_text(messages: list[Any], *, msg_type: str) -> str:
+    for msg in reversed(messages):
+        if getattr(msg, "type", None) != msg_type:
+            continue
+        text = _message_text(msg)
+        if text:
+            return text
+    return ""
+
+
+def _run_background_followup(
+    *,
+    thread_id: str,
+    job_id: str,
+    requested_model_name: str | None,
+    summary_prompt: str,
+) -> None:
+    from src.client import CapybaraClient
+
+    time.sleep(2.0)
+    client = CapybaraClient(
+        model_name=requested_model_name,
+        thinking_enabled=True,
+        subagent_enabled=True,
+        plan_mode=False,
+    )
+    config = client._get_runnable_config(  # noqa: SLF001
+        thread_id,
+        model_name=requested_model_name,
+        thinking_enabled=True,
+        subagent_enabled=True,
+    )
+    config["configurable"].update(
+        {
+            "mode": "plan",
+            "background_followup": True,
+            "plan_behavior": "plan_background_deepen",
+        }
+    )
+    client._ensure_agent(config)  # noqa: SLF001
+    try:
+        client._agent.invoke(  # noqa: SLF001
+            {"messages": [HumanMessage(name="plan_followup_prompt", content=summary_prompt)]},
+            config=config,
+            context={
+                "thread_id": thread_id,
+                "mode": "plan",
+                "background_followup": True,
+                "plan_behavior": "plan_background_deepen",
+                "model_name": requested_model_name,
+            },
+        )
+    except Exception as exc:
+        logger.exception("Background Plan follow-up failed for thread %s", thread_id)
+        # Surface the failure on the next model turn for this thread.
+        with _failed_jobs_lock:
+            _failed_jobs[thread_id] = (job_id, str(exc))
+
+
+class PlanFollowupMiddleware(AgentMiddleware[PlanFollowupState]):
+    state_schema = PlanFollowupState
+
+    @override
+    def before_model(self, state: PlanFollowupState, runtime: Runtime) -> dict | None:
+        runtime_context = getattr(runtime, "context", None) or {}
+        mode = str(runtime_context.get("mode") or "").strip().lower() or "work"
+
+        # Emit any recorded background-job failure as an SSE event so the frontend
+        # can show an error notice.  The failure was recorded by the daemon thread
+        # and can only be pushed once we're back inside a LangGraph execution context.
+        thread_id = runtime_context.get("thread_id")
+        if isinstance(thread_id, str) and thread_id:
+            with _failed_jobs_lock:
+                failed = _failed_jobs.pop(thread_id, None)
+            if failed:
+                failed_job_id, error_msg = failed
+                try:
+                    writer = get_stream_writer()
+                    writer({
+                        "type": "background_followup_failed",
+                        "source": "plan_followup_middleware",
+                        "job_id": failed_job_id,
+                        "error": error_msg,
+                    })
+                except Exception:
+                    logger.debug("Failed to emit background_followup_failed SSE for job %s", failed_job_id)
+
+        return {
+            "execution_intent": {
+                "mode": mode,
+                "plan_behavior": str(runtime_context.get("plan_behavior") or ("plan_foreground" if mode == "plan" else "work_interactive")),
+                "allow_background_deepen": mode == "plan" and not bool(runtime_context.get("background_followup")),
+                "max_primary_subagents": 1,
+            }
+        }
+
+    def _is_terminal_answer(self, state: PlanFollowupState) -> bool:
+        messages = state.get("messages", []) or []
+        if not messages:
+            return False
+        last = messages[-1]
+        if getattr(last, "type", None) != "ai":
+            return False
+        if getattr(last, "tool_calls", None):
+            return False
+        return bool(_message_text(last))
+
+    @override
+    def after_model(self, state: PlanFollowupState, runtime: Runtime) -> dict | None:
+        runtime_context = getattr(runtime, "context", None) or {}
+        if str(runtime_context.get("mode") or "").strip().lower() != "plan":
+            return None
+        if bool(runtime_context.get("background_followup")):
+            return None
+        if not self._is_terminal_answer(state):
+            return None
+
+        existing = list(state.get("background_followups") or [])
+        if existing:
+            return None
+
+        thread_id = runtime_context.get("thread_id")
+        if not isinstance(thread_id, str) or not thread_id:
+            return None
+
+        messages = state.get("messages", []) or []
+        user_text = _latest_message_text(messages, msg_type="human")
+        answer_text = _latest_message_text(messages, msg_type="ai")
+        if not user_text or not answer_text:
+            return None
+
+        requested_model_name = (get_config().get("metadata") or {}).get("model_name")
+        job_id = f"plan-followup-{int(time.time())}"
+        summary_prompt = (
+            "Continue the previous Plan-mode answer in the background.\n"
+            "Do not repeat the original answer. Add only meaningful follow-up value.\n"
+            "Focus on evaluator critique, alternative-source verification, expanded comparison details, "
+            "or a secondary research pass when useful.\n\n"
+            f"Original user request:\n{user_text}\n\n"
+            f"Foreground answer already delivered:\n{answer_text}\n"
+        )
+        worker = threading.Thread(
+            target=_run_background_followup,
+            kwargs={
+                "thread_id": thread_id,
+                "job_id": job_id,
+                "requested_model_name": requested_model_name if isinstance(requested_model_name, str) else None,
+                "summary_prompt": summary_prompt,
+            },
+            name=f"plan-followup-{thread_id[:8]}",
+            daemon=True,
+        )
+        worker.start()
+
+        append_runtime_event(
+            runtime,
+            {
+                "source": "plan_followup_middleware",
+                "event": "background_followup_started",
+                "job_id": job_id,
+                "summary": "Deepening in background",
+            },
+        )
+        return {
+            "background_followups": [
+                {
+                    "id": job_id,
+                    "status": "running",
+                    "kind": "plan_background_deepen",
+                    "summary": "Deepening in background",
+                    "created_at": _utc_now_iso(),
+                    "completed_at": None,
+                    "error": None,
+                }
+            ]
+        }
+
+    @override
+    async def aafter_model(self, state: PlanFollowupState, runtime: Runtime) -> dict | None:
+        return self.after_model(state, runtime)
+
+
+# Backward-compat alias while module name remains unchanged.
+ProFollowupMiddleware = PlanFollowupMiddleware

@@ -1,0 +1,510 @@
+"""Work Mode middleware for automatic phase-loop execution.
+
+Drives the ReAct loop in Work Mode: every cycle, before_model() finds the next
+ready todo, injects a HumanMessage instruction, and emits SSE events for phase
+tracking.  When all phases are complete it returns None, letting the model
+produce a summary and terminate.
+
+Phase completion is detected at the *start* of each cycle by diffing current
+completed IDs against the snapshot taken at the end of the previous cycle —
+no after_model() hook required.
+
+Import rule: _materialize_ready_ids is imported from todo_dag_middleware; never
+copy or re-implement it (it excludes both "completed" and "blocked" nodes).
+
+SSE rule: All SSE events use get_stream_writer() — same mechanism as
+task_started/title_update.  append_runtime_event() is for inter-middleware
+logging only and does NOT reach the frontend.
+
+Instruction rule: The work_mode_instruction HumanMessage must end with
+"Do NOT output any text — the system will automatically assign the next phase."
+If the model outputs text the ReAct loop terminates before all phases complete.
+
+Auto-cycle (Phase 4): when auto_mode=True in the runtime context, plan_adapted
+and complexity_escalation events automatically spawn a daemon thread that
+re-invokes the agent with mode="plan" after the current run finishes (same
+pattern as ProFollowupMiddleware).  Adaptation attempts are capped at 2; on the
+third the user must intervene manually.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from datetime import UTC, datetime
+from typing import Any, NotRequired, override
+
+from langchain.agents import AgentState
+from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import HumanMessage
+from langgraph.config import get_stream_writer
+from langgraph.runtime import Runtime
+
+from src.agents.middlewares.todo_dag_middleware import _materialize_ready_ids
+
+logger = logging.getLogger(__name__)
+
+_MAX_AUTO_ADAPTATION_ATTEMPTS = 2
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _is_report_todo(todo_content: str) -> bool:
+    lowered = (todo_content or "").lower()
+    return "report" in lowered or "comprehensive" in lowered
+
+
+class WorkModeMiddlewareState(AgentState):
+    """Compatible with the ThreadState schema."""
+
+    todo_graph: NotRequired[dict | None]
+    plan: NotRequired[dict | None]
+    plan_history: NotRequired[list[dict] | None]
+    work_mode: NotRequired[dict | None]
+    phase_execution: NotRequired[dict | None]
+    dreamy_mode: NotRequired[bool]
+    complexity_tier: NotRequired[str | None]
+
+
+def _normalize_plan_status(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    if value in {"draft", "approved", "executing", "completed"}:
+        return value
+    return "draft"
+
+
+def _update_plan_history_status(history: list[dict] | None, plan_id: str | None, status: str) -> list[dict] | None:
+    if not history or not plan_id:
+        return history
+    updated: list[dict] = []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("plan_id") or "").strip() == plan_id:
+            updated.append({**item, "status": status})
+        else:
+            updated.append(item)
+    return updated
+
+
+def _run_plan_mode_rerun(
+    *,
+    thread_id: str,
+    requested_model_name: str | None,
+    system_message: str,
+) -> None:
+    """Daemon target: re-invoke the agent with mode='plan' after current run finishes.
+
+    Mirrors _run_background_followup in ProFollowupMiddleware. Sleeps briefly to
+    let the Work Mode run reach its checkpoint before starting a new run on the
+    same thread (LangGraph serialises runs per thread via the checkpoint lock).
+    """
+    from src.client import CapybaraClient
+
+    time.sleep(2.0)
+    try:
+        client = CapybaraClient(
+            model_name=requested_model_name,
+            thinking_enabled=True,
+            subagent_enabled=True,
+            plan_mode=True,
+        )
+        config = client._get_runnable_config(  # noqa: SLF001
+            thread_id,
+            model_name=requested_model_name,
+            thinking_enabled=True,
+            subagent_enabled=True,
+        )
+        config["configurable"].update(
+            {
+                "mode": "plan",
+                "is_plan_mode": True,
+            }
+        )
+        client._ensure_agent(config)  # noqa: SLF001
+        client._agent.invoke(  # noqa: SLF001
+            {"messages": [HumanMessage(name="work_mode_plan_rerun", content=system_message)]},
+            config=config,
+            context={
+                "thread_id": thread_id,
+                "mode": "plan",
+                "is_plan_mode": True,
+                "model_name": requested_model_name,
+            },
+        )
+    except Exception:
+        logger.exception("Auto Plan Mode re-invocation failed for thread %s", thread_id)
+
+
+def _spawn_plan_rerun(
+    *,
+    thread_id: str,
+    requested_model_name: str | None,
+    system_message: str,
+    thread_name_suffix: str = "",
+) -> None:
+    """Spawn a daemon thread to re-invoke with mode='plan'."""
+    worker = threading.Thread(
+        target=_run_plan_mode_rerun,
+        kwargs={
+            "thread_id": thread_id,
+            "requested_model_name": requested_model_name,
+            "system_message": system_message,
+        },
+        name=f"work-mode-plan-rerun-{thread_id[:8]}{thread_name_suffix}",
+        daemon=True,
+    )
+    worker.start()
+
+
+class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
+    """Drives automatic phase-loop execution in Work Mode.
+
+    Runs every ReAct cycle. Each call to before_model():
+    1. Detects newly completed todos from the previous cycle (via snapshot diff)
+    2. Emits phase_completed SSE for each newly completed todo
+    3. Finds the next ready (non-completed, unblocked) todo
+    4. Emits phase_started SSE and injects a HumanMessage instruction
+    5. Returns None when all phases are done → model summarises and terminates
+
+    Phase 4 (auto-cycle): when auto_mode=True in runtime context, blocked plans
+    and complex requests automatically trigger a Plan Mode re-run (capped at 2).
+    """
+
+    state_schema = WorkModeMiddlewareState
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Snapshot of completed todo IDs from the previous cycle.
+        # None = first call; seeded from current state to suppress spurious
+        # phase_completed events when resuming a thread mid-execution.
+        self._completed_before: frozenset[str] | None = None
+
+    @override
+    def before_model(self, state: WorkModeMiddlewareState, runtime: Runtime) -> dict[str, Any] | None:  # noqa: ARG002
+        # Dreamy Mode has its own phase loop (DreamyExecutor) — skip
+        if state.get("dreamy_mode"):
+            return None
+
+        runtime_context: dict = getattr(runtime, "context", None) or {}
+        auto_mode: bool = bool(runtime_context.get("auto_mode"))
+        execute_approved_plan: bool = bool(runtime_context.get("execute_approved_plan"))
+        thread_id: str | None = runtime_context.get("thread_id")
+        requested_model_name: str | None = runtime_context.get("model_name")
+        plan_state = dict(state.get("plan") or {})
+        plan_history = [item for item in (state.get("plan_history") or []) if isinstance(item, dict)]
+        plan_status = _normalize_plan_status(plan_state.get("status"))
+
+        graph = state.get("todo_graph") or {}
+        nodes: list[dict] | None = graph.get("nodes") if isinstance(graph, dict) else None
+
+        # ── No plan yet ────────────────────────────────────────────────────────
+        if not nodes:
+            complexity_tier = state.get("complexity_tier")
+            if complexity_tier == "complex":
+                self._handle_complexity_escalation(
+                    auto_mode=auto_mode,
+                    thread_id=thread_id,
+                    requested_model_name=requested_model_name,
+                )
+            return None
+
+        if plan_state:
+            if plan_status == "draft" and execute_approved_plan:
+                plan_state = {
+                    **plan_state,
+                    "status": "approved",
+                    "approved_at": str(plan_state.get("approved_at") or _utc_now_iso()),
+                }
+                plan_status = "approved"
+            if plan_status not in {"approved", "executing", "completed"}:
+                return None
+
+        # ── Detect newly completed todos from previous cycle ───────────────────
+        current_completed: frozenset[str] = frozenset(
+            n["id"] for n in nodes if n.get("status") == "completed"
+        )
+        # First cycle: seed from current state so we don't re-emit phase_completed
+        # for todos that were already done before this run started (resume case).
+        if self._completed_before is None:
+            self._completed_before = current_completed
+        newly_completed = current_completed - self._completed_before
+
+        writer = get_stream_writer()
+
+        if newly_completed:
+            node_by_id = {n["id"]: n for n in nodes}
+            for todo_id in newly_completed:
+                node = node_by_id.get(todo_id)
+                if node is None:
+                    continue
+                phase_index = next((i for i, n in enumerate(nodes) if n["id"] == todo_id), 0)
+                try:
+                    writer({
+                        "type": "phase_completed",
+                        "source": "work_mode_middleware",
+                        "todo_id": todo_id,
+                        "content": node.get("content", ""),
+                        "phase_index": phase_index,
+                        "completed_at": _utc_now_iso(),
+                    })
+                except Exception:
+                    logger.exception("Failed to emit phase_completed SSE for %s", todo_id)
+
+        # Snapshot current completed set for next cycle's diff
+        self._completed_before = current_completed
+
+        # ── Find next ready todo ───────────────────────────────────────────────
+        ready_ids = _materialize_ready_ids(nodes)
+        node_by_id = {n["id"]: n for n in nodes}
+
+        pending_ready = [
+            nid for nid in ready_ids
+            if node_by_id.get(nid, {}).get("status") not in {"completed", "in_progress"}
+        ]
+
+        # ── Plan adaptation: nodes exist but none are ready ────────────────────
+        # Exclude in_progress — a running todo is not a sign the plan is stuck.
+        pending_nodes = [n for n in nodes if n.get("status") not in {"completed", "blocked", "in_progress"}]
+        if not pending_ready and pending_nodes:
+            return self._handle_plan_adapted(
+                state=state,
+                nodes=nodes,
+                pending_nodes=pending_nodes,
+                auto_mode=auto_mode,
+                thread_id=thread_id,
+                requested_model_name=requested_model_name,
+            )
+
+        # ── All phases complete ────────────────────────────────────────────────
+        if not pending_ready:
+            if plan_state and plan_status in {"approved", "executing"}:
+                plan_id = str(plan_state.get("plan_id") or "").strip() or None
+                return {
+                    "plan": {
+                        **plan_state,
+                        "status": "completed",
+                        "completed_at": _utc_now_iso(),
+                    },
+                    "plan_history": _update_plan_history_status(plan_history, plan_id, "completed"),
+                }
+            return None
+
+        # ── Emit phase_started and inject instruction ──────────────────────────
+        next_todo = node_by_id[pending_ready[0]]
+        phase_index = next((i for i, n in enumerate(nodes) if n["id"] == next_todo["id"]), 0)
+        total_phases = len(nodes)
+
+        try:
+            writer({
+                "type": "phase_started",
+                "source": "work_mode_middleware",
+                "todo_id": next_todo["id"],
+                "content": next_todo.get("content", ""),
+                "subagent_type": next_todo.get("subagent_type"),
+                "phase_index": phase_index,
+                "total_phases": total_phases,
+            })
+        except Exception:
+            logger.exception("Failed to emit phase_started SSE for %s", next_todo["id"])
+
+        todo_content = next_todo.get("content", "")
+        subagent_hint = ""
+        if next_todo.get("subagent_type"):
+            subagent_hint = f" Use a {next_todo['subagent_type']} subagent if available."
+
+        report_contract = ""
+        if _is_report_todo(todo_content):
+            report_contract = (
+                "\nUse a two-stage generation contract for speed+accuracy:\n"
+                "Stage A: produce a compact outline plus section-level claims list before drafting full content.\n"
+                "Stage B: expand into the final report from the outline and essential evidence only.\n"
+                "Add confidence tags (high/medium/low) for key claims with weak support.\n"
+                "Before final write_file, self-check for duplicate table rows, repeated long paragraphs, heading numbering consistency, and required sections.\n"
+            )
+        instruction = HumanMessage(
+            name="work_mode_instruction",
+            content=(
+                f"<work_mode_instruction>\n"
+                f"Execute the following task now: {todo_content}.{subagent_hint}\n"
+                f"{report_contract}"
+                f"When done, call write_todos to mark todo id '{next_todo['id']}' as completed.\n"
+                f"Do NOT output any text — the system will automatically assign the next phase.\n"
+                f"</work_mode_instruction>"
+            ),
+        )
+
+        # ── Update phase_execution state ───────────────────────────────────────
+        existing_pe: dict = dict(state.get("phase_execution") or {})
+        phase_results: list[dict] = list(existing_pe.get("phase_results") or [])
+
+        existing_idx = next((i for i, r in enumerate(phase_results) if r.get("todo_id") == next_todo["id"]), None)
+        new_entry: dict = {
+            "phase_index": phase_index,
+            "todo_id": next_todo["id"],
+            "content": todo_content,
+            "status": "in_progress",
+            "subagent_type": next_todo.get("subagent_type"),
+        }
+        if existing_idx is not None:
+            phase_results[existing_idx] = new_entry
+        else:
+            phase_results.append(new_entry)
+
+        for todo_id in newly_completed:
+            idx = next((i for i, r in enumerate(phase_results) if r.get("todo_id") == todo_id), None)
+            if idx is not None and phase_results[idx].get("status") != "completed":
+                phase_results[idx] = {
+                    **phase_results[idx],
+                    "status": "completed",
+                    "completed_at": _utc_now_iso(),
+                }
+
+        plan_update = None
+        if plan_state and plan_status == "approved":
+            plan_id = str(plan_state.get("plan_id") or "").strip() or None
+            plan_update = {
+                **plan_state,
+                "status": "executing",
+                "execution_started_at": str(plan_state.get("execution_started_at") or _utc_now_iso()),
+            }
+            plan_history = _update_plan_history_status(plan_history, plan_id, "executing") or plan_history
+
+        update_payload: dict[str, Any] = {
+            "work_mode": {
+                "active": True,
+                "plan_source": "prior_run",
+                "current_phase_index": phase_index,
+                "total_phases": total_phases,
+                "phases_completed": len(current_completed),
+            },
+            "phase_execution": {
+                **existing_pe,
+                "current_phase": phase_index,
+                "total_phases": total_phases,
+                "phase_results": phase_results,
+            },
+            "messages": [instruction],
+        }
+        if plan_update is not None:
+            update_payload["plan"] = plan_update
+            update_payload["plan_history"] = plan_history
+        return update_payload
+
+    @override
+    async def abefore_model(self, state: WorkModeMiddlewareState, runtime: Runtime) -> dict[str, Any] | None:
+        return self.before_model(state, runtime)
+
+    # ── Private helpers ────────────────────────────────────────────────────────
+
+    def _handle_complexity_escalation(
+        self,
+        *,
+        auto_mode: bool,
+        thread_id: str | None,
+        requested_model_name: str | None,
+    ) -> None:
+        """Emit complexity_escalation SSE. If auto_mode, spawn a Plan Mode re-run."""
+        try:
+            writer = get_stream_writer()
+            writer({
+                "type": "complexity_escalation",
+                "source": "work_mode_middleware",
+                "complexity_tier": "complex",
+                "recommended_action": "plan_mode",
+                "message": "This request looks complex. Switching to Plan Mode is recommended.",
+            })
+        except Exception:
+            logger.exception("Failed to emit complexity_escalation SSE")
+
+        if auto_mode and isinstance(thread_id, str) and thread_id:
+            _spawn_plan_rerun(
+                thread_id=thread_id,
+                requested_model_name=requested_model_name,
+                system_message=(
+                    "Generate a detailed structured plan for the previous user request. "
+                    "Work Mode detected this request is too complex for direct execution."
+                ),
+                thread_name_suffix="-escalation",
+            )
+            logger.info("Auto-cycle: spawned Plan Mode re-run due to complexity_escalation for thread %s", thread_id)
+
+    def _handle_plan_adapted(
+        self,
+        *,
+        state: WorkModeMiddlewareState,
+        nodes: list[dict],
+        pending_nodes: list[dict],
+        auto_mode: bool,
+        thread_id: str | None,
+        requested_model_name: str | None,
+    ) -> dict[str, Any] | None:
+        """Emit plan_adapted SSE. If auto_mode and under the attempt limit, spawn a Plan Mode re-run."""
+        existing_pe: dict = dict(state.get("phase_execution") or {})
+        current_attempts: int = int(existing_pe.get("adaptation_attempts") or 0)
+
+        blocked_ids = [n["id"] for n in nodes if n.get("status") == "blocked"]
+        pending_ids = [n["id"] for n in pending_nodes]
+
+        try:
+            writer = get_stream_writer()
+            writer({
+                "type": "plan_adapted",
+                "source": "work_mode_middleware",
+                "blocked_ids": blocked_ids,
+                "message": (
+                    f"{len(pending_nodes)} pending todo(s) have unmet dependencies. "
+                    "The plan needs revision."
+                ),
+                "adaptation_attempt": current_attempts + 1,
+                "max_attempts": _MAX_AUTO_ADAPTATION_ATTEMPTS,
+            })
+        except Exception:
+            logger.exception("Failed to emit plan_adapted SSE")
+
+        new_attempts = current_attempts + 1
+
+        # Cap auto-cycle at _MAX_AUTO_ADAPTATION_ATTEMPTS; beyond that require user confirmation.
+        if auto_mode and isinstance(thread_id, str) and thread_id and current_attempts < _MAX_AUTO_ADAPTATION_ATTEMPTS:
+            blocked_context = ", ".join(blocked_ids) if blocked_ids else "none"
+            pending_context = ", ".join(pending_ids)
+            _spawn_plan_rerun(
+                thread_id=thread_id,
+                requested_model_name=requested_model_name,
+                system_message=(
+                    "The current Work Mode execution has encountered blocked todos. "
+                    f"Blocked todo IDs: [{blocked_context}]. "
+                    f"Pending (unstarted) todo IDs: [{pending_context}]. "
+                    "Please revise the plan to resolve these dependency issues and generate "
+                    "an updated plan that can be executed without circular or unresolved dependencies."
+                ),
+                thread_name_suffix=f"-adapt{new_attempts}",
+            )
+            logger.info(
+                "Auto-cycle: spawned Plan Mode re-run (adaptation attempt %d/%d) for thread %s",
+                new_attempts, _MAX_AUTO_ADAPTATION_ATTEMPTS, thread_id,
+            )
+        elif auto_mode and current_attempts >= _MAX_AUTO_ADAPTATION_ATTEMPTS:
+            logger.warning(
+                "Auto-cycle adaptation limit reached (%d attempts) for thread %s — user intervention required",
+                current_attempts, thread_id,
+            )
+
+        return {
+            "phase_execution": {
+                **existing_pe,
+                "plan_adapted": True,
+                "adaptation_notes": f"Blocked todos: {blocked_ids}",
+                "adaptation_attempts": new_attempts,
+            },
+        }
+
+
+def _create_work_mode(ctx: Any) -> WorkModeMiddleware | None:
+    """Factory: returns None for all non-work modes (skips middleware)."""
+    if not getattr(ctx, "is_work_mode", False):
+        return None
+    return WorkModeMiddleware()
