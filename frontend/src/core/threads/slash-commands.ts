@@ -1,5 +1,7 @@
 export type SlashCommandName =
   | "compact"
+  | "dreamy"
+  | "dreamy-exit"
   | "handoff"
   | "new"
   | "mount"
@@ -19,6 +21,8 @@ export type SlashCommandParseResult = {
 
 const SUPPORTED_COMMANDS: SlashCommandName[] = [
   "compact",
+  "dreamy",
+  "dreamy-exit",
   "handoff",
   "new",
   "mount",

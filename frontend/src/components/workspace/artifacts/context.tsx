@@ -9,13 +9,13 @@ import {
 import { useSidebar } from "@/components/ui/sidebar";
 import { env } from "@/env";
 
-export interface ArtifactsContextType {
-  artifacts: string[];
-  setArtifacts: (artifacts: string[]) => void;
+export interface DirectoryContextType {
+  directoryFiles: string[];
+  setDirectoryFiles: (files: string[]) => void;
 
-  selectedArtifact: string | null;
+  selectedFile: string | null;
   autoSelect: boolean;
-  select: (artifact: string, autoSelect?: boolean) => void;
+  select: (file: string, autoSelect?: boolean) => void;
   deselect: () => void;
 
   open: boolean;
@@ -23,17 +23,17 @@ export interface ArtifactsContextType {
   setOpen: (open: boolean) => void;
 }
 
-const ArtifactsContext = createContext<ArtifactsContextType | undefined>(
+const DirectoryContext = createContext<DirectoryContextType | undefined>(
   undefined,
 );
 
-interface ArtifactsProviderProps {
+interface DirectoryProviderProps {
   children: ReactNode;
 }
 
-export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
-  const [artifacts, setArtifacts] = useState<string[]>([]);
-  const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
+export function DirectoryProvider({ children }: DirectoryProviderProps) {
+  const [directoryFiles, setDirectoryFiles] = useState<string[]>([]);
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [autoSelect, setAutoSelect] = useState(true);
   const [open, setOpen] = useState(
     env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true",
@@ -42,8 +42,8 @@ export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
   const { setOpen: setSidebarOpen } = useSidebar();
 
   const select = useCallback(
-    (artifact: string, autoSelect = false) => {
-      setSelectedArtifact(artifact);
+    (file: string, autoSelect = false) => {
+      setSelectedFile(file);
       // Only close the sidebar on explicit user selections — not on automatic
       // selections triggered by streaming tool results (present_files, write_file).
       // Auto-closing on every agent file write breaks the dreamy sidebar experience.
@@ -54,17 +54,17 @@ export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
         setAutoSelect(false);
       }
     },
-    [setSidebarOpen, setSelectedArtifact, setAutoSelect],
+    [setSidebarOpen, setSelectedFile, setAutoSelect],
   );
 
   const deselect = useCallback(() => {
-    setSelectedArtifact(null);
+    setSelectedFile(null);
     setAutoSelect(true);
   }, []);
 
-  const value: ArtifactsContextType = {
-    artifacts,
-    setArtifacts,
+  const value: DirectoryContextType = {
+    directoryFiles,
+    setDirectoryFiles,
 
     open,
     autoOpen,
@@ -77,22 +77,22 @@ export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
       setOpen(isOpen);
     },
 
-    selectedArtifact,
+    selectedFile,
     select,
     deselect,
   };
 
   return (
-    <ArtifactsContext.Provider value={value}>
+    <DirectoryContext.Provider value={value}>
       {children}
-    </ArtifactsContext.Provider>
+    </DirectoryContext.Provider>
   );
 }
 
-export function useArtifacts() {
-  const context = useContext(ArtifactsContext);
+export function useDirectory() {
+  const context = useContext(DirectoryContext);
   if (context === undefined) {
-    throw new Error("useArtifacts must be used within an ArtifactsProvider");
+    throw new Error("useDirectory must be used within a DirectoryProvider");
   }
   return context;
 }

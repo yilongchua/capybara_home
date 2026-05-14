@@ -29,7 +29,7 @@ export const enUS: Translations = {
     search: "Search",
     download: "Download",
     thinking: "Thinking",
-    artifacts: "Artifacts",
+    artifacts: "Directory",
     public: "Public",
     custom: "Custom",
     notAvailableInDemoMode: "Not available in demo mode",

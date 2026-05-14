@@ -175,12 +175,14 @@ class DreamyExecutionMiddleware(AgentMiddleware[DreamyExecutionMiddlewareState])
     ) -> None:
         """Launch DreamyExecutor in a daemon background thread."""
         self._clear_signal(thread_id)
+        runtime_state = getattr(runtime, "state", None)
+        state = runtime_state if isinstance(runtime_state, dict) else {}
         executor = DreamyExecutor(
             thread_id=thread_id,
             workflow=workflow,
             model_name=context.get("model_name"),
-            sandbox_state=(runtime.state or {}).get("sandbox"),
-            thread_data=(runtime.state or {}).get("thread_data"),
+            sandbox_state=state.get("sandbox"),
+            thread_data=state.get("thread_data"),
         )
         t = threading.Thread(target=executor.run, daemon=True, name=f"dreamy-exec-{thread_id[:8]}")
         t.start()

@@ -1,7 +1,7 @@
 "use client";
 
 import { Clock3Icon, ClockIcon, Loader2Icon } from "lucide-react";
-import { useParams, usePathname } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useMemo } from "react";
 
 import {
@@ -18,10 +18,9 @@ const TERMINAL_STATUSES = new Set(["completed", "failed", "timed_out", "cancelle
 
 export function LongRunningTasksSidebarSection() {
   const { thread_id } = useParams<{ thread_id?: string }>();
-  const pathname = usePathname();
   const activeThreadId =
     thread_id && thread_id !== "new" ? thread_id : "";
-  const enableDreamyPolling = pathname.startsWith("/workspace/dreamy/");
+  const enableDreamyPolling = Boolean(activeThreadId);
   const { tasks, activeCount } = useLongRunningTasks(activeThreadId, {
     enabled: Boolean(activeThreadId),
   });

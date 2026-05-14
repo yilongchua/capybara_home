@@ -62,9 +62,7 @@ export function RecentChatList() {
       deleteThread({ threadId });
       if (threadId === threadIdFromPath) {
         const threadIndex = threads.findIndex((t) => t.thread_id === threadId);
-        let nextThreadPath = pathname.startsWith("/workspace/dreamy")
-          ? "/workspace/dreamy/new"
-          : "/workspace/chats/new";
+        let nextThreadPath = "/workspace/chats/new";
         if (threadIndex > -1) {
           if (threads[threadIndex + 1]) {
             nextThreadPath = pathOfThreadRecord(threads[threadIndex + 1]!);
@@ -75,7 +73,7 @@ export function RecentChatList() {
         void router.push(nextThreadPath);
       }
     },
-    [deleteThread, pathname, router, threadIdFromPath, threads],
+    [deleteThread, router, threadIdFromPath, threads],
   );
 
   const handleRenameClick = useCallback(

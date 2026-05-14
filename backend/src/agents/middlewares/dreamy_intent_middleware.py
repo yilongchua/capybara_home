@@ -25,7 +25,7 @@ class DreamyIntentState(AgentState):
 
 
 class DreamyIntentMiddleware(AgentMiddleware[DreamyIntentState]):
-    """Detect explicit /workflow invocation and structural shape of user input."""
+    """Detect Dreamy workflow-design intent from explicit commands or follow-up prompts."""
 
     state_schema = DreamyIntentState
 
@@ -34,6 +34,11 @@ class DreamyIntentMiddleware(AgentMiddleware[DreamyIntentState]):
     @staticmethod
     def _strip_workflow_command(text: str) -> str:
         stripped = text.lstrip()
+        if stripped.startswith("/dreamy"):
+            remainder = stripped[len("/dreamy"):]
+            if remainder.startswith("\n"):
+                remainder = remainder[1:]
+            return remainder.lstrip()
         if not stripped.startswith("/workflow"):
             return text
         remainder = stripped[len("/workflow"):]
@@ -105,13 +110,28 @@ class DreamyIntentMiddleware(AgentMiddleware[DreamyIntentState]):
             return None
 
         text = self._extract_human_text(state)
-        workflow_requested = text.lstrip().startswith("/workflow")
+        stripped = text.lstrip()
+        if stripped.startswith("/dreamy-exit"):
+            append_runtime_event(
+                runtime,
+                {
+                    "source": "dreamy_intent",
+                    "event": "dreamy_mode_exited",
+                    "phase": "dreamy_mode_exited",
+                },
+            )
+            return {"dreamy_mode": False}
+        workflow_requested = bool(stripped) and (
+            stripped.startswith("/workflow")
+            or stripped.startswith("/dreamy")
+            or not stripped.startswith("/")
+        )
         shape = self._detect_shape(text)
         fields = self._extract_fields(text)
 
         intent: DreamyIntent = {
             "shape": shape,
-            "intent_class": "explicit_workflow" if workflow_requested else "none",
+            "intent_class": "workflow_design" if workflow_requested else "none",
             "confidence": 1.0 if workflow_requested else 0.0,
             "extracted_fields": fields,
             "inferred_goal": "",

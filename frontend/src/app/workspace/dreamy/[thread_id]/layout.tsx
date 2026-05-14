@@ -3,12 +3,12 @@
 import { useParams } from "next/navigation";
 
 import { PromptInputProvider } from "@/components/ai-elements/prompt-input";
-import { ArtifactsProvider } from "@/components/workspace/artifacts";
+import { DirectoryProvider } from "@/components/workspace/artifacts";
 import { ActivityProvider } from "@/core/activity";
 import { DreamyProvider } from "@/core/dreamy/context";
 import { DreamyErrorBoundary } from "@/core/dreamy/error-boundary";
-import { useThreadRemount } from "@/core/threads/use-thread-remount";
 import { SubtasksProvider } from "@/core/tasks/context";
+import { useThreadRemount } from "@/core/threads/use-thread-remount";
 import { ExecutionTraceProvider } from "@/core/traces";
 
 export default function DreamyLayout({ children }: { children: React.ReactNode }) {
@@ -19,11 +19,11 @@ export default function DreamyLayout({ children }: { children: React.ReactNode }
     <SubtasksProvider key={generation}>
       <ActivityProvider>
         <ExecutionTraceProvider>
-          <ArtifactsProvider>
+          <DirectoryProvider>
             <PromptInputProvider>
               <DreamyErrorBoundary><DreamyProvider>{children}</DreamyProvider></DreamyErrorBoundary>
             </PromptInputProvider>
-          </ArtifactsProvider>
+          </DirectoryProvider>
         </ExecutionTraceProvider>
       </ActivityProvider>
     </SubtasksProvider>

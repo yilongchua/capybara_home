@@ -17,6 +17,13 @@ export const api = {
         `/api/threads/${threadId}/files/thumbnail?path=${encodeURIComponent(path)}`,
     },
     dreamy: {
+      analyse: (threadId: string) => `/api/threads/${threadId}/analyse`,
+      analyseStatus: (threadId: string) => `/api/threads/${threadId}/analyse/status`,
+      repoOverviewRefresh: (threadId: string) =>
+        `/api/threads/${threadId}/analyse/repo-overview-refresh`,
+      repoOverviewRefreshStatus: (threadId: string, jobId: string) =>
+        `/api/threads/${threadId}/analyse/repo-overview-refresh/${jobId}`,
+      publishDocs: (threadId: string) => `/api/threads/${threadId}/publishdocs`,
       workflow: (threadId: string) => `/api/threads/${threadId}/dreamy/workflow`,
       mountFolder: (threadId: string) =>
         `/api/threads/${threadId}/dreamy/mount-folder`,

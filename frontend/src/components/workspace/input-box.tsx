@@ -83,7 +83,6 @@ import { FollowupSuggestionsPanel } from "./input-box-followups";
 import {
   PrivacyAndAutoMenu,
   ReasoningEffortMenu,
-  WorkflowButton,
 } from "./input-box-left-toolbar";
 import { useThread } from "./messages/context";
 import { TokenRing } from "./token-ring";
@@ -113,6 +112,18 @@ const SLASH_COMMANDS: SlashCommandOption[] = [
     title: "Compaction",
     usage: "Compress current chat context",
     description: "Force deterministic context compaction for this thread.",
+  },
+  {
+    name: "dreamy",
+    title: "Dreamy mode",
+    usage: "Switch this thread into workflow mode",
+    description: "Show Dreamy mode status banner for this chat.",
+  },
+  {
+    name: "dreamy-exit",
+    title: "Exit Dreamy mode",
+    usage: "Disable Dreamy mode banner",
+    description: "Turn off Dreamy mode for this chat thread.",
   },
   {
     name: "handoff",
@@ -191,6 +202,9 @@ export function InputBox({
   newChatHref,
   initialValue,
   dreamy,
+  dreamyActive,
+  onActivateDreamy,
+  onDeactivateDreamy,
   onContextChange,
   onSubmit,
   onStop,
@@ -201,6 +215,7 @@ export function InputBox({
   status?: ChatStatus;
   disabled?: boolean;
   dreamy?: boolean;
+  dreamyActive?: boolean;
   context: Omit<
     AgentThreadContext,
     "thread_id" | "is_plan_mode" | "thinking_enabled" | "subagent_enabled"
@@ -228,6 +243,8 @@ export function InputBox({
     message: PromptInputMessage,
     options?: InputBoxSubmitOptions,
   ) => void;
+  onActivateDreamy?: () => Promise<void> | void;
+  onDeactivateDreamy?: () => Promise<void> | void;
   onStop?: () => void;
   contextTokenState?: ContextTokenState;
 }) {
@@ -252,7 +269,6 @@ export function InputBox({
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pendingSuggestion, setPendingSuggestion] = useState<string | null>(null);
-  const [workflowPrefixActive, setWorkflowPrefixActive] = useState(false);
   const [mountDialogOpen, setMountDialogOpen] = useState(false);
   const [mountPathInput, setMountPathInput] = useState("");
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
@@ -262,6 +278,8 @@ export function InputBox({
   const [autoresearchEndpointGoal, setAutoresearchEndpointGoal] = useState("");
   const [autoresearchSubmitting, setAutoresearchSubmitting] = useState(false);
   const [slashSelected, setSlashSelected] = useState<string>("compact");
+  const [hasStagedDocs, setHasStagedDocs] = useState(false);
+  const repoOverviewPollRef = useRef<number | null>(null);
   const saveMountedFolder = useSaveMountedFolder(threadId);
   const { data: mountedFolder } = useMountedFolder(threadId);
   const renameThread = useRenameThread();
@@ -277,12 +295,37 @@ export function InputBox({
     () => parseLeadingSlashCommand(textInput.value ?? ""),
     [textInput.value],
   );
+  const refreshAnalyseStatus = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `${getBackendBaseURL()}${api.threads.dreamy.analyseStatus(threadId)}`,
+      );
+      if (!response.ok) {
+        setHasStagedDocs(false);
+        return;
+      }
+      const payload = (await response.json()) as { staged_available?: boolean };
+      setHasStagedDocs(payload.staged_available === true);
+    } catch {
+      setHasStagedDocs(false);
+    }
+  }, [threadId]);
   const slashCommands = useMemo(
     () =>
       SLASH_COMMANDS.filter((command) =>
         command.name.includes(slashState.query || ""),
       ),
     [slashState.query],
+  );
+  const visibleSlashCommands = useMemo(
+    () =>
+      slashCommands.filter((command) => {
+        if (command.name === "publishdocs") {
+          return hasStagedDocs;
+        }
+        return true;
+      }),
+    [hasStagedDocs, slashCommands],
   );
   const slashMenuVisible = useMemo(() => {
     return (
@@ -298,6 +341,10 @@ export function InputBox({
   }, [context]);
 
   useEffect(() => {
+    void refreshAnalyseStatus();
+  }, [refreshAnalyseStatus]);
+
+  useEffect(() => {
     onContextChangeRef.current = onContextChange;
   }, [onContextChange]);
 
@@ -306,14 +353,14 @@ export function InputBox({
   }, [thread.messages]);
 
   useEffect(() => {
-    if (slashCommands.length === 0) {
+    if (visibleSlashCommands.length === 0) {
       setSlashSelected("");
       return;
     }
-    if (!slashCommands.some((command) => command.name === slashSelected)) {
-      setSlashSelected(slashCommands[0]!.name);
+    if (!visibleSlashCommands.some((command) => command.name === slashSelected)) {
+      setSlashSelected(visibleSlashCommands[0]!.name);
     }
-  }, [slashCommands, slashSelected]);
+  }, [slashSelected, visibleSlashCommands]);
 
   useEffect(() => {
     if (models.length === 0) {
@@ -398,6 +445,7 @@ export function InputBox({
   );
   const autoModeEnabled = context.auto_mode === true;
   const isPlanMode = context.mode === "plan";
+  const isDreamyThread = [dreamy, dreamyActive].some(Boolean);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -465,17 +513,33 @@ export function InputBox({
     [models, onContextChange, context],
   );
 
+  const emitMountedNotice = useCallback(
+    (mountedDir: string) => {
+      if (typeof window === "undefined") return;
+      window.dispatchEvent(
+        new CustomEvent("chat-mounted-notice", {
+          detail: {
+            threadId,
+            content: `Directory : ${mountedDir} Mounted, recommend to perform '/analyse'`,
+          },
+        }),
+      );
+    },
+    [threadId],
+  );
+
   const handleMountFolder = useCallback(async () => {
     try {
       const path = await pickFolder();
       if (path === null) return;
       const savedPath = await saveMountedFolder.mutateAsync(path);
       toast.success(`Mounted: ${savedPath}`);
+      emitMountedNotice(savedPath);
     } catch {
       setMountPathInput("");
       setMountDialogOpen(true);
     }
-  }, [pickFolder, saveMountedFolder]);
+  }, [emitMountedNotice, pickFolder, saveMountedFolder]);
 
   const handleConfirmMount = useCallback(async () => {
     const path = mountPathInput.trim();
@@ -486,29 +550,26 @@ export function InputBox({
     try {
       const savedPath = await saveMountedFolder.mutateAsync(path);
       toast.success(`Mounted folder: ${savedPath}`);
+      emitMountedNotice(savedPath);
       setMountDialogOpen(false);
       setMountPathInput("");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to mount folder";
       toast.error(message);
     }
-  }, [saveMountedFolder, mountPathInput]);
+  }, [emitMountedNotice, saveMountedFolder, mountPathInput]);
 
   const getNewChatHref = useCallback(() => {
     if (newChatHref) {
       return newChatHref;
     }
-    if (dreamy) {
-      return "/workspace/dreamy/new";
-    }
     return "/workspace/chats/new";
-  }, [dreamy, newChatHref]);
+  }, [newChatHref]);
 
   const submitPromptText = useCallback(
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      setWorkflowPrefixActive(false);
       setFollowups([]);
       setFollowupsHidden(false);
       setFollowupsLoading(false);
@@ -601,6 +662,120 @@ export function InputBox({
     [status, threadId],
   );
 
+  const runAnalyse = useCallback(async () => {
+    if (!mountedFolder) {
+      toast.error("Mount a folder first to run /analyse.");
+      return;
+    }
+    try {
+      const response = await fetch(
+        `${getBackendBaseURL()}${api.threads.dreamy.analyse(threadId)}`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = (await response.json()) as {
+        generated_docs?: number;
+        failed?: number;
+        index_virtual_path?: string;
+        repo_overview_refresh_job_id?: string;
+      };
+      toast.success(
+        `Analysis complete. Generated ${payload.generated_docs ?? 0} docs with ${payload.failed ?? 0} failures.`,
+      );
+      if (payload.index_virtual_path) {
+        toast.message(`Index: ${payload.index_virtual_path}`);
+      }
+      setHasStagedDocs(true);
+      const refreshJobId = payload.repo_overview_refresh_job_id?.trim();
+      if (refreshJobId) {
+        toast.message("Background repo_overview.md analysis started.");
+        if (repoOverviewPollRef.current) {
+          window.clearInterval(repoOverviewPollRef.current);
+          repoOverviewPollRef.current = null;
+        }
+        repoOverviewPollRef.current = window.setInterval(() => {
+          void (async () => {
+            try {
+              const statusRes = await fetch(
+                `${getBackendBaseURL()}${api.threads.dreamy.repoOverviewRefreshStatus(threadId, refreshJobId)}`,
+              );
+              if (!statusRes.ok) return;
+              const statusPayload = (await statusRes.json()) as {
+                status?: string;
+                error?: string;
+              };
+              if (statusPayload.status === "succeeded") {
+                if (repoOverviewPollRef.current) {
+                  window.clearInterval(repoOverviewPollRef.current);
+                  repoOverviewPollRef.current = null;
+                }
+                toast.success("repo_overview.md analysis completed.");
+              } else if (statusPayload.status === "failed") {
+                if (repoOverviewPollRef.current) {
+                  window.clearInterval(repoOverviewPollRef.current);
+                  repoOverviewPollRef.current = null;
+                }
+                toast.error(
+                  statusPayload.error
+                    ? `repo_overview.md analysis failed: ${statusPayload.error}`
+                    : "repo_overview.md analysis failed.",
+                );
+              }
+            } catch {
+              // Ignore transient polling errors.
+            }
+          })();
+        }, 2500);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to run /analyse.";
+      toast.error(message);
+    }
+  }, [mountedFolder, threadId]);
+
+  useEffect(() => {
+    return () => {
+      if (repoOverviewPollRef.current) {
+        window.clearInterval(repoOverviewPollRef.current);
+        repoOverviewPollRef.current = null;
+      }
+    };
+  }, []);
+
+  const runPublishDocs = useCallback(async () => {
+    if (!mountedFolder) {
+      toast.error("Mount a folder first to run /publishdocs.");
+      return;
+    }
+    try {
+      const response = await fetch(
+        `${getBackendBaseURL()}${api.threads.dreamy.publishDocs(threadId)}`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = (await response.json()) as {
+        copied_files?: number;
+        overwritten_files?: number;
+        index_virtual_path?: string;
+      };
+      toast.success(
+        `Published docs. Copied ${payload.copied_files ?? 0} files (${payload.overwritten_files ?? 0} overwritten).`,
+      );
+      if (payload.index_virtual_path) {
+        toast.message(`Published index: ${payload.index_virtual_path}`);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to run /publishdocs.";
+      toast.error(message);
+    }
+  }, [mountedFolder, threadId]);
+
   const executeSlashCommand = useCallback(
     async (commandName: SlashCommandName, rawArgs = "") => {
       const args = rawArgs.trim();
@@ -611,6 +786,33 @@ export function InputBox({
 
       if (commandName === "compact") {
         await runCompact();
+        return;
+      }
+
+      if (commandName === "dreamy") {
+        if (isDreamyThread) {
+          toast.message("Dreamy mode is already active for this thread.");
+          return;
+        }
+        if (!onActivateDreamy) {
+          toast.error("Dreamy mode is not available on this chat surface yet.");
+          return;
+        }
+        await onActivateDreamy?.();
+        textInput.setInput("");
+        return;
+      }
+      if (commandName === "dreamy-exit") {
+        if (!isDreamyThread) {
+          toast.message("Dreamy mode is not active for this thread.");
+          return;
+        }
+        if (!onDeactivateDreamy) {
+          toast.error("Dreamy exit is not available on this chat surface yet.");
+          return;
+        }
+        await onDeactivateDreamy?.();
+        textInput.setInput("");
         return;
       }
 
@@ -649,45 +851,13 @@ export function InputBox({
       }
 
       if (commandName === "analyse") {
-        if (!mountedFolder) {
-          toast.error("Mount a folder first to run /analyse.");
-          return;
-        }
-        submitPromptText(
-          [
-            `Analyse the mounted repository at /mnt/user-data/mounted and build a complete mirrored docs tree under /mnt/user-data/outputs/.docs.`,
-            `Guardrail (mandatory): Do NOT write anything under /mnt/user-data/mounted during this step.`,
-            `Requirements:`,
-            `1. Mirror the source folder/subfolder hierarchy exactly in .docs.`,
-            `2. For each source file, create a corresponding markdown doc that captures the file purpose and full content context.`,
-            `3. Keep cross-links between related modules when helpful.`,
-            `4. Skip binary outputs and generated caches unless they are critical.`,
-            `5. After generation, include a summary index at /mnt/user-data/outputs/.docs/index.md.`,
-            `6. End by asking for explicit approval to publish staged docs into /mnt/user-data/mounted/.docs.`,
-            `For all further queries in this thread, prefer consulting staged .docs first.`,
-          ].join("\n"),
-        );
+        await runAnalyse();
         textInput.setInput("");
         return;
       }
 
       if (commandName === "publishdocs") {
-        if (!mountedFolder) {
-          toast.error("Mount a folder first to run /publishdocs.");
-          return;
-        }
-        submitPromptText(
-          [
-            `Publish staged docs to mounted repository.`,
-            `Source: /mnt/user-data/outputs/.docs`,
-            `Destination: /mnt/user-data/mounted/.docs`,
-            `Requirements:`,
-            `1. Validate source exists before copying.`,
-            `2. Copy recursively and preserve structure.`,
-            `3. If destination exists, merge safely and report overwritten files clearly.`,
-            `4. After copy, verify /mnt/user-data/mounted/.docs/index.md exists and present it.`,
-          ].join("\n"),
-        );
+        await runPublishDocs();
         textInput.setInput("");
         return;
       }
@@ -729,11 +899,16 @@ export function InputBox({
       mountedFolder,
       router,
       runAutoresearch,
+      runAnalyse,
+      runPublishDocs,
       runCompact,
       runRename,
       status,
       submitPromptText,
       textInput,
+      isDreamyThread,
+      onActivateDreamy,
+      onDeactivateDreamy,
     ],
   );
 
@@ -750,16 +925,13 @@ export function InputBox({
       const messageWithoutForkAttachments = forkDraft
         ? { ...message, files: [] }
         : message;
-      const finalMessage = workflowPrefixActive
-        ? { ...messageWithoutForkAttachments, text: `/workflow ${message.text}` }
-        : messageWithoutForkAttachments;
+      const finalMessage = messageWithoutForkAttachments;
       const submitOptions: InputBoxSubmitOptions = { queued: true };
       if (forkDraft) {
         submitOptions.checkpoint = forkDraft.checkpoint;
         submitOptions.forkSourceMessageId = forkDraft.sourceMessageId;
         submitOptions.forkSourceBranch = forkDraft.sourceBranch;
       }
-      setWorkflowPrefixActive(false);
       setFollowups([]);
       setFollowupsHidden(false);
       setFollowupsLoading(false);
@@ -768,7 +940,7 @@ export function InputBox({
         setForkDraft?.(null);
       }
     },
-    [executeSlashCommand, forkDraft, onSubmit, setForkDraft, workflowPrefixActive],
+    [executeSlashCommand, forkDraft, onSubmit, setForkDraft],
   );
 
   const requestFormSubmit = useCallback(() => {
@@ -786,34 +958,34 @@ export function InputBox({
         textInput.setInput("");
         return;
       }
-      if (slashCommands.length === 0) {
+      if (visibleSlashCommands.length === 0) {
         return;
       }
-      const selectedIndex = slashCommands.findIndex(
+      const selectedIndex = visibleSlashCommands.findIndex(
         (command) => command.name === slashSelected,
       );
       if (event.key === "ArrowDown") {
         event.preventDefault();
         const next =
-          slashCommands[(selectedIndex + 1) % slashCommands.length] ??
-          slashCommands[0];
+          visibleSlashCommands[(selectedIndex + 1) % visibleSlashCommands.length] ??
+          visibleSlashCommands[0];
         if (next) setSlashSelected(next.name);
         return;
       }
       if (event.key === "ArrowUp") {
         event.preventDefault();
         const prev =
-          slashCommands[
-            (selectedIndex - 1 + slashCommands.length) % slashCommands.length
-          ] ?? slashCommands[0];
+          visibleSlashCommands[
+            (selectedIndex - 1 + visibleSlashCommands.length) % visibleSlashCommands.length
+          ] ?? visibleSlashCommands[0];
         if (prev) setSlashSelected(prev.name);
         return;
       }
       if (event.key === "Enter" || event.key === "Tab") {
         event.preventDefault();
         const target =
-          slashCommands.find((command) => command.name === slashSelected) ??
-          slashCommands[0];
+          visibleSlashCommands.find((command) => command.name === slashSelected) ??
+          visibleSlashCommands[0];
         if (!target) {
           return;
         }
@@ -823,7 +995,7 @@ export function InputBox({
     },
     [
       executeSlashCommand,
-      slashCommands,
+      visibleSlashCommands,
       slashMenuVisible,
       slashSelected,
       textInput,
@@ -947,7 +1119,7 @@ export function InputBox({
         messages: recent,
         n: 3,
         model_name: context.model_name ?? undefined,
-        dreamy: dreamy ?? false,
+        dreamy: isDreamyThread,
       }),
       signal: controller.signal,
     })
@@ -972,7 +1144,7 @@ export function InputBox({
       });
 
     return () => controller.abort();
-  }, [context.model_name, disabled, isMock, status, threadId, dreamy, lastMessageId]);
+  }, [context.model_name, disabled, isDreamyThread, isMock, status, threadId, lastMessageId]);
 
   return (
     <div ref={promptRootRef} className="relative">
@@ -980,7 +1152,7 @@ export function InputBox({
       <SlashCommandDropdown
         visible={slashMenuVisible}
         query={slashState.query}
-        commands={SLASH_COMMANDS}
+        commands={visibleSlashCommands}
         selected={slashSelected}
         onSelectedChange={setSlashSelected}
         onExecute={(name) => {
@@ -1053,12 +1225,6 @@ export function InputBox({
               onMountFolder={() => void handleMountFolder()}
               isPicking={isPicking}
             />
-            {dreamy && (
-              <WorkflowButton
-                active={workflowPrefixActive}
-                onToggle={() => setWorkflowPrefixActive((v) => !v)}
-              />
-            )}
             {!dreamy && (
               <PrivacyAndAutoMenu
                 mode={context.mode}

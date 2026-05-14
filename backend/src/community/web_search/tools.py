@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import httpx
@@ -19,6 +21,12 @@ from src.security.search_guardrails import enforce_query_guardrails
 logger = logging.getLogger(__name__)
 _RETRY_ATTEMPTS = 2
 _RETRY_BACKOFF_SECONDS = 0.2
+_DEFAULT_MAX_CONCURRENT_REQUESTS = 3
+_DEFAULT_QUEUE_WAIT_TIMEOUT_SECONDS = 10.0
+_DEFAULT_SIMPLIFIED_QUERY_MAX_TERMS = 12
+_DEFAULT_SIMPLIFIED_QUERY_MAX_CHARS = 180
+_WEB_SEARCH_SEMAPHORES: dict[int, asyncio.Semaphore] = {}
+_WEB_SEARCH_SEMAPHORES_LOCK = asyncio.Lock()
 
 
 def _as_list(value: Any) -> list[str]:
@@ -115,7 +123,79 @@ def _load_web_search_config() -> dict[str, Any]:
         "language": tool_extra.get("language"),
         "safesearch": int(tool_extra.get("safesearch", 1)),
         "headers": tool_extra.get("headers", {}) if isinstance(tool_extra.get("headers", {}), dict) else {},
+        "max_concurrent_requests": max(1, int(tool_extra.get("max_concurrent_requests", _DEFAULT_MAX_CONCURRENT_REQUESTS))),
+        "queue_wait_timeout_seconds": max(0.1, float(tool_extra.get("queue_wait_timeout_seconds", _DEFAULT_QUEUE_WAIT_TIMEOUT_SECONDS))),
+        "simplify_queries": bool(tool_extra.get("simplify_queries", True)),
+        "simplified_query_max_terms": max(3, int(tool_extra.get("simplified_query_max_terms", _DEFAULT_SIMPLIFIED_QUERY_MAX_TERMS))),
+        "simplified_query_max_chars": max(32, int(tool_extra.get("simplified_query_max_chars", _DEFAULT_SIMPLIFIED_QUERY_MAX_CHARS))),
     }
+
+
+def _simplify_query(query: str, *, max_terms: int, max_chars: int) -> str:
+    normalized = " ".join((query or "").strip().split())
+    if not normalized:
+        return ""
+
+    # Keep common search operators and punctuation, but remove instruction-like filler.
+    cleaned = re.sub(r"^[\"'`\s]+|[\"'`\s]+$", "", normalized)
+    cleaned = re.sub(r"\b(please|could you|can you|help me|find|search for|look up)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = " ".join(cleaned.split())
+    if not cleaned:
+        cleaned = normalized
+
+    words = cleaned.split()
+    if len(words) <= max_terms and len(cleaned) <= max_chars:
+        return cleaned
+
+    # Prefer content words when trimming long prompts into a web-search query.
+    stop_words = {
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "of",
+        "for",
+        "to",
+        "in",
+        "on",
+        "with",
+        "about",
+        "comprehensive",
+        "analysis",
+        "summarize",
+        "explain",
+        "please",
+        "latest",
+        "recent",
+    }
+    trimmed_terms: list[str] = []
+    for token in re.findall(r"[A-Za-z0-9][\w:/\.-]*", cleaned):
+        if token.lower() in stop_words and len(trimmed_terms) > 0:
+            continue
+        trimmed_terms.append(token)
+        if len(trimmed_terms) >= max_terms:
+            break
+
+    candidate = " ".join(trimmed_terms).strip() or " ".join(words[:max_terms]).strip()
+    return candidate[:max_chars].strip() or cleaned[:max_chars].strip()
+
+
+async def _get_web_search_semaphore(limit: int) -> asyncio.Semaphore:
+    async with _WEB_SEARCH_SEMAPHORES_LOCK:
+        sem = _WEB_SEARCH_SEMAPHORES.get(limit)
+        if sem is None:
+            sem = asyncio.Semaphore(limit)
+            _WEB_SEARCH_SEMAPHORES[limit] = sem
+        return sem
+
+
+async def _acquire_web_search_slot(limit: int, timeout_seconds: float) -> tuple[asyncio.Semaphore, float]:
+    sem = await _get_web_search_semaphore(limit)
+    wait_start = perf_counter()
+    await asyncio.wait_for(sem.acquire(), timeout=timeout_seconds)
+    waited_ms = (perf_counter() - wait_start) * 1000.0
+    return sem, waited_ms
 
 
 def _normalize_results(raw_results: list[Any], max_results: int) -> list[dict[str, Any]]:
@@ -193,11 +273,17 @@ async def _request_json_with_retry(
 
 @tool("web_search", parse_docstring=True)
 async def web_search_tool(query: str, max_results: int = 5) -> str:
-    """Search the web for current information.
+    """Search the web for current information via the configured backend.
 
     Args:
-        query: Search query in natural language.
-        max_results: Maximum number of web results to return.
+        query: User-facing query text. May be simplified into a shorter
+            human-like search phrase when ``simplify_queries`` is enabled.
+        max_results: Maximum number of results requested by the caller
+            (still clamped by config limits).
+
+    Notes:
+        Calls are throttled through an internal async queue controlled by
+        ``max_concurrent_requests`` and ``queue_wait_timeout_seconds``.
     """
     try:
         enforce_query_guardrails(query, tool_name="web_search")
@@ -216,14 +302,25 @@ async def web_search_tool(query: str, max_results: int = 5) -> str:
 
         endpoint = f"{cfg['base_url']}/{cfg['path'].lstrip('/')}"
         effective_max_results = max(1, min(int(max_results), max(1, int(cfg["max_results"]))))
+        effective_query = (
+            _simplify_query(
+                query,
+                max_terms=int(cfg["simplified_query_max_terms"]),
+                max_chars=int(cfg["simplified_query_max_chars"]),
+            )
+            if cfg["simplify_queries"]
+            else query
+        )
+        if not effective_query:
+            effective_query = query.strip()
 
         # Capybara local websearch backend expects JSON body:
         # {"query": "...", "max_results": N}
         capybara_payload: dict[str, Any] = {
-            "query": query,
+            "query": effective_query,
             "max_results": effective_max_results,
             "write_markdown_package": True,
-            "package_name": query,
+            "package_name": effective_query,
         }
         if cfg["engines"]:
             capybara_payload["engines"] = cfg["engines"]
@@ -234,7 +331,7 @@ async def web_search_tool(query: str, max_results: int = 5) -> str:
 
         # SearXNG-style compatibility payload.
         searx_payload: dict[str, Any] = {
-            "q": query,
+            "q": effective_query,
             "format": "json",
             "categories": "general",
             "safesearch": str(cfg["safesearch"]),
@@ -249,36 +346,43 @@ async def web_search_tool(query: str, max_results: int = 5) -> str:
         body: dict[str, Any] = {}
         capybara_error: Exception | None = None
 
-        async with httpx.AsyncClient(timeout=cfg["timeout_seconds"]) as client:
-            # Prefer capybara JSON API, with optional searxng fallback for compatibility.
-            if cfg["api_style"] in {"auto", "capybara"}:
-                try:
-                    capybara_headers = {"Content-Type": "application/json", **cfg["headers"]}
-                    body = await _request_json_with_retry(
-                        client=client,
-                        request_kwargs={
-                            "method": "POST",
-                            "url": endpoint,
-                            "headers": capybara_headers,
-                            "json": capybara_payload,
-                        },
-                    )
-                except Exception as exc:
-                    capybara_error = exc
-                    if cfg["api_style"] == "capybara":
-                        raise
+        sem, queue_wait_ms = await _acquire_web_search_slot(
+            int(cfg["max_concurrent_requests"]),
+            float(cfg["queue_wait_timeout_seconds"]),
+        )
+        try:
+            async with httpx.AsyncClient(timeout=cfg["timeout_seconds"]) as client:
+                # Prefer capybara JSON API, with optional searxng fallback for compatibility.
+                if cfg["api_style"] in {"auto", "capybara"}:
+                    try:
+                        capybara_headers = {"Content-Type": "application/json", **cfg["headers"]}
+                        body = await _request_json_with_retry(
+                            client=client,
+                            request_kwargs={
+                                "method": "POST",
+                                "url": endpoint,
+                                "headers": capybara_headers,
+                                "json": capybara_payload,
+                            },
+                        )
+                    except Exception as exc:
+                        capybara_error = exc
+                        if cfg["api_style"] == "capybara":
+                            raise
 
-            if cfg["api_style"] == "searxng" or (cfg["api_style"] == "auto" and not body):
-                request_kwargs: dict[str, Any] = {
-                    "method": cfg["method"],
-                    "url": endpoint,
-                    "headers": cfg["headers"],
-                }
-                if cfg["method"] == "GET":
-                    request_kwargs["params"] = searx_payload
-                else:
-                    request_kwargs["data"] = searx_payload
-                body = await _request_json_with_retry(client=client, request_kwargs=request_kwargs)
+                if cfg["api_style"] == "searxng" or (cfg["api_style"] == "auto" and not body):
+                    request_kwargs: dict[str, Any] = {
+                        "method": cfg["method"],
+                        "url": endpoint,
+                        "headers": cfg["headers"],
+                    }
+                    if cfg["method"] == "GET":
+                        request_kwargs["params"] = searx_payload
+                    else:
+                        request_kwargs["data"] = searx_payload
+                    body = await _request_json_with_retry(client=client, request_kwargs=request_kwargs)
+        finally:
+            sem.release()
 
         if not body and capybara_error is not None:
             raise capybara_error
@@ -321,10 +425,15 @@ async def web_search_tool(query: str, max_results: int = 5) -> str:
             {
                 "ok": True,
                 "query": query,
+                "executed_query": effective_query,
                 "total_results": len(results),
                 "results": results,
                 "package": package_info,
                 "queue": queue_report,
+                "web_search_runtime": {
+                    "max_concurrent_requests": int(cfg["max_concurrent_requests"]),
+                    "queue_wait_ms": round(queue_wait_ms, 1),
+                },
             },
             indent=2,
             ensure_ascii=False,

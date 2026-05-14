@@ -1,8 +1,9 @@
 "use client";
 
 import { PromptInputProvider } from "@/components/ai-elements/prompt-input";
-import { ArtifactsProvider } from "@/components/workspace/artifacts";
+import { DirectoryProvider } from "@/components/workspace/artifacts";
 import { ActivityProvider } from "@/core/activity";
+import { DreamyProvider } from "@/core/dreamy/context";
 import { SubtasksProvider } from "@/core/tasks/context";
 import { ExecutionTraceProvider } from "@/core/traces";
 
@@ -15,9 +16,11 @@ export default function AgentChatLayout({
     <SubtasksProvider>
       <ActivityProvider>
         <ExecutionTraceProvider>
-          <ArtifactsProvider>
-            <PromptInputProvider>{children}</PromptInputProvider>
-          </ArtifactsProvider>
+          <DirectoryProvider>
+            <PromptInputProvider>
+              <DreamyProvider>{children}</DreamyProvider>
+            </PromptInputProvider>
+          </DirectoryProvider>
         </ExecutionTraceProvider>
       </ActivityProvider>
     </SubtasksProvider>

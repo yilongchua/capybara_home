@@ -1,16 +1,17 @@
 "use client";
 
-import { Clock3Icon } from "lucide-react";
+import { ChevronUpIcon, Clock3Icon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { useThread } from "@/components/workspace/messages/context";
+import { PhaseProgress } from "@/components/workspace/phase-progress";
+import { TodoList } from "@/components/workspace/todo-list";
 import { asActivityTimelineState, mergeActivityEvents, useActivityContext } from "@/core/activity";
 import { useI18n } from "@/core/i18n/hooks";
 import { cn } from "@/lib/utils";
 
 import {
-  runStatusTone,
   TIMELINE_MAX_ITEMS,
   type TimelineIcon,
   type TimelineItem,
@@ -47,6 +48,7 @@ export function ChatActivityPanel({
   const { liveEvents } = useActivityContext();
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [timelineCollapsed, setTimelineCollapsed] = useState(false);
 
   const timeline = useMemo<TimelineItem[]>(() => {
     const persisted = asActivityTimelineState(thread.values.activity_timeline);
@@ -77,7 +79,11 @@ export function ChatActivityPanel({
     return items;
   }, [liveEvents, thread.values.activity_timeline]);
 
-  const runState: "run" | "idle" = thread.isLoading ? "run" : "idle";
+  const hasInProgressPhase = (thread.values.phase_execution?.phase_results ?? []).some(
+    (phase) => phase.status === "in_progress",
+  );
+  const runState: "run" | "idle" =
+    thread.isLoading && hasInProgressPhase ? "run" : "idle";
 
   const orderedTimeline = useMemo(
     () => [...timeline].sort((a, b) => a.timestamp !== b.timestamp ? a.timestamp - b.timestamp : a.order - b.order),
@@ -124,51 +130,61 @@ export function ChatActivityPanel({
     <div className={cn("flex h-full flex-col overflow-hidden", className)}>
       <div className="flex-1 overflow-y-auto">
         <div className="space-y-0 p-3">
+          <PhaseProgress phaseExecution={thread.values.phase_execution} runState={runState} />
+          <TodoList
+            className="my-2"
+            todos={thread.values.todos ?? []}
+            hidden={!thread.values.todos || thread.values.todos.length === 0}
+            embedded
+          />
           <section className="space-y-2 rounded-lg border p-3">
-            <header className="flex items-center justify-between gap-2 text-sm font-medium">
-              <div className="flex items-center gap-2">
+            <header
+              className="flex cursor-pointer items-center justify-between gap-2 text-sm font-medium"
+              onClick={() => setTimelineCollapsed((prev) => !prev)}
+            >
+              <div className="flex items-center gap-2 text-sm font-medium">
                 <Clock3Icon className="size-4" />
                 {t.chatActivity.title}
                 <Badge variant="secondary">{orderedTimeline.length}</Badge>
               </div>
-              <span
+              <ChevronUpIcon
                 className={cn(
-                  "rounded-md border px-2 py-0.5 text-[11px] font-medium capitalize",
-                  runStatusTone(runState),
+                  "text-muted-foreground size-4 transition-transform duration-300 ease-out",
+                  timelineCollapsed ? "" : "rotate-180",
                 )}
-              >
-                {runState === "run" ? t.chatActivity.runStatus.run : t.chatActivity.runStatus.idle}
-              </span>
+              />
             </header>
+            {!timelineCollapsed && (
+              <>
+                {trimmed && (
+                  <div className="text-muted-foreground rounded border px-2 py-1.5 text-xs">
+                    {t.chatActivity.trimmedNotice(TIMELINE_MAX_ITEMS)}
+                  </div>
+                )}
+                {visibleTimeline.length === 0 ? (
+                  <div className="text-muted-foreground text-xs">{t.chatActivity.noActivity}</div>
+                ) : (
+                  <div>
+                    {visibleTimeline.map((item) => {
+                      const groupId = item.groupId;
+                      const groupSize = groupId ? (groupSizeMap.get(groupId) ?? 1) : 1;
+                      const isGroupHeader = groupId ? groupFirstItemId.get(groupId) === item.id : false;
+                      const groupCollapsed = groupId ? collapsedGroups.has(groupId) : false;
 
-            {trimmed && (
-              <div className="text-muted-foreground rounded border px-2 py-1.5 text-xs">
-                {t.chatActivity.trimmedNotice(TIMELINE_MAX_ITEMS)}
-              </div>
-            )}
-
-            {visibleTimeline.length === 0 ? (
-              <div className="text-muted-foreground text-xs">{t.chatActivity.noActivity}</div>
-            ) : (
-              <div>
-                {visibleTimeline.map((item) => {
-                  const groupId = item.groupId;
-                  const groupSize = groupId ? (groupSizeMap.get(groupId) ?? 1) : 1;
-                  const isGroupHeader = groupId ? groupFirstItemId.get(groupId) === item.id : false;
-                  const groupCollapsed = groupId ? collapsedGroups.has(groupId) : false;
-
-                  return (
-                    <TimelineItemRow
-                      key={item.id}
-                      item={item}
-                      isGroupHeader={isGroupHeader}
-                      groupSize={groupSize}
-                      groupCollapsed={groupCollapsed}
-                      onToggleGroup={handleToggleGroup}
-                    />
-                  );
-                })}
-              </div>
+                      return (
+                        <TimelineItemRow
+                          key={item.id}
+                          item={item}
+                          isGroupHeader={isGroupHeader}
+                          groupSize={groupSize}
+                          groupCollapsed={groupCollapsed}
+                          onToggleGroup={handleToggleGroup}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </section>
         </div>

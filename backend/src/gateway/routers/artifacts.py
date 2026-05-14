@@ -22,6 +22,10 @@ class UpdateArtifactRequest(BaseModel):
     content: str = Field(..., description="Updated file content.")
 
 
+class ListArtifactsResponse(BaseModel):
+    files: list[str] = Field(default_factory=list, description="Virtual artifact file paths.")
+
+
 def _resolve_mounted_artifact_path(thread_id: str, path: str) -> Path | None:
     normalized = path.lstrip("/")
     if not normalized.startswith(MOUNTED_VIRTUAL_PREFIX):
@@ -227,3 +231,25 @@ async def update_artifact(thread_id: str, path: str, payload: UpdateArtifactRequ
 
     actual_path.write_text(payload.content, encoding="utf-8")
     return {"ok": True, "path": path, "bytes": len(payload.content.encode("utf-8"))}
+
+
+@router.get(
+    "/threads/{thread_id}/artifacts-list",
+    response_model=ListArtifactsResponse,
+    summary="List Thread Artifacts",
+    description="List files under the thread sandbox outputs directory.",
+)
+async def list_artifacts(thread_id: str) -> ListArtifactsResponse:
+    outputs_dir = get_paths().sandbox_outputs_dir(thread_id)
+    if not outputs_dir.exists():
+        return ListArtifactsResponse(files=[])
+
+    files: list[str] = []
+    for path in outputs_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(outputs_dir).as_posix()
+        files.append(f"/mnt/user-data/outputs/{relative}")
+
+    files.sort()
+    return ListArtifactsResponse(files=files)

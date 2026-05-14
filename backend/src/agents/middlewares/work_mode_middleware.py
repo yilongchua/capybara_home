@@ -332,6 +332,7 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
                 f"Execute the following task now: {todo_content}.{subagent_hint}\n"
                 f"{report_contract}"
                 f"When done, call write_todos to mark todo id '{next_todo['id']}' as completed.\n"
+                f"If write_todos is unexpectedly unavailable, state that explicitly and include the intended status update for todo id '{next_todo['id']}'.\n"
                 f"Do NOT output any text — the system will automatically assign the next phase.\n"
                 f"</work_mode_instruction>"
             ),

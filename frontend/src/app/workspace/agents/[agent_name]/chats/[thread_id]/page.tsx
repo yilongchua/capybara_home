@@ -2,7 +2,7 @@
 
 import { BotIcon, PlusSquare } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
@@ -17,12 +17,14 @@ import { MessageList } from "@/components/workspace/messages";
 import { ThreadContext } from "@/components/workspace/messages/context";
 import { QueuedMessageList } from "@/components/workspace/queued-message-list";
 import { ThreadTitle } from "@/components/workspace/thread-title";
-import { TodoList } from "@/components/workspace/todo-list";
 import { Tooltip } from "@/components/workspace/tooltip";
 import { useAgent } from "@/core/agents";
 import { getBackendBaseURL } from "@/core/config";
 import { api } from "@/core/dreamy/api";
-import { useGenerationCompletions } from "@/core/generation/hooks";
+import {
+  type LiveGenerationNotice,
+  useGenerationCompletions,
+} from "@/core/generation/hooks";
 import { useI18n } from "@/core/i18n/hooks";
 import { useNotification } from "@/core/notification/hooks";
 import { useLocalSettings } from "@/core/settings";
@@ -78,6 +80,7 @@ function AgentChatPageContent({
   const router = useRouter();
   const { agent } = useAgent(agentName);
   const [forkDraft, setForkDraft] = useState<ForkDraft | null>(null);
+  const [uiNotices, setUiNotices] = useState<LiveGenerationNotice[]>([]);
   const { notices: generationNotices, artifactPaths: generationArtifacts } =
     useGenerationCompletions(threadId);
   const { showNotification } = useNotification();
@@ -109,6 +112,27 @@ function AgentChatPageContent({
       }
     },
   });
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const custom = event as CustomEvent<{ threadId?: string; content?: string }>;
+      const content = custom.detail?.content;
+      if (!content || custom.detail?.threadId !== threadId) {
+        return;
+      }
+      setUiNotices((prev) => [
+        ...prev,
+        {
+          id: `mounted-${Date.now()}`,
+          content,
+        },
+      ]);
+    };
+    window.addEventListener("chat-mounted-notice", handler as EventListener);
+    return () => {
+      window.removeEventListener("chat-mounted-notice", handler as EventListener);
+    };
+  }, [threadId]);
 
   const handleExecutePlan = useCallback(() => {
     const run = async () => {
@@ -183,7 +207,7 @@ function AgentChatPageContent({
     <ThreadContext.Provider value={{ thread, forkDraft, setForkDraft }}>
       <ChatBox
         threadId={threadId}
-        extraArtifacts={generationArtifacts}
+        extraDirectoryFiles={generationArtifacts}
         onSubmitPlanRevision={handleSubmitPlanRevision}
       >
         <div className="relative flex size-full min-h-0 justify-between">
@@ -231,7 +255,7 @@ function AgentChatPageContent({
                 className={cn("size-full", !isNewThread && "pt-10")}
                 threadId={threadId}
                 thread={thread}
-                liveNotices={generationNotices}
+                liveNotices={[...generationNotices, ...uiNotices]}
               />
             </div>
 
@@ -245,17 +269,6 @@ function AgentChatPageContent({
                     : "max-w-(--container-width-md)",
                 )}
               >
-                <div className="absolute -top-4 right-0 left-0 z-0">
-                  <div className="absolute right-0 bottom-0 left-0">
-                    <TodoList
-                      className="bg-background/5"
-                      todos={thread.values.todos ?? []}
-                      hidden={
-                        !thread.values.todos || thread.values.todos.length === 0
-                      }
-                    />
-                  </div>
-                </div>
                 <div className="mb-2">
                   <QueuedMessageList
                     items={queueControls.queueItems}

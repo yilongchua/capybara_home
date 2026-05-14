@@ -33,7 +33,7 @@ import { extractTitleFromMarkdown } from "@/core/utils/markdown";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
 
-import { useArtifacts } from "../artifacts";
+import { useDirectory } from "../artifacts";
 import { FlipDisplay } from "../flip-display";
 import { Tooltip } from "../tooltip";
 
@@ -203,8 +203,8 @@ function ToolCall({
   isLoading?: boolean;
 }) {
   const { t } = useI18n();
-  const { setOpen, autoOpen, autoSelect, selectedArtifact, select } =
-    useArtifacts();
+  const { setOpen, autoOpen, autoSelect, selectedFile, select } =
+    useDirectory();
   const writeFilePath =
     name === "write_file" || name === "str_replace"
       ? (args as { path?: string }).path
@@ -220,7 +220,7 @@ function ToolCall({
       return;
     }
     const timer = setTimeout(() => {
-      if (selectedArtifact === writeFileUrl) {
+      if (selectedFile === writeFileUrl) {
         return;
       }
       select(writeFileUrl, true);
@@ -234,7 +234,7 @@ function ToolCall({
     isLast,
     isLoading,
     select,
-    selectedArtifact,
+    selectedFile,
     setOpen,
     writeFileUrl,
   ]);

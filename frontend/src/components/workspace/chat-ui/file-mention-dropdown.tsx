@@ -10,6 +10,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import { getBackendBaseURL } from "@/core/config";
 import {
   type MountedFolderFile,
   useMountedFolderFiles,
@@ -64,11 +65,66 @@ export function FileMentionDropdown({
   });
 
   const { data } = useMountedFolderFiles(threadId, isActive);
+  const [outputFiles, setOutputFiles] = useState<MountedFolderFile[]>([]);
+
+  useEffect(() => {
+    if (!isActive || !threadId || threadId === "new") {
+      setOutputFiles([]);
+      return;
+    }
+    let cancelled = false;
+    const loadOutputs = async () => {
+      try {
+        const res = await fetch(`${getBackendBaseURL()}/api/threads/${threadId}/artifacts-list`);
+        if (!res.ok) {
+          throw new Error("Failed to list thread artifacts");
+        }
+        const payload = (await res.json()) as { files?: string[] };
+        if (cancelled) {
+          return;
+        }
+        const mapped = (payload.files ?? [])
+          .filter((file) => file.startsWith("/mnt/user-data/outputs/"))
+          .map((virtualPath) => {
+            const name = virtualPath.split("/").pop() ?? virtualPath;
+            return {
+              name,
+              size: 0,
+              virtual_path: virtualPath,
+              full_path: virtualPath,
+              is_dir: false,
+            } satisfies MountedFolderFile;
+          });
+        setOutputFiles(mapped);
+      } catch {
+        if (!cancelled) {
+          setOutputFiles([]);
+        }
+      }
+    };
+    void loadOutputs();
+    return () => {
+      cancelled = true;
+    };
+  }, [isActive, threadId]);
+
   const allFiles = useMemo<MountedFolderFile[]>(
-    () => data?.files ?? [],
-    [data],
+    () => {
+      const mounted = data?.files ?? [];
+      const byPath = new Map<string, MountedFolderFile>();
+      for (const file of mounted) {
+        byPath.set(file.virtual_path, file);
+      }
+      for (const file of outputFiles) {
+        if (!byPath.has(file.virtual_path)) {
+          byPath.set(file.virtual_path, file);
+        }
+      }
+      return Array.from(byPath.values());
+    },
+    [data, outputFiles],
   );
-  const folderMounted = Boolean(data?.folder_path);
+  const folderMounted = Boolean(data?.folder_path) || outputFiles.length > 0;
 
   const filtered = useMemo(
     () => allFiles.filter((f) => fuzzyMatch(f.name, query)).slice(0, MAX_VISIBLE),

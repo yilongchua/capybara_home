@@ -7,7 +7,7 @@ from src.community.lightrag import query_lightrag_tool
 from src.community.web_search import web_search_tool
 from src.config import get_app_config
 from src.reflection import resolve_variable
-from src.tools.builtins import ask_clarification_tool, present_file_tool, recall_tool, task_tool, view_image_tool
+from src.tools.builtins import ask_clarification_tool, present_file_tool, recall_tool, task_tool, view_image_tool, write_todos_tool
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,7 @@ BUILTIN_TOOLS = [
     present_file_tool,
     ask_clarification_tool,
     recall_tool,
+    write_todos_tool,
     web_search_tool,
     query_knowledge_vault_tool,
     query_lightrag_tool,

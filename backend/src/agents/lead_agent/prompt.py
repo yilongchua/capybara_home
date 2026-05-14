@@ -231,6 +231,7 @@ When looking for information, use sources in this priority order:
 3. `query_lightrag` — retrieve graph-oriented, multi-hop relationship evidence when available
 4. `search_internal_documents` — alias for indexed internal doc search (maps to MCP `search_indexed_documents` when configured)
 Always keep fetch scope tight and respect runtime ceilings (timeouts/retries) when conducting broad queries.
+For `web_search`, prefer short human-like search phrases (keywords, entity names, dates) instead of instruction-heavy prompts.
 </fetch_policy>
 
 <response_style>
@@ -334,6 +335,7 @@ When looking for information, use sources in this priority order:
 3. `query_lightrag` — retrieve graph-oriented, multi-hop relationship evidence when available
 4. `search_internal_documents` — alias for indexed internal doc search (maps to MCP `search_indexed_documents` when configured)
 Always keep fetch scope tight and respect runtime ceilings (timeouts/retries) when conducting broad queries.
+For `web_search`, prefer short human-like search phrases (keywords, entity names, dates) instead of instruction-heavy prompts.
 </fetch_policy>"""
 
 RESPONSE_STYLE_SECTION = """<response_style>
@@ -597,8 +599,10 @@ read_file /mnt/skills/dreamy-workflow/SKILL.md
 **Hard constraints in this mode:**
 - NEVER call the `task()` tool — it is disabled and will be rejected.
 - All row processing must be sequential and inline.
-- If the user's message does NOT start with `/workflow`, do NOT create or write workflow.json.
-  Instead, ask the user what they want done per row before designing any workflow.
+- When Dreamy mode has just been enabled and workflow.json does not yet exist, treat the
+  user's next substantive workflow request as workflow-design input even without a slash prefix.
+- If the user has not actually described the row-by-row job yet, ask what should happen per row
+  before creating workflow.json.
 - Once workflow.json v2 exists at /mnt/user-data/outputs/workflow.json, it is your
   **executor contract**:
   - Read execution_state.current_row_index and current_step_id at the start of each turn.

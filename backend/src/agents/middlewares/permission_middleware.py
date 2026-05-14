@@ -19,6 +19,10 @@ from src.agents.middlewares.runtime_events import append_runtime_event
 from src.config.permissions_config import PermissionDefaultMode, PermissionsConfig, get_permissions_config
 
 _RULE_RE = re.compile(r"^(?P<tool>[^()]+?)(?:\((?P<arg>.*)\))?$")
+_TODO_BYPASS_RE = re.compile(
+    r"\b(mark|set|update)\b.{0,40}\btodo-\d+\b.{0,40}\b(completed|done)\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
 
 
 @dataclass(frozen=True)
@@ -131,6 +135,13 @@ class PermissionMiddleware(AgentMiddleware[AgentState]):
         # "plan" currently behaves as ask in Phase A.
         return "ask"
 
+    def _is_todo_bypass_attempt(self, request: ToolCallRequest) -> bool:
+        tool_name = str(request.tool_call.get("name") or "")
+        if tool_name != "bash":
+            return False
+        args_text = _serialize_tool_args(request.tool_call.get("args", {}))
+        return bool(_TODO_BYPASS_RE.search(args_text))
+
     def _build_ask_command(self, request: ToolCallRequest) -> Command:
         tool_name = request.tool_call.get("name", "tool")
         args_text = _serialize_tool_args(request.tool_call.get("args", {}))
@@ -165,6 +176,17 @@ class PermissionMiddleware(AgentMiddleware[AgentState]):
         )
 
     def _apply_policy(self, request: ToolCallRequest, handler) -> ToolMessage | Command:
+        if self._is_todo_bypass_attempt(request):
+            return ToolMessage(
+                content=(
+                    "[permission_denied] Todo completion must be recorded via `write_todos`.\n"
+                    "Do not use shell commands to mark todos completed. "
+                    "Call `write_todos` with explicit todo ids and statuses. "
+                    "If the tool is unexpectedly unavailable, report the intended status updates in plain text."
+                ),
+                tool_call_id=request.tool_call.get("id", ""),
+                name=request.tool_call.get("name", "tool"),
+            )
         decision = self._resolve_decision(request)
         append_runtime_event(
             request.runtime,
@@ -192,6 +214,17 @@ class PermissionMiddleware(AgentMiddleware[AgentState]):
         return await self._aapply_policy(request, async_handler)
 
     async def _aapply_policy(self, request: ToolCallRequest, handler) -> ToolMessage | Command:
+        if self._is_todo_bypass_attempt(request):
+            return ToolMessage(
+                content=(
+                    "[permission_denied] Todo completion must be recorded via `write_todos`.\n"
+                    "Do not use shell commands to mark todos completed. "
+                    "Call `write_todos` with explicit todo ids and statuses. "
+                    "If the tool is unexpectedly unavailable, report the intended status updates in plain text."
+                ),
+                tool_call_id=request.tool_call.get("id", ""),
+                name=request.tool_call.get("name", "tool"),
+            )
         decision = self._resolve_decision(request)
         append_runtime_event(
             request.runtime,

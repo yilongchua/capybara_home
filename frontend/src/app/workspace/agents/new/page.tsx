@@ -12,7 +12,7 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArtifactsProvider } from "@/components/workspace/artifacts";
+import { DirectoryProvider } from "@/components/workspace/artifacts";
 import { MessageList } from "@/components/workspace/messages";
 import { ThreadContext } from "@/components/workspace/messages/context";
 import type { Agent } from "@/core/agents";
@@ -187,7 +187,7 @@ export default function NewAgentPage() {
 
   return (
     <ThreadContext.Provider value={{ thread }}>
-      <ArtifactsProvider>
+      <DirectoryProvider>
         <div className="flex size-full flex-col">
           {header}
 
@@ -246,7 +246,7 @@ export default function NewAgentPage() {
             </div>
           </main>
         </div>
-      </ArtifactsProvider>
+      </DirectoryProvider>
     </ThreadContext.Provider>
   );
 }

@@ -91,7 +91,12 @@ class EvaluatorMiddleware(AgentMiddleware[EvaluatorState]):
         if isinstance(nodes, list) and nodes:
             incomplete = [node["id"] for node in nodes if node.get("status") != "completed"]
             if incomplete:
-                failures.append(f"Plan has unfinished todos: {', '.join(incomplete)}. Call `write_todos` with these ids set to `status: completed` (or `blocked` with a reason) before producing a final answer.")
+                failures.append(
+                    f"Plan has unfinished todos: {', '.join(incomplete)}. "
+                    "Call `write_todos` with these ids set to `status: completed` (or `blocked` with a reason) "
+                    "before producing a final answer. If `write_todos` is unavailable, explicitly report that "
+                    "and list the intended status updates in plain text."
+                )
         plan = state.get("plan") or {}
         plan_path = plan.get("plan_path")
         thread_data = state.get("thread_data") or {}

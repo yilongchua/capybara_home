@@ -17,9 +17,7 @@ export function isDreamyThread(thread: AgentThread) {
 }
 
 export function pathOfThreadRecord(thread: AgentThread) {
-  return isDreamyThread(thread)
-    ? `/workspace/dreamy/${thread.thread_id}`
-    : `/workspace/chats/${thread.thread_id}`;
+  return `/workspace/chats/${thread.thread_id}`;
 }
 
 export function textOfMessage(message: Message) {

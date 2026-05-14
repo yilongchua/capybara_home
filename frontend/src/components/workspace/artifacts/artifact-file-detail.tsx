@@ -48,7 +48,7 @@ import { CitationLink } from "../citations/citation-link";
 import { useThread } from "../messages/context";
 import { Tooltip } from "../tooltip";
 
-import { useArtifacts } from "./context";
+import { useDirectory } from "./context";
 import { PlanViewer } from "./plan-viewer";
 
 export function ArtifactFileDetail({
@@ -65,7 +65,7 @@ export function ArtifactFileDetail({
   onSubmitPlanRevision?: (markdown: string) => Promise<void> | void;
 }) {
   const { t } = useI18n();
-  const { artifacts, deselect, select } = useArtifacts();
+  const { directoryFiles, deselect, select } = useDirectory();
   const isWriteFile = useMemo(() => {
     return filepathFromProps.startsWith("write-file:");
   }, [filepathFromProps]);
@@ -221,7 +221,7 @@ export function ArtifactFileDetail({
                 </SelectTrigger>
                 <SelectContent className="select-none">
                   <SelectGroup>
-                    {(artifacts ?? []).map((filepath) => (
+                    {(directoryFiles ?? []).map((filepath) => (
                       <SelectItem key={filepath} value={filepath}>
                         {getFileName(filepath)}
                       </SelectItem>

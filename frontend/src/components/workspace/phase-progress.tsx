@@ -2,8 +2,8 @@
 
 import { CheckCircle2Icon, CircleDotIcon, CircleIcon, LoaderCircleIcon } from "lucide-react";
 
-import { cn } from "@/lib/utils";
 import type { PhaseExecutionState, PhaseResult } from "@/core/threads/types";
+import { cn } from "@/lib/utils";
 
 function PhaseIcon({ status }: { status: PhaseResult["status"] }) {
   switch (status) {
@@ -53,8 +53,10 @@ function PhaseRow({ result, isLast }: { result: PhaseResult; isLast: boolean }) 
 
 export function PhaseProgress({
   phaseExecution,
+  runState,
 }: {
   phaseExecution: PhaseExecutionState | null | undefined;
+  runState?: "run" | "idle";
 }) {
   if (!phaseExecution) return null;
 
@@ -68,9 +70,16 @@ export function PhaseProgress({
     <div className="my-2 rounded-lg border border-border/50 bg-card/50 p-3">
       <div className="mb-3 flex items-center justify-between">
         <span className="text-xs font-medium text-muted-foreground">Phase Progress</span>
-        <span className="text-xs text-muted-foreground">
-          {completed}/{total}
-        </span>
+        <div className="flex items-center gap-2">
+          {runState && (
+            <span className="rounded-md border px-2 py-0.5 text-[11px] font-medium capitalize text-muted-foreground">
+              {runState}
+            </span>
+          )}
+          <span className="text-xs text-muted-foreground">
+            {completed}/{total}
+          </span>
+        </div>
       </div>
       <div className="space-y-0">
         {results.map((result, i) => (

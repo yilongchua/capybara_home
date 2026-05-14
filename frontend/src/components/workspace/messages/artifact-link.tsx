@@ -3,7 +3,7 @@
 import { DownloadIcon, FileIcon, FileTextIcon } from "lucide-react";
 import { useCallback } from "react";
 
-import { useArtifacts } from "@/components/workspace/artifacts/context";
+import { useDirectory } from "@/components/workspace/artifacts/context";
 import { urlOfArtifact } from "@/core/artifacts/utils";
 import { cn } from "@/lib/utils";
 
@@ -31,7 +31,7 @@ export function ArtifactLink({
   threadId: string;
   className?: string;
 }) {
-  const { select, setOpen } = useArtifacts();
+  const { select, setOpen } = useDirectory();
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {

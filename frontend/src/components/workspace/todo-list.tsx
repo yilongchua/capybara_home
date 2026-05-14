@@ -17,12 +17,14 @@ export function TodoList({
   collapsed: controlledCollapsed,
   hidden = false,
   onToggle,
+  embedded = false,
 }: {
   className?: string;
   todos: Todo[];
   collapsed?: boolean;
   hidden?: boolean;
   onToggle?: () => void;
+  embedded?: boolean;
 }) {
   const [internalCollapsed, setInternalCollapsed] = useState(true);
   const isControlled = controlledCollapsed !== undefined;
@@ -39,21 +41,25 @@ export function TodoList({
   return (
     <div
       className={cn(
-        "flex h-fit w-full origin-bottom translate-y-4 flex-col overflow-hidden rounded-t-xl border border-b-0 bg-white backdrop-blur-sm transition-all duration-200 ease-out",
-        hidden ? "pointer-events-none translate-y-8 opacity-0" : "",
+        "flex h-fit w-full flex-col overflow-hidden border transition-all duration-200 ease-out",
+        embedded
+          ? "rounded-lg border-border/50 bg-card/50"
+          : "origin-bottom translate-y-4 rounded-t-xl border-b-0 bg-white backdrop-blur-sm",
+        hidden ? (embedded ? "pointer-events-none opacity-0" : "pointer-events-none translate-y-8 opacity-0") : "",
         className,
       )}
     >
       <header
         className={cn(
-          "bg-accent flex min-h-8 shrink-0 cursor-pointer items-center justify-between px-4 text-sm transition-all duration-300 ease-out",
+          "flex min-h-8 shrink-0 cursor-pointer items-center justify-between px-4 text-sm transition-all duration-300 ease-out",
+          embedded ? "bg-transparent" : "bg-accent",
         )}
         onClick={handleToggle}
       >
         <div className="text-muted-foreground">
           <div className="flex items-center justify-center gap-2">
             <ListTodoIcon className="size-4" />
-            <div>To-dos</div>
+            <div>To-do</div>
           </div>
         </div>
         <div>
@@ -67,11 +73,12 @@ export function TodoList({
       </header>
       <main
         className={cn(
-          "bg-accent flex grow px-2 transition-all duration-300 ease-out",
-          collapsed ? "h-0 pb-3" : "h-28 pb-4",
+          "flex grow px-2 transition-all duration-300 ease-out",
+          embedded ? "bg-transparent" : "bg-accent",
+          collapsed ? (embedded ? "h-0 pb-0" : "h-0 pb-3") : "h-28 pb-4",
         )}
       >
-        <QueueList className="bg-background mt-0 w-full rounded-t-xl">
+        <QueueList className={cn("bg-background mt-0 w-full", embedded ? "rounded-md" : "rounded-t-xl")}>
           {todos.map((todo, i) => (
             <QueueItem key={i + (todo.content ?? "")}>
               <div className="flex items-center gap-2">

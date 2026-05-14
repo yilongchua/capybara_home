@@ -10,13 +10,14 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { getBackendBaseURL } from "@/core/config";
 import { sanitizeThreadId } from "@/core/utils/strings";
 import { cn } from "@/lib/utils";
 
 import {
   ArtifactFileDetail,
   ArtifactFileList,
-  useArtifacts,
+  useDirectory,
 } from "../artifacts";
 import { useThread } from "../messages/context";
 
@@ -37,12 +38,12 @@ function sameStringArray(a: string[], b: string[]) {
 const ChatBox: React.FC<{
   children: React.ReactNode;
   threadId: string;
-  extraArtifacts?: string[];
+  extraDirectoryFiles?: string[];
   onSubmitPlanRevision?: (markdown: string) => Promise<void> | void;
 }> = ({
   children,
   threadId,
-  extraArtifacts = [],
+  extraDirectoryFiles = [],
   onSubmitPlanRevision,
 }) => {
   const { thread } = useThread();
@@ -50,24 +51,25 @@ const ChatBox: React.FC<{
   const panelRef = usePanelRef();
 
   const {
-    artifacts,
-    open: artifactsOpen,
-    setOpen: setArtifactsOpen,
-    setArtifacts,
+    directoryFiles,
+    open: directoryOpen,
+    setOpen: setDirectoryOpen,
+    setDirectoryFiles,
     deselect,
-    selectedArtifact,
-  } = useArtifacts();
+    selectedFile,
+  } = useDirectory();
 
   const planPath = thread.values.plan?.plan_path ?? thread.values.plan?.latest_alias_path ?? null;
+  const [sandboxOutputFiles, setSandboxOutputFiles] = useState<string[]>([]);
 
-  const [activeTab, setActiveTab] = useState<"activity" | "artifacts" | "preview">("activity");
+  const [activeTab, setActiveTab] = useState<"activity" | "directory" | "preview">("activity");
   const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
   const stableThreadId = sanitizeThreadId(threadId);
   const tabsActivityTriggerId = `chatbox-tabs-trigger-activity-${stableThreadId}`;
-  const tabsArtifactsTriggerId = `chatbox-tabs-trigger-artifacts-${stableThreadId}`;
+  const tabsDirectoryTriggerId = `chatbox-tabs-trigger-directory-${stableThreadId}`;
   const tabsPreviewTriggerId = `chatbox-tabs-trigger-preview-${stableThreadId}`;
   const tabsActivityContentId = `chatbox-tabs-content-activity-${stableThreadId}`;
-  const tabsArtifactsContentId = `chatbox-tabs-content-artifacts-${stableThreadId}`;
+  const tabsDirectoryContentId = `chatbox-tabs-content-directory-${stableThreadId}`;
   const tabsPreviewContentId = `chatbox-tabs-content-preview-${stableThreadId}`;
 
   useEffect(() => {
@@ -79,33 +81,77 @@ const ChatBox: React.FC<{
       panelRef.current?.expand();
     }
 
-    const nextArtifacts = Array.from(
-      new Set([...(thread.values.artifacts ?? []), ...extraArtifacts]),
+    const nextDirectoryFiles = Array.from(
+      new Set([...(thread.values.artifacts ?? []), ...extraDirectoryFiles, ...sandboxOutputFiles]),
     );
-    if (!sameStringArray(artifacts, nextArtifacts)) {
-      setArtifacts(nextArtifacts);
+    if (!sameStringArray(directoryFiles, nextDirectoryFiles)) {
+      setDirectoryFiles(nextDirectoryFiles);
     }
   }, [
-    artifacts,
+    directoryFiles,
     deselect,
-    extraArtifacts,
+    extraDirectoryFiles,
     panelRef,
-    setArtifacts,
+    sandboxOutputFiles,
+    setDirectoryFiles,
     thread.values.artifacts,
     threadId,
   ]);
 
   useEffect(() => {
-    if (!artifactsOpen) {
-      if (activeTab === "artifacts") {
+    if (!directoryOpen) {
+      if (activeTab === "directory") {
         setActiveTab("activity");
       }
       return;
     }
-    setActiveTab("artifacts");
+    setActiveTab("directory");
     setIsPanelCollapsed(false);
     panelRef.current?.expand();
-  }, [activeTab, artifactsOpen, panelRef]);
+  }, [activeTab, directoryOpen, panelRef]);
+
+  useEffect(() => {
+    let active = true;
+    let timer: number | null = null;
+
+    const load = async () => {
+      try {
+        const response = await fetch(
+          `${getBackendBaseURL()}/api/threads/${threadId}/artifacts-list`,
+        );
+        if (!response.ok) {
+          throw new Error("Failed to list thread directory files");
+        }
+        const payload = (await response.json()) as { files?: string[] };
+        if (!active) {
+          return;
+        }
+        setSandboxOutputFiles(
+          (payload.files ?? []).filter((file) =>
+            file.startsWith("/mnt/user-data/outputs/"),
+          ),
+        );
+      } catch {
+        if (active) {
+          setSandboxOutputFiles([]);
+        }
+      } finally {
+        if (active) {
+          timer = window.setTimeout(() => {
+            void load();
+          }, 5000);
+        }
+      }
+    };
+
+    void load();
+    return () => {
+      active = false;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [threadId]);
 
 
   const handleCollapse = () => {
@@ -119,14 +165,19 @@ const ChatBox: React.FC<{
   };
 
   const handleTabChange = (value: string) => {
-    const next = value === "artifacts" ? "artifacts" : value === "preview" ? "preview" : "activity";
+    const next =
+      value === "directory"
+        ? "directory"
+        : value === "preview"
+          ? "preview"
+          : "activity";
     setActiveTab(next);
-    setArtifactsOpen(next === "artifacts");
+    setDirectoryOpen(next === "directory");
   };
 
   const handlePlanPreviewClose = () => {
     setActiveTab("activity");
-    setArtifactsOpen(false);
+    setDirectoryOpen(false);
   };
 
   return (
@@ -151,7 +202,7 @@ const ChatBox: React.FC<{
           minSize={24}
           collapsible
           collapsedSize={0}
-          id="activity-artifacts"
+          id="activity-directory"
           onResize={(size) => {
             const collapsed = size.asPercentage < 1;
             setIsPanelCollapsed(collapsed);
@@ -172,11 +223,11 @@ const ChatBox: React.FC<{
                   Activity
                 </TabsTrigger>
                 <TabsTrigger
-                  id={tabsArtifactsTriggerId}
-                  aria-controls={tabsArtifactsContentId}
-                  value="artifacts"
+                  id={tabsDirectoryTriggerId}
+                  aria-controls={tabsDirectoryContentId}
+                  value="directory"
                 >
-                  Artifacts
+                  Directories
                 </TabsTrigger>
                 {planPath && (
                   <TabsTrigger
@@ -205,29 +256,29 @@ const ChatBox: React.FC<{
             </TabsContent>
 
             <TabsContent
-              id={tabsArtifactsContentId}
-              aria-labelledby={tabsArtifactsTriggerId}
-              value="artifacts"
+              id={tabsDirectoryContentId}
+              aria-labelledby={tabsDirectoryTriggerId}
+              value="directory"
               className="min-h-0 flex-1 overflow-hidden p-0"
             >
               <div className="size-full overflow-y-auto p-3">
-                {selectedArtifact ? (
+                {selectedFile ? (
                   <ArtifactFileDetail
                     className="size-full"
-                    filepath={selectedArtifact}
+                    filepath={selectedFile}
                     threadId={threadId}
                     onSubmitPlanRevision={onSubmitPlanRevision}
                   />
-                ) : artifacts?.length === 0 ? (
+                ) : directoryFiles?.length === 0 ? (
                   <ConversationEmptyState
                     icon={<FilesIcon />}
-                    title="No artifacts yet"
-                    description="Artifacts will appear here once files are generated."
+                    title="No directories yet"
+                    description="Directories will appear here once files are generated."
                   />
                 ) : (
                   <ArtifactFileList
                     className="size-full"
-                    files={artifacts ?? []}
+                    files={directoryFiles ?? []}
                     threadId={threadId}
                   />
                 )}

@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, cast, override
+from typing import Any, Literal, NotRequired, TypedDict, cast, override
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelCallResult, ModelRequest
-from langchain.tools import InjectedToolCallId, ToolRuntime, tool
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.runtime import Runtime
-from langgraph.types import Command
-from langgraph.typing import ContextT
 
-from src.agents.middlewares.handoff_sync import sync_handoff_files_from_state
+
+class TodoDagState(AgentState):
+    todo_graph: NotRequired[dict | None]
+    todos: NotRequired[list[dict[str, str]] | None]
 
 
 class TodoNodeInput(TypedDict, total=False):
@@ -27,11 +27,6 @@ class TodoNodeInput(TypedDict, total=False):
     subagent_type: str | None
     target_endpoint: Literal["primary", "helper"] | None
     tool_budget: int | None
-
-
-class TodoDagState(AgentState):
-    todo_graph: NotRequired[dict | None]
-    todos: NotRequired[list[dict[str, str]] | None]
 
 
 def _utc_now_iso() -> str:
@@ -226,46 +221,6 @@ class TodoDagMiddleware(AgentMiddleware[TodoDagState]):
             "Use `write_todos` for complex work. Prefer dependency-aware todos via "
             "`depends_on` so ready tasks can be identified deterministically."
         )
-
-        @tool("write_todos")
-        def write_todos(
-            runtime: ToolRuntime[ContextT, TodoDagState],
-            todos: list[TodoNodeInput],
-            tool_call_id: Annotated[str, InjectedToolCallId],
-        ) -> Command:
-            """Create and manage todos. Supports DAG fields like id/depends_on/owner/target_endpoint."""
-            existing_nodes_raw = ((runtime.state or {}).get("todo_graph") or {}).get("nodes") if runtime else None
-            existing_nodes = existing_nodes_raw if isinstance(existing_nodes_raw, list) else []
-            merged_nodes = merge_todo_nodes(existing_nodes, todos)
-            ready_ids = _materialize_ready_ids(merged_nodes)
-            update_payload = {
-                "todo_graph": {
-                    "nodes": merged_nodes,
-                    "ready_ids": ready_ids,
-                    "updated_at": _utc_now_iso(),
-                },
-                "todos": _legacy_todos(merged_nodes),
-                "messages": [
-                    ToolMessage(
-                        content=f"Updated todo graph with {len(merged_nodes)} item(s); ready={ready_ids}",
-                        tool_call_id=tool_call_id,
-                    )
-                ],
-            }
-            if runtime is not None:
-                merged_state = dict(runtime.state or {})
-                merged_state.update(
-                    {
-                        "todo_graph": update_payload["todo_graph"],
-                        "todos": update_payload["todos"],
-                    }
-                )
-                sync_handoff_files_from_state(merged_state)
-            return Command(
-                update=update_payload
-            )
-
-        self.tools = [write_todos]
 
     @override
     def wrap_model_call(self, request: ModelRequest, handler) -> ModelCallResult:

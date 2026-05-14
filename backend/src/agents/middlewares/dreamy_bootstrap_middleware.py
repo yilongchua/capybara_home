@@ -37,7 +37,7 @@ class _DetectedData(TypedDict):
 
 
 class DreamyBootstrapMiddleware(AgentMiddleware[DreamyBootstrapState]):
-    """Bootstrap a v2 workflow.json when the user explicitly invokes /workflow."""
+    """Bootstrap a v2 workflow.json from the first substantive Dreamy planning prompt."""
 
     state_schema = DreamyBootstrapState
 
@@ -522,6 +522,8 @@ class DreamyBootstrapMiddleware(AgentMiddleware[DreamyBootstrapState]):
         instruction = user_text.lstrip()
         if instruction.startswith("/workflow"):
             instruction = instruction[len("/workflow"):].strip()
+        elif instruction.startswith("/dreamy"):
+            instruction = instruction[len("/dreamy"):].strip()
 
         # --- Data source detection (priority order) ---
         # 1. Uploaded files + outputs/ dir

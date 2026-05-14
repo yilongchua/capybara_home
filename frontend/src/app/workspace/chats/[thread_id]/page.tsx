@@ -19,16 +19,17 @@ import {
 } from "@/components/workspace/input-box";
 import { MessageList } from "@/components/workspace/messages";
 import { ThreadContext } from "@/components/workspace/messages/context";
-import { PhaseProgress } from "@/components/workspace/phase-progress";
 import { QueuedMessageList } from "@/components/workspace/queued-message-list";
 import { ThreadTitle } from "@/components/workspace/thread-title";
-import { TodoList } from "@/components/workspace/todo-list";
 import { Welcome } from "@/components/workspace/welcome";
 import { getBackendBaseURL } from "@/core/config";
 import { api } from "@/core/dreamy/api";
 import { useMountedFolder } from "@/core/dreamy/hooks/use-mounted-folder";
 import { useMountedFolderFiles } from "@/core/dreamy/hooks/use-mounted-folder-files";
-import { useGenerationCompletions } from "@/core/generation/hooks";
+import {
+  type LiveGenerationNotice,
+  useGenerationCompletions,
+} from "@/core/generation/hooks";
 import { useI18n } from "@/core/i18n/hooks";
 import { useModels } from "@/core/models/hooks";
 import { useLocalSettings } from "@/core/settings";
@@ -116,6 +117,7 @@ function ChatPageContent({
   const [adaptationEvent, setAdaptationEvent] = useState<PlanAdaptedEvent | null>(null);
   const [escalationEvent, setEscalationEvent] = useState<ComplexityEscalationEvent | null>(null);
   const [forkDraft, setForkDraft] = useState<ForkDraft | null>(null);
+  const [uiNotices, setUiNotices] = useState<LiveGenerationNotice[]>([]);
   const [pendingExecutePlan, setPendingExecutePlan] = useState(false);
   const suppressedAutoExecutePlanKeyRef = useRef<string | null>(null);
   const executePlanRetryCountRef = useRef(0);
@@ -217,6 +219,27 @@ function ChatPageContent({
   }, [isInFlightRunConflict, pendingExecutePlan, planCreatedEvent, planEventKey, sendMessage, threadId, thread.isLoading]);
 
   // Auto-trigger Execute Plan when a plan is created and auto_mode is on.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const custom = event as CustomEvent<{ threadId?: string; content?: string }>;
+      const content = custom.detail?.content;
+      if (!content || custom.detail?.threadId !== threadId) {
+        return;
+      }
+      setUiNotices((prev) => [
+        ...prev,
+        {
+          id: `mounted-${Date.now()}`,
+          content,
+        },
+      ]);
+    };
+    window.addEventListener("chat-mounted-notice", handler as EventListener);
+    return () => {
+      window.removeEventListener("chat-mounted-notice", handler as EventListener);
+    };
+  }, [threadId]);
+
   useEffect(() => {
     if (planCreatedEvent && settings.context.auto_mode === true) {
       const eventKey = planEventKey(planCreatedEvent);
@@ -349,7 +372,7 @@ function ChatPageContent({
     <ThreadContext.Provider value={{ thread, isMock, forkDraft, setForkDraft }}>
       <ChatBox
         threadId={threadId}
-        extraArtifacts={combinedArtifacts}
+        extraDirectoryFiles={combinedArtifacts}
         onSubmitPlanRevision={handleSubmitPlanRevision}
       >
         <div className="relative flex size-full min-h-0 justify-between">
@@ -384,7 +407,7 @@ function ChatPageContent({
                 className={cn("size-full", !isNewThread && "pt-10")}
                 threadId={threadId}
                 thread={thread}
-                liveNotices={generationNotices}
+                liveNotices={[...generationNotices, ...uiNotices]}
                 liveThinkingContent={liveThinkingContent}
               />
             </div>
@@ -399,12 +422,6 @@ function ChatPageContent({
                 )}
               >
                 <div className="mb-2 flex flex-col gap-2">
-                  <PhaseProgress phaseExecution={thread.values.phase_execution} />
-                  <TodoList
-                    className="bg-background/5"
-                    todos={thread.values.todos ?? []}
-                    hidden={!thread.values.todos || thread.values.todos.length === 0}
-                  />
                   <QueuedMessageList
                     items={queueControls.queueItems}
                     onSteer={queueControls.steerQueued}
