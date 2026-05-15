@@ -11,6 +11,7 @@ list on page refresh because thread.values.artifacts is never populated.
 
 from __future__ import annotations
 
+from fnmatch import fnmatch
 from typing import override
 
 from langchain.agents import AgentState
@@ -43,16 +44,28 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
             normalized_path = _WORKSPACE_PREFIX + raw_path[len(_LEGACY_OUTPUTS_PREFIX) :]
         return normalized_path, args.get("content") if isinstance(args.get("content"), str) else None
 
-    def _quality_gate_precheck(self, request: ToolCallRequest) -> Command | None:
+    def _is_blocking_failure(self, path: str) -> bool:
+        cfg = get_quality_gate_config()
+        if cfg.block_on_failure:
+            return True
+        for pattern in cfg.blocking_path_patterns:
+            pat = str(pattern or "").strip()
+            if not pat:
+                continue
+            if fnmatch(path, pat) or pat in path:
+                return True
+        return False
+
+    def _quality_gate_precheck(self, request: ToolCallRequest) -> tuple[Command | None, bool]:
         cfg = get_quality_gate_config()
         if not cfg.enabled:
-            return None
+            return None, False
 
         path, content = self._extract_path_and_content(request)
         if not path.startswith(_WORKSPACE_PREFIX):
-            return None
+            return None, False
         if content is None:
-            return None
+            return None, False
 
         check = check_report_quality(path, content)
         if check.ok:
@@ -64,12 +77,13 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
                         "checked_path": path,
                     },
                 }
-            )
+            ), False
 
         state = request.state or {}
         qg_state = (state.get("quality_gate") or {}) if isinstance(state, dict) else {}
         current_passes = int(qg_state.get("repair_passes") or 0) if isinstance(qg_state, dict) else 0
         next_passes = current_passes + 1
+        is_blocking = self._is_blocking_failure(path)
 
         append_runtime_event(
             getattr(request, "runtime", None),
@@ -81,7 +95,7 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
             },
         )
 
-        if current_passes < cfg.max_repair_passes:
+        if is_blocking and current_passes < cfg.max_repair_passes:
             repair_focus_by_pass = {
                 1: "duplicate table rows only",
                 2: "heading numbering consistency only",
@@ -113,10 +127,21 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
                         "checked_path": path,
                     },
                 }
-            )
+            ), True
 
+        warning_message = (
+            "QUALITY_GATE_WARNING_NON_BLOCKING: Report artifact failed deterministic checks. "
+            f"Reasons={check.reasons}. "
+            "Continuing with fail-forward mode so primary deliverables are not blocked."
+        )
         return Command(
             update={
+                "messages": [
+                    ToolMessage(
+                        content=warning_message,
+                        tool_call_id=str(request.tool_call.get("id") or ""),
+                    )
+                ],
                 "quality_gate": {
                     "status": "failed",
                     "fail_reasons": check.reasons,
@@ -124,14 +149,14 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
                     "checked_path": path,
                 }
             }
-        )
+        ), False
 
     @override
     async def awrap_tool_call(self, request: ToolCallRequest, handler) -> ToolMessage | Command:
-        precheck = self._quality_gate_precheck(request)
+        precheck, is_blocking = self._quality_gate_precheck(request)
         if isinstance(precheck, Command):
-            # If precheck contains a ToolMessage, we short-circuit to force a focused repair pass.
-            if precheck.update and precheck.update.get("messages"):
+            # Short-circuit only for blocking quality-gate failures.
+            if is_blocking and precheck.update and precheck.update.get("messages"):
                 return precheck
 
         result = await handler(request)
@@ -155,14 +180,16 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
             return result
 
         quality_update = {}
+        precheck_messages = []
         if isinstance(precheck, Command) and precheck.update:
             quality_update = precheck.update.get("quality_gate") or {}
+            precheck_messages = list(precheck.update.get("messages") or [])
 
         return Command(
             update={
                 "artifacts": [path],
                 "quality_gate": quality_update or {"status": "passed", "fail_reasons": [], "checked_path": path},
-                "messages": [result],
+                "messages": [*precheck_messages, result],
             }
         )
 

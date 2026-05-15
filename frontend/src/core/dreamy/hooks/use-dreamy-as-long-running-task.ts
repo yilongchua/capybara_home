@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { getBackendBaseURL } from "@/core/config";
 import type { LongRunningTask, LongRunningTaskStatus } from "@/core/long-running/types";
@@ -13,11 +13,16 @@ import type { WorkflowJson } from "../types";
 
 import { useCheckpoint } from "./use-checkpoint";
 
-async function fetchWorkflowJsonRaw(threadId: string): Promise<WorkflowJson | null> {
+type WorkflowFetchResult = {
+  workflow: WorkflowJson | null;
+  notFound: boolean;
+};
+
+async function fetchWorkflowJsonRaw(threadId: string): Promise<WorkflowFetchResult> {
   const res = await fetch(`${getBackendBaseURL()}${api.threads.dreamy.workflow(threadId)}`);
-  if (res.status === 404) return null;
-  if (!res.ok) return null;
-  return res.json() as Promise<WorkflowJson>;
+  if (res.status === 404) return { workflow: null, notFound: true };
+  if (!res.ok) return { workflow: null, notFound: false };
+  return { workflow: (await res.json()) as WorkflowJson, notFound: false };
 }
 
 function phaseToStatus(phase: string): LongRunningTaskStatus | null {
@@ -43,9 +48,11 @@ export function useDreamyAsLongRunningTask(
   threadId: string,
   enabledOverride = true,
 ): LongRunningTask | null {
-  const enabled = enabledOverride && Boolean(threadId && threadId !== "new");
+  const [notFoundStreak, setNotFoundStreak] = useState(0);
+  const enabled =
+    enabledOverride && Boolean(threadId && threadId !== "new") && notFoundStreak < 3;
 
-  const { data: workflow } = useQuery<WorkflowJson | null>({
+  const { data } = useQuery<WorkflowFetchResult>({
     queryKey: ["dreamy-workflow-lrt", threadId],
     queryFn: () => fetchWorkflowJsonRaw(threadId),
     enabled,
@@ -53,6 +60,20 @@ export function useDreamyAsLongRunningTask(
     staleTime: 0,
     retry: false,
   });
+  const workflow = data?.workflow ?? null;
+
+  useEffect(() => {
+    setNotFoundStreak(0);
+  }, [threadId]);
+
+  useEffect(() => {
+    if (!data) return;
+    if (data.notFound) {
+      setNotFoundStreak((prev) => prev + 1);
+      return;
+    }
+    setNotFoundStreak(0);
+  }, [data]);
 
   const { data: checkpoint } = useCheckpoint(threadId, enabled);
 

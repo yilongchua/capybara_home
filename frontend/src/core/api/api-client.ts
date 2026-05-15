@@ -24,6 +24,41 @@ type StreamTee = {
 };
 const _activeJoinStreams = new Map<string, StreamTee>();
 
+type HistoryCacheEntry = {
+  expiresAt: number;
+  data?: unknown;
+  inflight?: Promise<unknown>;
+};
+
+const HISTORY_CACHE_TTL_MS = 8_000;
+const _threadHistoryCache = new Map<string, HistoryCacheEntry>();
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  const pairs = keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
+  return `{${pairs.join(",")}}`;
+}
+
+function historyCacheKey(threadId: string, options?: unknown): string {
+  return `${threadId}::${stableStringify(options ?? {})}`;
+}
+
+function clearThreadHistoryCache(threadId: string): void {
+  const prefix = `${threadId}::`;
+  for (const key of _threadHistoryCache.keys()) {
+    if (key.startsWith(prefix)) {
+      _threadHistoryCache.delete(key);
+    }
+  }
+}
+
 function teeJoinStream<T>(
   source: AsyncIterable<T>,
   key: string,
@@ -88,6 +123,52 @@ function createCompatibleClient(isMock?: boolean): LangGraphClient {
     apiUrl: getLangGraphBaseURL(isMock),
   });
 
+  const originalGetHistory = client.threads.getHistory.bind(client.threads);
+  client.threads.getHistory = (async (threadId, options) => {
+    const cacheKey = historyCacheKey(String(threadId), options);
+    const now = Date.now();
+    const cached = _threadHistoryCache.get(cacheKey);
+    if (cached?.data !== undefined && cached.expiresAt > now) {
+      return cached.data as Awaited<ReturnType<typeof originalGetHistory>>;
+    }
+    if (cached?.inflight) {
+      return await cached.inflight;
+    }
+
+    const inflight = originalGetHistory(threadId, options)
+      .then((result) => {
+        _threadHistoryCache.set(cacheKey, {
+          data: result,
+          expiresAt: Date.now() + HISTORY_CACHE_TTL_MS,
+        });
+        return result;
+      })
+      .catch((error) => {
+        _threadHistoryCache.delete(cacheKey);
+        throw error;
+      });
+
+    _threadHistoryCache.set(cacheKey, {
+      expiresAt: now + HISTORY_CACHE_TTL_MS,
+      inflight,
+    });
+    return await inflight;
+  }) as typeof client.threads.getHistory;
+
+  const originalUpdateState = client.threads.updateState.bind(client.threads);
+  client.threads.updateState = (async (threadId, options) => {
+    const result = await originalUpdateState(threadId, options);
+    clearThreadHistoryCache(String(threadId));
+    return result;
+  }) as typeof client.threads.updateState;
+
+  const originalDeleteThread = client.threads.delete.bind(client.threads);
+  client.threads.delete = (async (threadId, options) => {
+    const result = await originalDeleteThread(threadId, options);
+    clearThreadHistoryCache(String(threadId));
+    return result;
+  }) as typeof client.threads.delete;
+
   const originalRunStream = client.runs.stream.bind(client.runs);
   client.runs.stream = ((threadId, assistantId, payload) => {
     // Dedup concurrent thread-level stream subscriptions for the same thread.
@@ -100,6 +181,7 @@ function createCompatibleClient(isMock?: boolean): LangGraphClient {
       existing.refCount += 1;
       return existing.iterable as ReturnType<typeof originalRunStream>;
     }
+    clearThreadHistoryCache(String(threadId));
     const source = originalRunStream(
       threadId,
       assistantId,
@@ -122,6 +204,7 @@ function createCompatibleClient(isMock?: boolean): LangGraphClient {
       existing.refCount += 1;
       return existing.iterable as ReturnType<typeof originalJoinStream>;
     }
+    clearThreadHistoryCache(String(threadId));
     const source = originalJoinStream(
       threadId,
       runId,
