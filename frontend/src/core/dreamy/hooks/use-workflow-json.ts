@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { getBackendBaseURL } from "@/core/config";
 import {
@@ -14,13 +14,19 @@ import { REFRESH_INTERVAL_ACTIVE, REFRESH_INTERVAL_IDLE } from "@/core/dreamy/co
 import { useDreamy } from "../context";
 import type { WorkflowJson } from "../types";
 
-async function fetchWorkflowJson(threadId: string): Promise<WorkflowJson | null> {
+type WorkflowFetchResult = {
+  workflow: WorkflowJson | null;
+  notFound: boolean;
+};
+
+async function fetchWorkflowJson(threadId: string): Promise<WorkflowFetchResult> {
   const res = await fetch(`${getBackendBaseURL()}${api.threads.dreamy.workflow(threadId)}`);
   if (res.status === 404) {
-    return null;
+    return { workflow: null, notFound: true };
   }
   if (!res.ok) throw new Error("failed to load workflow.json");
-  return res.json() as Promise<WorkflowJson>;
+  const workflow = (await res.json()) as WorkflowJson;
+  return { workflow, notFound: false };
 }
 
 export async function saveWorkflowJson(threadId: string, workflow: WorkflowJson): Promise<void> {
@@ -36,19 +42,35 @@ export async function saveWorkflowJson(threadId: string, workflow: WorkflowJson)
 
 export function useWorkflowJson(threadId: string) {
   const { setWorkflowJson } = useDreamy();
-  const { data } = useWorkspaceRefreshQuery<WorkflowJson | null>({
+  const [notFoundStreak, setNotFoundStreak] = useState(0);
+  const { data } = useWorkspaceRefreshQuery<WorkflowFetchResult>({
     queryKey: ["dreamy-workflow", threadId],
     queryFn: () => fetchWorkflowJson(threadId),
-    enabled: Boolean(threadId && threadId !== "new"),
-    refetchInterval: (query) => (query.state.data ? REFRESH_INTERVAL_ACTIVE : REFRESH_INTERVAL_IDLE),
+    enabled: Boolean(threadId && threadId !== "new") && notFoundStreak < 3,
+    refetchInterval: (query) => (query.state.data?.workflow ? REFRESH_INTERVAL_ACTIVE : REFRESH_INTERVAL_IDLE),
     staleTime: 0,
     retry: false,
     refreshDomains: threadId ? [`dreamy:${threadId}`, `thread:${threadId}`] : [],
   });
 
   useEffect(() => {
-    setWorkflowJson(data ?? null);
-  }, [data, setWorkflowJson]);
+    setNotFoundStreak(0);
+  }, [threadId]);
 
-  return data ?? null;
+  useEffect(() => {
+    if (!data) return;
+    if (data.notFound) {
+      setNotFoundStreak((prev) => prev + 1);
+      return;
+    }
+    setNotFoundStreak(0);
+  }, [data]);
+
+  const workflow = data?.workflow ?? null;
+
+  useEffect(() => {
+    setWorkflowJson(workflow);
+  }, [setWorkflowJson, workflow]);
+
+  return workflow;
 }

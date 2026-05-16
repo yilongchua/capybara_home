@@ -153,7 +153,7 @@ export function createWorkspaceQueryClient() {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        refetchOnWindowFocus: true,
+        refetchOnWindowFocus: false,
         refetchOnReconnect: true,
         retry: 2,
         staleTime: 5_000,
