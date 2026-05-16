@@ -47,6 +47,7 @@ from src.agents.middlewares.summarization_middleware import CapybaraSummarizatio
 from src.agents.middlewares.thread_data_middleware import ThreadDataMiddleware
 from src.agents.middlewares.title_middleware import TitleMiddleware
 from src.agents.middlewares.todo_dag_middleware import TodoDagMiddleware
+from src.agents.middlewares.todo_failure_retry_middleware import TodoFailureRetryMiddleware
 from src.agents.middlewares.todo_middleware import TodoMiddleware
 from src.agents.middlewares.tool_disclosure_middleware import ToolDisclosureMiddleware
 from src.agents.middlewares.tool_result_truncation_middleware import ToolResultTruncationMiddleware
@@ -449,6 +450,12 @@ def _create_resume_state(_ctx: _RegistryContext) -> AgentMiddleware | None:
     return ResumeStateMiddleware(resume_cfg)
 
 
+def _create_todo_failure_retry(ctx: _RegistryContext) -> AgentMiddleware | None:
+    if not ctx.is_work_mode:
+        return None
+    return TodoFailureRetryMiddleware()
+
+
 def _create_title(ctx: _RegistryContext) -> AgentMiddleware | None:
     return TitleMiddleware(model_name=ctx.router.resolve("title", requested_model=ctx.model_name))
 
@@ -535,7 +542,8 @@ def _build_middleware_registry(
         MiddlewareSpec("tool_result_truncation", lambda: ToolResultTruncationMiddleware(), after={"model_timeout"}),
         MiddlewareSpec("subagent_limit", bind(_create_subagent_limit), after={"retry", "model_timeout", "tool_result_truncation"}),
         MiddlewareSpec("evaluator", bind(_create_evaluator), after={"subagent_limit"}),
-        MiddlewareSpec("scratchpad_task_memory", bind(_create_scratchpad_task_memory), after={"evaluator"}),
+        MiddlewareSpec("todo_failure_retry", bind(_create_todo_failure_retry), after={"evaluator"}),
+        MiddlewareSpec("scratchpad_task_memory", bind(_create_scratchpad_task_memory), after={"todo_failure_retry"}),
         MiddlewareSpec("plan_file_sync", lambda: PlanFileSyncMiddleware(), after={"scratchpad_task_memory"}),
         MiddlewareSpec("resume_state", bind(_create_resume_state), after={"plan_file_sync"}),
         MiddlewareSpec("progress_guard", lambda: ProgressGuardMiddleware(), after={"resume_state"}),

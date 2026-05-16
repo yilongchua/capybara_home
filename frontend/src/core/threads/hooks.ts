@@ -31,6 +31,10 @@ import {
 } from "../workspace-refresh";
 
 import {
+  deleteAllThreads as deleteAllThreadsWithCleanup,
+  deleteThread as deleteThreadWithCleanup,
+} from "./api";
+import {
   clearQueue as clearQueueState,
   dequeueMatching,
   enqueueMessage,
@@ -1488,10 +1492,10 @@ export function useThreads(
 
 export function useDeleteThread() {
   const queryClient = useQueryClient();
-  const apiClient = getAPIClient();
+  const { t } = useI18n();
   return useMutation({
     mutationFn: async ({ threadId }: { threadId: string }) => {
-      await apiClient.threads.delete(threadId);
+      await deleteThreadWithCleanup(threadId);
     },
     onSuccess(_, { threadId }) {
       queryClient.setQueriesData(
@@ -1504,6 +1508,10 @@ export function useDeleteThread() {
         },
       );
       publishThreadRefresh(threadId);
+      toast.success(t.chats.deleteChatSuccess);
+    },
+    onError(error) {
+      toast.error(error instanceof Error ? error.message : t.chats.deleteChatFailed);
     },
   });
 }
@@ -1551,44 +1559,24 @@ export function useRenameThread() {
 
 export function useDeleteAllThreads() {
   const queryClient = useQueryClient();
-  const apiClient = getAPIClient();
   const { t } = useI18n();
   return useMutation({
     mutationFn: async () => {
-      const allThreads: AgentThread[] = [];
-      let offset = 0;
-      const pageSize = 50;
-
-      while (true) {
-        const page = await apiClient.threads.search<AgentThreadState>({
-          limit: pageSize,
-          offset,
-        });
-        allThreads.push(...page);
-        if (page.length < pageSize) break;
-        offset += page.length;
-      }
-
-      let deletedCount = 0;
-      for (const thread of allThreads) {
-        try {
-          await apiClient.threads.delete(thread.thread_id);
-          deletedCount++;
-        } catch (err) {
-          console.warn(`Failed to delete thread ${thread.thread_id}:`, err);
-        }
-      }
-
-      return deletedCount;
+      return deleteAllThreadsWithCleanup();
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       void queryClient.invalidateQueries({
         queryKey: ["threads", "search"],
       });
+      publishWorkspaceRefresh(["threads"], { source: "delete-all-threads" });
+      if (result.failed_thread_ids.length > 0) {
+        toast.error(t.chats.deleteAllChatsPartialFailure(result.failed_thread_ids.length));
+        return;
+      }
       toast.success(t.chats.deleteAllChatsSuccess);
     },
-    onError: () => {
-      toast.error("Failed to delete all chats");
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t.chats.deleteAllChatsFailed);
     },
   });
 }

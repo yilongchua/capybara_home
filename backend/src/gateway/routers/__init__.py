@@ -1,4 +1,4 @@
-from . import approvals, artifacts, feedback, generation, handoff, integrations, mcp, models, pipelines, runs, skills, steering, suggestions, triggers, uploads, vault
+from . import approvals, artifacts, feedback, generation, handoff, integrations, mcp, models, pipelines, runs, skills, steering, suggestions, threads, triggers, uploads, vault
 
 __all__ = [
     "approvals",
@@ -14,6 +14,7 @@ __all__ = [
     "skills",
     "steering",
     "suggestions",
+    "threads",
     "triggers",
     "uploads",
     "vault",

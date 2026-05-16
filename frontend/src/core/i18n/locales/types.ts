@@ -206,6 +206,11 @@ export interface Translations {
     deleteAllChats: string;
     deleteAllChatsConfirm: string;
     deleteAllChatsSuccess: string;
+    deleteAllChatsFailed: string;
+    deleteAllChatsPartialFailure: (count: number) => string;
+    deleteChatConfirm: string;
+    deleteChatSuccess: string;
+    deleteChatFailed: string;
   };
 
   // Page titles (document title)

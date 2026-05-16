@@ -45,10 +45,12 @@ export function SubtaskCard({
   className,
   task,
   isLoading,
+  isStaleRunning = false,
 }: {
   className?: string;
   task: Subtask;
   isLoading: boolean;
+  isStaleRunning?: boolean;
 }) {
   const { t } = useI18n();
   const [settings] = useLocalSettings();
@@ -77,9 +79,11 @@ export function SubtaskCard({
     } else if (task.status === "failed") {
       return <XCircleIcon className="size-3 text-red-500" />;
     } else if (task.status === "in_progress") {
-      return <CapybaraRunner actor="baby_capy" size="sm" taskDescription={task.description} />;
+      return isStaleRunning
+        ? <ClipboardListIcon className="size-3" />
+        : <CapybaraRunner actor="baby_capy" size="sm" taskDescription={task.description} />;
     }
-  }, [task.status, task.description]);
+  }, [isStaleRunning, task.status, task.description]);
   return (
     <ChainOfThought
       className={cn("relative w-full gap-2 rounded-lg border py-0", className)}
@@ -91,7 +95,7 @@ export function SubtaskCard({
           task.status === "in_progress" ? "enabled" : "",
         )}
       ></div>
-      {task.status === "in_progress" && (
+      {task.status === "in_progress" && !isStaleRunning && (
         <>
           <ShineBorder
             borderWidth={1.5}
@@ -111,9 +115,13 @@ export function SubtaskCard({
                 className="font-normal"
                 label={
                   task.status === "in_progress" ? (
-                    <Shimmer duration={3} spread={3}>
-                      {task.description}
-                    </Shimmer>
+                    isStaleRunning
+                      ? task.description
+                      : (
+                        <Shimmer duration={3} spread={3}>
+                          {task.description}
+                        </Shimmer>
+                      )
                   ) : (
                     task.description
                   )
@@ -135,8 +143,11 @@ export function SubtaskCard({
                     >
                       {task.status === "in_progress" &&
                       task.latestMessage &&
-                      hasToolCalls(task.latestMessage)
+                      hasToolCalls(task.latestMessage) &&
+                      !isStaleRunning
                         ? explainLastToolCall(task.latestMessage, t)
+                        : task.status === "in_progress" && isStaleRunning
+                          ? "Waiting for run execution..."
                         : t.subtasks[task.status]}
                     </FlipDisplay>
                   </div>
@@ -166,7 +177,8 @@ export function SubtaskCard({
           )}
           {task.status === "in_progress" &&
             task.latestMessage &&
-            hasToolCalls(task.latestMessage) && (
+            hasToolCalls(task.latestMessage) &&
+            !isStaleRunning && (
               <ChainOfThoughtStep
                 label={t.subtasks.in_progress}
                 icon={<CapybaraRunner actor="baby_capy" size="sm" taskDescription={explainLastToolCall(task.latestMessage, t)} />}

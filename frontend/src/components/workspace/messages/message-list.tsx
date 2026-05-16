@@ -214,6 +214,23 @@ export function MessageList({
       ),
     [liveActivityEvents, thread.values.activity_timeline],
   );
+  const hasRecentLiveRunSignal = useMemo(() => {
+    const now = Date.now() / 1000;
+    return allActivityEvents.some((event) => {
+      const kind = (event.kind ?? "").toLowerCase();
+      const isStartLike =
+        kind.includes("start") ||
+        kind.includes("running") ||
+        kind.includes("work_");
+      const isEndLike =
+        kind.includes("completed") ||
+        kind.includes("failed") ||
+        kind.includes("timed_out") ||
+        kind.includes("cancel");
+      const recent = now - event.timestamp < 120;
+      return isStartLike && !isEndLike && recent;
+    });
+  }, [allActivityEvents]);
   const activeActivityLine = useMemo(() => {
     for (let i = allActivityEvents.length - 1; i >= 0; i--) {
       const line = allActivityEvents[i]?.line?.trim();
@@ -458,6 +475,7 @@ export function MessageList({
                     key={"task-group-" + taskId}
                     task={task}
                     isLoading={thread.isLoading}
+                    isStaleRunning={task.status === "in_progress" && !hasRecentLiveRunSignal}
                   />,
                 );
               }

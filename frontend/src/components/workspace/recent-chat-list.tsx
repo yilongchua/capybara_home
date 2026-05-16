@@ -49,31 +49,39 @@ export function RecentChatList() {
   const pathname = usePathname();
   const { thread_id: threadIdFromPath } = useParams<{ thread_id: string }>();
   const { data: threads = [] } = useThreads();
-  const { mutate: deleteThread } = useDeleteThread();
+  const deleteThreadMutation = useDeleteThread();
   const { mutate: renameThread } = useRenameThread();
 
   // Rename dialog state
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameThreadId, setRenameThreadId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [threadIdToDelete, setThreadIdToDelete] = useState<string | null>(null);
 
   const handleDelete = useCallback(
     (threadId: string) => {
-      deleteThread({ threadId });
-      if (threadId === threadIdFromPath) {
-        const threadIndex = threads.findIndex((t) => t.thread_id === threadId);
-        let nextThreadPath = "/workspace/chats/new";
-        if (threadIndex > -1) {
-          if (threads[threadIndex + 1]) {
-            nextThreadPath = pathOfThreadRecord(threads[threadIndex + 1]!);
-          } else if (threads[threadIndex - 1]) {
-            nextThreadPath = pathOfThreadRecord(threads[threadIndex - 1]!);
+      deleteThreadMutation.mutate(
+        { threadId },
+        {
+          onSuccess: () => {
+            if (threadId === threadIdFromPath) {
+              const threadIndex = threads.findIndex((t) => t.thread_id === threadId);
+              let nextThreadPath = "/workspace/chats/new";
+              if (threadIndex > -1) {
+                if (threads[threadIndex + 1]) {
+                  nextThreadPath = pathOfThreadRecord(threads[threadIndex + 1]!);
+                } else if (threads[threadIndex - 1]) {
+                  nextThreadPath = pathOfThreadRecord(threads[threadIndex - 1]!);
+                }
+              }
+              void router.push(nextThreadPath);
+            }
+            setThreadIdToDelete(null);
           }
-        }
-        void router.push(nextThreadPath);
-      }
+        },
+      );
     },
-    [deleteThread, router, threadIdFromPath, threads],
+    [deleteThreadMutation, router, threadIdFromPath, threads],
   );
 
   const handleRenameClick = useCallback(
@@ -117,6 +125,12 @@ export function RecentChatList() {
     },
     [t, threads],
   );
+
+  const threadPendingDelete =
+    threadIdToDelete !== null
+      ? threads.find((thread) => thread.thread_id === threadIdToDelete) ?? null
+      : null;
+
   if (threads.length === 0) {
     return null;
   }
@@ -182,7 +196,7 @@ export function RecentChatList() {
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem
-                                onSelect={() => handleDelete(thread.thread_id)}
+                                onSelect={() => setThreadIdToDelete(thread.thread_id)}
                               >
                                 <Trash2 className="text-muted-foreground" />
                                 <span>{t.common.delete}</span>
@@ -226,6 +240,52 @@ export function RecentChatList() {
               {t.common.cancel}
             </Button>
             <Button onClick={handleRenameSubmit}>{t.common.save}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={threadIdToDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setThreadIdToDelete(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t.common.delete}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 py-1">
+            <p className="text-sm text-muted-foreground">
+              {t.chats.deleteChatConfirm}
+            </p>
+            {threadPendingDelete ? (
+              <div className="text-sm font-medium">
+                {titleOfThread(threadPendingDelete)}
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setThreadIdToDelete(null)}
+              disabled={deleteThreadMutation.isPending}
+            >
+              {t.common.cancel}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (!threadIdToDelete) {
+                  return;
+                }
+                handleDelete(threadIdToDelete);
+              }}
+              disabled={deleteThreadMutation.isPending}
+            >
+              {deleteThreadMutation.isPending ? "Deleting..." : t.common.delete}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

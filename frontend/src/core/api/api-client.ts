@@ -50,7 +50,7 @@ function historyCacheKey(threadId: string, options?: unknown): string {
   return `${threadId}::${stableStringify(options ?? {})}`;
 }
 
-function clearThreadHistoryCache(threadId: string): void {
+export function clearThreadClientCache(threadId: string): void {
   const prefix = `${threadId}::`;
   for (const key of _threadHistoryCache.keys()) {
     if (key.startsWith(prefix)) {
@@ -158,14 +158,14 @@ function createCompatibleClient(isMock?: boolean): LangGraphClient {
   const originalUpdateState = client.threads.updateState.bind(client.threads);
   client.threads.updateState = (async (threadId, options) => {
     const result = await originalUpdateState(threadId, options);
-    clearThreadHistoryCache(String(threadId));
+    clearThreadClientCache(String(threadId));
     return result;
   }) as typeof client.threads.updateState;
 
   const originalDeleteThread = client.threads.delete.bind(client.threads);
   client.threads.delete = (async (threadId, options) => {
     const result = await originalDeleteThread(threadId, options);
-    clearThreadHistoryCache(String(threadId));
+    clearThreadClientCache(String(threadId));
     return result;
   }) as typeof client.threads.delete;
 
@@ -181,7 +181,7 @@ function createCompatibleClient(isMock?: boolean): LangGraphClient {
       existing.refCount += 1;
       return existing.iterable as ReturnType<typeof originalRunStream>;
     }
-    clearThreadHistoryCache(String(threadId));
+    clearThreadClientCache(String(threadId));
     const source = originalRunStream(
       threadId,
       assistantId,
@@ -204,7 +204,7 @@ function createCompatibleClient(isMock?: boolean): LangGraphClient {
       existing.refCount += 1;
       return existing.iterable as ReturnType<typeof originalJoinStream>;
     }
-    clearThreadHistoryCache(String(threadId));
+    clearThreadClientCache(String(threadId));
     const source = originalJoinStream(
       threadId,
       runId,

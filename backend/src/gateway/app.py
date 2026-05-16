@@ -30,6 +30,7 @@ from src.gateway.routers import (
     skills,
     steering,
     suggestions,
+    threads,
     triggers,
     uploads,
     vault,
@@ -367,6 +368,7 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     app.include_router(handoff.router)
     app.include_router(runs.router)
     app.include_router(steering.router)
+    app.include_router(threads.router)
     app.include_router(vault.router)
     app.include_router(dreamy.router)
 

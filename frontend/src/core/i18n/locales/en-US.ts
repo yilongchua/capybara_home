@@ -256,6 +256,13 @@ export const enUS: Translations = {
     deleteAllChatsConfirm:
       "Are you sure you want to delete all chats? This action cannot be undone.",
     deleteAllChatsSuccess: "All chats deleted",
+    deleteAllChatsFailed: "Failed to delete all chats",
+    deleteAllChatsPartialFailure: (count: number) =>
+      `${count} chat${count === 1 ? "" : "s"} could not be deleted`,
+    deleteChatConfirm:
+      "Are you sure you want to delete this chat? This action cannot be undone.",
+    deleteChatSuccess: "Chat deleted",
+    deleteChatFailed: "Failed to delete chat",
   },
 
   // Page titles (document title)

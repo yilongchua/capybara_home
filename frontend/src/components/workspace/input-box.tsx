@@ -1,6 +1,7 @@
 "use client";
 
 import type { Checkpoint } from "@langchain/langgraph-sdk";
+import { useQueryClient } from "@tanstack/react-query";
 import type { ChatStatus } from "ai";
 import { CheckIcon, SquareIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -29,6 +30,7 @@ import {
   usePromptInputController,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
+import { getAPIClient } from "@/core/api/api-client";
 import { getBackendBaseURL } from "@/core/config";
 import {
   saveToVault as saveToVaultApi,
@@ -58,6 +60,7 @@ import {
 } from "@/core/threads/slash-commands";
 import { pathOfThread, textOfMessage } from "@/core/threads/utils";
 import { sanitizeThreadId } from "@/core/utils/strings";
+import { publishWorkspaceRefresh } from "@/core/workspace-refresh";
 import { cn } from "@/lib/utils";
 
 import {
@@ -116,6 +119,12 @@ const SLASH_COMMANDS: SlashCommandOption[] = [
     title: "Compaction",
     usage: "Compress current chat context",
     description: "Force deterministic context compaction for this thread.",
+  },
+  {
+    name: "recover",
+    title: "Recover todos",
+    usage: "[-todo]",
+    description: "Recover stalled todo execution by clearing stale blocking runs.",
   },
   {
     name: "dreamy",
@@ -206,6 +215,34 @@ function parseAutoresearchArgs(rawArgs: string): {
   return { topic, endpointGoal };
 }
 
+function dedupeTodoLines(lines: string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const line of lines) {
+    const normalized = line.trim().replace(/\s+/g, " ").toLowerCase();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    deduped.push(line.trim());
+  }
+  return deduped;
+}
+
+function formatTodoList(todos: string[]): string {
+  return todos.map((todo, index) => `${index + 1}. ${todo}`).join("\n");
+}
+
+function getMountedFolderDisplayName(path: string): string {
+  const normalized = path.trim().replace(/[\\/]+$/, "");
+  if (!normalized) {
+    return "Mounted Folder";
+  }
+
+  const segments = normalized.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] ?? normalized;
+}
+
 export function InputBox({
   className,
   disabled,
@@ -266,6 +303,7 @@ export function InputBox({
 }) {
   const { t } = useI18n();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
 
   const { models } = useModels();
@@ -566,12 +604,12 @@ export function InputBox({
   );
 
   const emitMountedNotice = useCallback(
-    (mountedDir: string) => {
+    (mountedDir: string, targetThreadId = threadId) => {
       if (typeof window === "undefined") return;
       window.dispatchEvent(
         new CustomEvent("chat-mounted-notice", {
           detail: {
-            threadId,
+            threadId: targetThreadId,
             content: `Directory : ${mountedDir} Mounted, recommend to perform '/analyse'`,
           },
         }),
@@ -580,10 +618,51 @@ export function InputBox({
     [threadId],
   );
 
+  const createThreadForMountedFolder = useCallback(
+    async (path: string) => {
+      const apiClient = getAPIClient(isMock);
+      const createdThread = await apiClient.threads.create();
+      const createdThreadId = createdThread.thread_id;
+      const title = `📁 ${getMountedFolderDisplayName(path)}`;
+
+      await apiClient.threads.updateState(createdThreadId, {
+        values: { title },
+      });
+
+      await queryClient.invalidateQueries({
+        queryKey: ["threads", "search"],
+        exact: false,
+      });
+      publishWorkspaceRefresh(["threads", `thread:${createdThreadId}`], {
+        source: "mount-folder-create-thread",
+      });
+
+      return { createdThreadId, title };
+    },
+    [isMock, queryClient],
+  );
+
   const handleMountFolder = useCallback(async () => {
     try {
       const path = await pickFolder();
       if (path === null) return;
+      if (isNewThread) {
+        const { createdThreadId } = await createThreadForMountedFolder(path);
+        await fetch(`${getBackendBaseURL()}${api.threads.dreamy.mountFolder(createdThreadId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path }),
+        }).then(async (response) => {
+          if (!response.ok) {
+            const message = await response.text();
+            throw new Error(message || "failed to mount folder");
+          }
+        });
+        toast.success(`Mounted: ${path}`);
+        emitMountedNotice(path, createdThreadId);
+        router.push(pathOfThread(createdThreadId));
+        return;
+      }
       const savedPath = await saveMountedFolder.mutateAsync(path);
       toast.success(`Mounted: ${savedPath}`);
       emitMountedNotice(savedPath);
@@ -591,7 +670,14 @@ export function InputBox({
       setMountPathInput("");
       setMountDialogOpen(true);
     }
-  }, [emitMountedNotice, pickFolder, saveMountedFolder]);
+  }, [
+    createThreadForMountedFolder,
+    emitMountedNotice,
+    isNewThread,
+    pickFolder,
+    router,
+    saveMountedFolder,
+  ]);
 
   const handleConfirmMount = useCallback(async () => {
     const path = mountPathInput.trim();
@@ -600,6 +686,27 @@ export function InputBox({
       return;
     }
     try {
+      if (isNewThread) {
+        const { createdThreadId } = await createThreadForMountedFolder(path);
+        const response = await fetch(
+          `${getBackendBaseURL()}${api.threads.dreamy.mountFolder(createdThreadId)}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path }),
+          },
+        );
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(message || "Failed to mount folder");
+        }
+        toast.success(`Mounted folder: ${path}`);
+        emitMountedNotice(path, createdThreadId);
+        setMountDialogOpen(false);
+        setMountPathInput("");
+        router.push(pathOfThread(createdThreadId));
+        return;
+      }
       const savedPath = await saveMountedFolder.mutateAsync(path);
       toast.success(`Mounted folder: ${savedPath}`);
       emitMountedNotice(savedPath);
@@ -609,7 +716,14 @@ export function InputBox({
       const message = error instanceof Error ? error.message : "Failed to mount folder";
       toast.error(message);
     }
-  }, [emitMountedNotice, saveMountedFolder, mountPathInput]);
+  }, [
+    createThreadForMountedFolder,
+    emitMountedNotice,
+    isNewThread,
+    mountPathInput,
+    router,
+    saveMountedFolder,
+  ]);
 
   const getNewChatHref = useCallback(() => {
     if (newChatHref) {
@@ -644,6 +758,80 @@ export function InputBox({
       toast.error(message);
     }
   }, [threadId]);
+
+  const collectIncompletePlanTodos = useCallback((): {
+    incomplete: string[];
+    completed: string[];
+  } => {
+    const todos = thread.values.todos ?? [];
+    const incompleteFromTodos = todos
+      .filter((todo) => todo.content?.trim() && todo.status !== "completed")
+      .map((todo) => todo.content!.trim());
+    const completedFromTodos = todos
+      .filter((todo) => todo.content?.trim() && todo.status === "completed")
+      .map((todo) => todo.content!.trim());
+
+    const phaseResults = thread.values.phase_execution?.phase_results ?? [];
+    const incompleteFromPhases = phaseResults
+      .filter((phase) => phase.content?.trim() && phase.status !== "completed")
+      .map((phase) => phase.content.trim());
+    const completedFromPhases = phaseResults
+      .filter((phase) => phase.content?.trim() && phase.status === "completed")
+      .map((phase) => phase.content.trim());
+
+    return {
+      incomplete: dedupeTodoLines([...incompleteFromTodos, ...incompleteFromPhases]),
+      completed: dedupeTodoLines([...completedFromTodos, ...completedFromPhases]),
+    };
+  }, [thread.values.phase_execution?.phase_results, thread.values.todos]);
+
+  const runRecoverTodo = useCallback(async (): Promise<{
+    cancelled: number;
+    hadPending: boolean;
+  } | null> => {
+    const client = getAPIClient(isMock);
+    try {
+      const runs = await client.runs.list(threadId, { limit: 50 });
+      const runningRuns = runs.filter((run) => run.status === "running");
+      const pendingRuns = runs.filter((run) => run.status === "pending");
+
+      if (runningRuns.length === 0 && pendingRuns.length === 0) {
+        toast.message("No running or pending runs found for this thread.");
+        return { cancelled: 0, hadPending: false };
+      }
+
+      const pendingNewestTs = pendingRuns.reduce((latest, run) => {
+        const ts = Number(new Date(run.created_at).getTime()) || 0;
+        return Math.max(latest, ts);
+      }, 0);
+
+      const staleRunning = runningRuns.filter((run) => {
+        const createdAtTs = Number(new Date(run.created_at).getTime()) || 0;
+        return pendingNewestTs > 0 && createdAtTs > 0 && createdAtTs < pendingNewestTs;
+      });
+
+      const candidates = staleRunning.length > 0 ? staleRunning : runningRuns;
+      if (candidates.length === 0) {
+        toast.message("No stale blocking runs found.");
+        return { cancelled: 0, hadPending: pendingRuns.length > 0 };
+      }
+
+      await Promise.all(
+        candidates.map((run) => client.runs.cancel(threadId, String(run.run_id), false, "interrupt")),
+      );
+
+      toast.success(
+        candidates.length === 1
+          ? "Recovered todo execution. Cancelled 1 blocking run."
+          : `Recovered todo execution. Cancelled ${candidates.length} blocking runs.`,
+      );
+      return { cancelled: candidates.length, hadPending: pendingRuns.length > 0 };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to recover todo execution.";
+      toast.error(message);
+      return null;
+    }
+  }, [isMock, threadId]);
 
   const runRename = useCallback(
     async (title: string) => {
@@ -790,13 +978,57 @@ export function InputBox({
   const executeSlashCommand = useCallback(
     async (commandName: SlashCommandName, rawArgs = "") => {
       const args = rawArgs.trim();
-      if (Boolean(disabled) || status === "streaming") {
+      if (Boolean(disabled) || (status === "streaming" && commandName !== "recover")) {
         toast.error("Commands are unavailable while the chat is busy.");
         return;
       }
 
       if (commandName === "compact") {
         await runCompact();
+        return;
+      }
+      if (commandName === "recover") {
+        if (args && args !== "-todo") {
+          toast.error("Usage: /recover or /recover -todo");
+          return;
+        }
+        const { incomplete, completed } = collectIncompletePlanTodos();
+        const recovery = await runRecoverTodo();
+        if (incomplete.length === 0) {
+          toast.message("No incomplete todos found in the current plan. Cleared blockers if any.");
+          textInput.setInput("");
+          return;
+        }
+        if (recovery === null) {
+          return;
+        }
+        const recoveryPrompt = [
+          "Recover the existing work-mode plan from current thread state.",
+          "Only execute the incomplete todos listed below, in order.",
+          "Do not redo completed todos.",
+          "",
+          "Incomplete todos:",
+          formatTodoList(incomplete),
+          "",
+          ...(completed.length > 0
+            ? [
+                "Already completed todos (for reference, do not redo):",
+                formatTodoList(completed.slice(0, 20)),
+                "",
+              ]
+            : []),
+          "Continue execution until all incomplete todos are completed, updating todo statuses as you go.",
+        ].join("\n");
+
+        onSubmit?.(
+          {
+            text: recoveryPrompt,
+            files: [],
+          },
+          { queued: true },
+        );
+        toast.success(`Recovering ${incomplete.length} incomplete todo${incomplete.length === 1 ? "" : "s"}.`);
+        textInput.setInput("");
         return;
       }
 
@@ -965,12 +1197,15 @@ export function InputBox({
       runAnalyse,
       runPublishDocs,
       runCompact,
+      collectIncompletePlanTodos,
+      runRecoverTodo,
       runRename,
       status,
       textInput,
       threadId,
       onActivateDreamy,
       onDeactivateDreamy,
+      onSubmit,
     ],
   );
 
