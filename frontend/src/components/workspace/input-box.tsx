@@ -30,7 +30,11 @@ import {
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
 import { getBackendBaseURL } from "@/core/config";
-import { startAutoresearchObjective } from "@/core/control-plane/api";
+import {
+  saveToVault as saveToVaultApi,
+  searchVault as searchVaultApi,
+  startAutoresearchObjective,
+} from "@/core/control-plane/api";
 import { api } from "@/core/dreamy/api";
 import { useFolderPicker } from "@/core/dreamy/hooks/use-folder-picker";
 import {
@@ -166,6 +170,18 @@ const SLASH_COMMANDS: SlashCommandOption[] = [
     title: "Rename chat",
     usage: "<new title>",
     description: "Rename current chat title.",
+  },
+  {
+    name: "vault-save",
+    title: "Vault save",
+    usage: "<title> | <content>",
+    description: "Save a note directly into Knowledge Vault.",
+  },
+  {
+    name: "vault-search",
+    title: "Vault search",
+    usage: "<query>",
+    description: "Search cached Knowledge Vault content.",
   },
 ];
 
@@ -842,6 +858,45 @@ export function InputBox({
         setAutoresearchTopic("");
         setAutoresearchEndpointGoal("");
         setAutoresearchDialogOpen(true);
+        return;
+      }
+
+      if (commandName === "vault-save") {
+        const [titlePart, contentPart] = args.split("|", 2);
+        const title = titlePart?.trim() ?? "";
+        const content = contentPart?.trim() ?? "";
+        if (!title || !content) {
+          toast.error("Usage: /vault-save <title> | <content>");
+          return;
+        }
+        try {
+          await saveToVaultApi({ title, content, topic: title, source_thread_id: threadId });
+          toast.success("Saved to Knowledge Vault.");
+          textInput.setInput("");
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "Failed to save to vault.");
+        }
+        return;
+      }
+
+      if (commandName === "vault-search") {
+        const query = args.trim();
+        if (!query) {
+          toast.error("Usage: /vault-search <query>");
+          return;
+        }
+        try {
+          const payload = await searchVaultApi(query, 5);
+          const first = payload.items[0];
+          if (!payload.items.length) {
+            toast.message("No cached vault matches yet.");
+          } else {
+            toast.success(`Found ${payload.items.length} cached result(s). Top: ${first?.title ?? first?.path ?? "Untitled"}`);
+          }
+          textInput.setInput("");
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "Failed to search vault.");
+        }
         return;
       }
 

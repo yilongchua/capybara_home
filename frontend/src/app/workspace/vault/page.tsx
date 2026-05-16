@@ -3,15 +3,18 @@
 import {
   CalendarClockIcon,
   ChevronDownIcon,
+  ChevronRightIcon,
   FileTextIcon,
+  FolderIcon,
   ListChecksIcon,
   NetworkIcon,
   PlayIcon,
   PlusIcon,
+  RefreshCwIcon,
   SearchIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -56,16 +59,65 @@ import {
   useDeleteAutoresearchObjective,
   useIntegrationStatus,
   useRunSchedulerJob,
+  useRefreshVaultExplorer,
   useSaveToVault,
+  useSaveVaultFile,
   useStartAutoresearchObjective,
   useUpdateRuntimeSchedulerJob,
   useUpdateRuntimeSchedulerJobTime,
+  useVaultExplorer,
+  useVaultFile,
   useVaultGraph,
   useVaultSearch,
   useVaultStatus,
 } from "@/core/control-plane";
 import { useI18n } from "@/core/i18n/hooks";
 import { formatTimeAgo } from "@/core/utils/datetime";
+
+type TreeNode = {
+  name: string;
+  path: string;
+  kind: "directory" | "file";
+  children?: TreeNode[];
+};
+
+function insertTreePath(nodes: TreeNode[], path: string) {
+  const clean = path.trim().replace(/^\/+/, "");
+  if (!clean) return;
+  const parts = clean.split("/").filter(Boolean);
+  let cursor = nodes;
+  let full = "";
+  parts.forEach((part, index) => {
+    full = full ? `${full}/${part}` : part;
+    let node = cursor.find((item) => item.path === full);
+    if (!node) {
+      node = {
+        name: part,
+        path: full,
+        kind: index === parts.length - 1 ? "file" : "directory",
+        children: [],
+      };
+      cursor.push(node);
+    }
+    if (index < parts.length - 1) {
+      node.kind = "directory";
+      node.children = node.children ?? [];
+      cursor = node.children;
+    }
+  });
+}
+
+function sortTree(nodes: TreeNode[]): TreeNode[] {
+  return [...nodes]
+    .sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === "directory" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    })
+    .map((item) => ({
+      ...item,
+      children: item.children ? sortTree(item.children) : undefined,
+    }));
+}
 
 const SCHEDULE_OPTIONS = Array.from({ length: 96 }, (_, i) => {
   const h = Math.floor(i / 4).toString().padStart(2, "0");
@@ -119,6 +171,9 @@ export default function VaultPage() {
   });
   const { vaultStatus } = useVaultStatus({ refetchInterval: 20_000 });
   const { vaultGraph } = useVaultGraph({ refetchInterval: 20_000, limit: 120 });
+  const { explorer, isLoading: explorerLoading } = useVaultExplorer();
+  const refreshExplorer = useRefreshVaultExplorer();
+  const saveVaultFile = useSaveVaultFile();
   const startAutoresearch = useStartAutoresearchObjective();
   const runSchedulerJob = useRunSchedulerJob();
   const saveToVault = useSaveToVault();
@@ -132,6 +187,12 @@ export default function VaultPage() {
   const [saveTitle, setSaveTitle] = useState("");
   const [saveContent, setSaveContent] = useState("");
   const [objectiveProgress, setObjectiveProgress] = useState<Record<string, number>>({});
+  const [leftSection, setLeftSection] = useState<"raw" | "knowledge" | "files">("raw");
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [previewTab, setPreviewTab] = useState<"preview" | "graph">("preview");
+  const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
+  const { vaultFile, isLoading: vaultFileLoading } = useVaultFile(selectedPath);
+  const [editableContent, setEditableContent] = useState("");
   const toText = (value: unknown) => (typeof value === "string" ? value : "");
   const firstNonEmpty = (...values: string[]) =>
     values.map((item) => item.trim()).find((item) => item.length > 0) ?? "";
@@ -139,10 +200,105 @@ export default function VaultPage() {
     enabled: searchQuery.trim().length > 1,
     limit: 8,
   });
+  const rawTree = useMemo(() => {
+    const root: TreeNode[] = [];
+    (explorer?.raw_sources ?? []).forEach((item) => {
+      if (item.raw_path) insertTreePath(root, item.raw_path);
+    });
+    return sortTree(root);
+  }, [explorer?.raw_sources]);
+
+  const knowledgeTree = useMemo(() => {
+    const groups: Array<{ label: string; key: "entities" | "concepts" | "sources" | "others" }> = [
+      { label: "Entities", key: "entities" },
+      { label: "Concepts", key: "concepts" },
+      { label: "Sources", key: "sources" },
+      { label: "Others", key: "others" },
+    ];
+    return groups.map((group) => ({
+      name: group.label,
+      path: `knowledge/${group.key}`,
+      kind: "directory" as const,
+      children: sortTree(
+        (explorer?.knowledge?.[group.key] ?? []).map((node) => ({
+          name: node.name,
+          path: node.path,
+          kind: node.kind === "directory" ? "directory" : "file",
+          children: (node.children ?? []).map((child) => ({
+            name: child.name,
+            path: child.path,
+            kind: child.kind === "directory" ? "directory" : "file",
+            children: child.children as TreeNode[] | undefined,
+          })),
+        })),
+      ),
+    }));
+  }, [explorer?.knowledge]);
+
+  const filesTree = useMemo(
+    () =>
+      sortTree(
+        (explorer?.files ?? []).map((node) => ({
+          name: node.name,
+          path: node.path,
+          kind: node.kind === "directory" ? "directory" : "file",
+          children: node.children as TreeNode[] | undefined,
+        })),
+      ),
+    [explorer?.files],
+  );
+
+  const togglePath = (path: string) => {
+    setExpandedPaths((current) => ({ ...current, [path]: !current[path] }));
+  };
+
+  const renderTree = (nodes: TreeNode[], depth = 0): ReactNode =>
+    nodes.map((node) => {
+      const isDir = node.kind === "directory";
+      const isOpen = Boolean(expandedPaths[node.path]);
+      const hasChildren = Boolean(node.children && node.children.length > 0);
+      return (
+        <div key={node.path}>
+          <button
+            className="flex w-full items-center gap-1 rounded px-2 py-1 text-left hover:bg-muted"
+            style={{ paddingLeft: `${8 + depth * 14}px` }}
+            onClick={() => {
+              if (isDir) {
+                togglePath(node.path);
+                return;
+              }
+              setSelectedPath(node.path);
+            }}
+          >
+            {isDir ? (
+              <>
+                {hasChildren ? (
+                  isOpen ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />
+                ) : (
+                  <span className="inline-block size-3.5" />
+                )}
+                <FolderIcon className="size-3.5" />
+              </>
+            ) : (
+              <>
+                <span className="inline-block size-3.5" />
+                <FileTextIcon className="size-3.5" />
+              </>
+            )}
+            <span className={selectedPath === node.path ? "font-medium" : ""}>{node.name}</span>
+          </button>
+          {isDir && isOpen && hasChildren ? renderTree(node.children ?? [], depth + 1) : null}
+        </div>
+      );
+    });
 
   useEffect(() => {
     document.title = `${t.pages.vault} - ${t.pages.appName}`;
   }, [t.pages.appName, t.pages.vault]);
+
+  useEffect(() => {
+    setEditableContent(vaultFile?.content ?? "");
+  }, [vaultFile?.content, vaultFile?.path]);
 
   const handleSaveToVault = () => {
     const title = saveTitle.trim();
@@ -252,6 +408,94 @@ export default function VaultPage() {
           </div>
 
           <div className="grid gap-4 p-6 md:grid-cols-2 xl:grid-cols-3">
+            <Card className="md:col-span-2 xl:col-span-3">
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-base">Knowledge Vault Directory</CardTitle>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    toast.message("Vault refresh started. Cached snapshot will update when complete.");
+                    refreshExplorer.mutate(undefined, {
+                      onSuccess: () => toast.success("Vault cache refreshed."),
+                      onError: (error) => toast.error(error.message),
+                    });
+                  }}
+                  disabled={refreshExplorer.isPending}
+                >
+                  <RefreshCwIcon className={`mr-2 size-4 ${refreshExplorer.isPending ? "animate-spin" : ""}`} />
+                  {refreshExplorer.isPending ? "Refreshing..." : "Refresh Cache"}
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="space-y-3 rounded-md border p-3">
+                    <div className="flex gap-2">
+                      <Button size="sm" variant={leftSection === "raw" ? "default" : "outline"} onClick={() => setLeftSection("raw")}>Raw Sources</Button>
+                      <Button size="sm" variant={leftSection === "knowledge" ? "default" : "outline"} onClick={() => setLeftSection("knowledge")}>Knowledge</Button>
+                      <Button size="sm" variant={leftSection === "files" ? "default" : "outline"} onClick={() => setLeftSection("files")}>Files</Button>
+                    </div>
+                    <div className="max-h-80 overflow-y-auto space-y-1 text-xs">
+                      {leftSection === "raw" && renderTree(rawTree)}
+                      {leftSection === "knowledge" && renderTree(knowledgeTree)}
+                      {leftSection === "files" && renderTree(filesTree)}
+                      {!explorerLoading && !(explorer?.raw_sources?.length || explorer?.files?.length) && (
+                        <p className="text-muted-foreground px-1">No cached vault items yet.</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-3 rounded-md border p-3">
+                    <div className="flex gap-2">
+                      <Button size="sm" variant={previewTab === "preview" ? "default" : "outline"} onClick={() => setPreviewTab("preview")}>Preview</Button>
+                      <Button size="sm" variant={previewTab === "graph" ? "default" : "outline"} onClick={() => setPreviewTab("graph")}>Knowledge Graph</Button>
+                    </div>
+                    {previewTab === "preview" ? (
+                      <div className="space-y-2">
+                        <p className="text-muted-foreground text-xs">{selectedPath ?? "Select a file to preview."}</p>
+                        <Textarea
+                          value={editableContent}
+                          onChange={(event) => setEditableContent(event.target.value)}
+                          className="min-h-72 font-mono text-xs"
+                          readOnly={!vaultFile?.editable}
+                          placeholder={vaultFileLoading ? "Loading..." : "No file selected"}
+                        />
+                        {vaultFile?.editable && (
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              if (!vaultFile?.path) return;
+                              saveVaultFile.mutate(
+                                { path: vaultFile.path, content: editableContent },
+                                {
+                                  onSuccess: () => toast.success("Raw source updated."),
+                                  onError: (error) => toast.error(error.message),
+                                },
+                              );
+                            }}
+                            disabled={saveVaultFile.isPending}
+                          >
+                            {saveVaultFile.isPending ? "Saving..." : "Save Raw Source"}
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-2 text-xs">
+                        <p>Nodes: {Number(explorer?.graph?.counts?.nodes ?? vaultGraph?.counts?.nodes ?? 0)}</p>
+                        <p>Edges: {Number(explorer?.graph?.counts?.edges ?? vaultGraph?.counts?.edges ?? 0)}</p>
+                        <div className="max-h-72 space-y-1 overflow-y-auto rounded border p-2">
+                          {(explorer?.graph?.nodes ?? vaultGraph?.nodes ?? []).slice(0, 40).map((node) => (
+                            <div key={node.id} className="text-muted-foreground">
+                              {node.kind}: {node.label}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
             <Card className="xl:col-span-1">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-base">

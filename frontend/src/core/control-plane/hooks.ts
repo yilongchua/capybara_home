@@ -18,6 +18,8 @@ import {
   getPipelineRunArtifact,
   getVaultActionItems,
   getVaultGraph,
+  getVaultExplorer,
+  getVaultFile,
   getIntegrationStatus,
   getIntegrationServicesStatus,
   getVaultStatus,
@@ -33,11 +35,13 @@ import {
   resolveProposalApproval,
   runSchedulerJob,
   saveToVault,
+  saveVaultFile,
   searchVault,
   setIntegrationServiceEnabled,
   startIntegrationService,
   startAutoresearchObjective,
   startPipelineRun,
+  refreshVaultExplorer,
   resumeAutoresearchObjective,
 } from "./api";
 import type {
@@ -55,6 +59,8 @@ import type {
   VaultGraphResponse,
   VaultSufficiencyRequest,
   VaultStatusResponse,
+  VaultExplorerResponse,
+  VaultFileWriteRequest,
   StartAutoresearchObjectiveRequest,
 } from "./types";
 
@@ -178,6 +184,49 @@ export function useVaultGraph(options?: { refetchInterval?: number; limit?: numb
     refreshDomains: ["vault"],
   });
   return { vaultGraph: data ?? null, isLoading, error };
+}
+
+export function useVaultExplorer(options?: { refetchInterval?: number }) {
+  const { data, isLoading, error } = useWorkspaceRefreshQuery<VaultExplorerResponse>({
+    queryKey: ["control-plane", "vault-explorer"],
+    queryFn: () => getVaultExplorer(),
+    refetchInterval: options?.refetchInterval,
+    refreshDomains: ["vault"],
+  });
+  return { explorer: data ?? null, isLoading, error };
+}
+
+export function useVaultFile(path: string | null) {
+  const { data, isLoading, error } = useWorkspaceRefreshQuery({
+    queryKey: ["control-plane", "vault-file", path ?? ""],
+    queryFn: () => getVaultFile(path!),
+    enabled: Boolean(path && path.trim().length > 0),
+    refreshDomains: ["vault"],
+  });
+  return { vaultFile: data ?? null, isLoading, error };
+}
+
+export function useRefreshVaultExplorer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => refreshVaultExplorer(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "vault-explorer"] });
+      publishControlPlaneRefresh(["vault"]);
+    },
+  });
+}
+
+export function useSaveVaultFile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: VaultFileWriteRequest) => saveVaultFile(request),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "vault-file"] });
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "vault-explorer"] });
+      publishControlPlaneRefresh(["vault"]);
+    },
+  });
 }
 
 export function useEvaluateVaultSufficiency() {

@@ -8,7 +8,9 @@ export type SlashCommandName =
   | "analyse"
   | "publishdocs"
   | "autoresearch"
-  | "rename";
+  | "rename"
+  | "vault-save"
+  | "vault-search";
 
 export type SlashCommandParseResult = {
   isSlash: boolean;
@@ -30,6 +32,8 @@ const SUPPORTED_COMMANDS: SlashCommandName[] = [
   "publishdocs",
   "autoresearch",
   "rename",
+  "vault-save",
+  "vault-search",
 ];
 
 export function isSupportedSlashCommand(commandName: string): commandName is SlashCommandName {

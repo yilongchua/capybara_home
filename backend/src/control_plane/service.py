@@ -94,6 +94,9 @@ class ControlPlaneService:
         self._templates = TemplatesService(self._store)
         self._proposals = ProposalsService(self._store, self)
         self._scheduler = SchedulerService(self._store, self)
+        self._vault_explorer_cache: dict[str, Any] = {}
+        self._vault_explorer_cache_ttl_seconds = 300
+        self._vault_explorer_cache_lock = threading.Lock()
         self._seed_from_config()
 
     def _build_agent_registry(self) -> dict[str, Any]:
@@ -1118,6 +1121,130 @@ class ControlPlaneService:
     def get_vault_source(self, source_id: str) -> dict[str, Any]:
         manager = self._default_vault_manager()
         return manager.get_source(source_id)
+
+    def get_vault_explorer(self, *, force_refresh: bool = False) -> dict[str, Any]:
+        manager = self._default_vault_manager()
+        now = time.time()
+        with self._vault_explorer_cache_lock:
+            cached_generated_at = float(self._vault_explorer_cache.get("generated_at_unix") or 0.0)
+            is_fresh = (now - cached_generated_at) < self._vault_explorer_cache_ttl_seconds
+            if self._vault_explorer_cache and is_fresh and not force_refresh:
+                return dict(self._vault_explorer_cache.get("payload") or {})
+
+        payload = self._build_vault_explorer_payload(manager)
+        with self._vault_explorer_cache_lock:
+            self._vault_explorer_cache = {
+                "generated_at_unix": now,
+                "payload": payload,
+            }
+        return payload
+
+    def _build_vault_explorer_payload(self, manager: VaultLearningManager) -> dict[str, Any]:
+        def _safe_rel(path: Path) -> str:
+            try:
+                return str(path.resolve().relative_to(manager.vault_root))
+            except Exception:
+                return str(path.resolve())
+
+        def _tree(path: Path) -> list[dict[str, Any]]:
+            entries: list[dict[str, Any]] = []
+            for item in sorted(path.iterdir() if path.exists() else [], key=lambda p: (not p.is_dir(), p.name.lower())):
+                node: dict[str, Any] = {
+                    "name": item.name,
+                    "path": _safe_rel(item),
+                    "kind": "directory" if item.is_dir() else "file",
+                }
+                if item.is_dir():
+                    node["children"] = _tree(item)
+                else:
+                    try:
+                        node["size"] = int(item.stat().st_size)
+                    except OSError:
+                        node["size"] = 0
+                entries.append(node)
+            return entries
+
+        sources = list(manager._manifest.get("sources", {}).items())
+        raw_sources = sorted(
+            [
+                {
+                    "source_id": source_id,
+                    "title": str(record.get("title") or record.get("url") or source_id),
+                    "url": str(record.get("url") or ""),
+                    "ingested_at": str(record.get("last_ingested_at") or record.get("created_at") or ""),
+                    "raw_path": _safe_rel(Path(str(record.get("raw_path") or ""))) if str(record.get("raw_path") or "").strip() else "",
+                    "compiled_path": _safe_rel(Path(str(record.get("compiled_path") or ""))) if str(record.get("compiled_path") or "").strip() else "",
+                }
+                for source_id, record in sources
+                if isinstance(record, dict)
+            ],
+            key=lambda item: item["ingested_at"],
+            reverse=True,
+        )
+
+        knowledge_groups = {
+            "entities": _tree(manager.compiled_entities_dir),
+            "concepts": _tree(manager.compiled_concepts_dir),
+            "sources": _tree(manager.compiled_sources_dir),
+            "others": _tree(manager.compiled_dir / "syntheses") + _tree(manager.compiled_dir / "queries"),
+        }
+
+        graph = manager.get_graph(limit=200)
+        return {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "cache_ttl_seconds": self._vault_explorer_cache_ttl_seconds,
+            "raw_sources": raw_sources,
+            "knowledge": knowledge_groups,
+            "files": _tree(manager.vault_root),
+            "graph": {
+                "generated_at": graph.get("generated_at"),
+                "counts": graph.get("counts", {}),
+                "nodes": graph.get("nodes", []),
+                "edges": graph.get("edges", []),
+            },
+        }
+
+    def get_vault_file(self, *, relative_path: str) -> dict[str, Any]:
+        manager = self._default_vault_manager()
+        resolved = self._resolve_vault_file_path(manager, relative_path)
+        content = resolved.read_text(encoding="utf-8")
+        editable = self._is_vault_raw_source_path(manager, resolved)
+        return {
+            "path": str(resolved.relative_to(manager.vault_root)),
+            "editable": editable,
+            "content": content,
+        }
+
+    def save_vault_file(self, *, relative_path: str, content: str) -> dict[str, Any]:
+        manager = self._default_vault_manager()
+        resolved = self._resolve_vault_file_path(manager, relative_path)
+        if not self._is_vault_raw_source_path(manager, resolved):
+            raise ValueError("Only raw source files are editable.")
+        resolved.write_text(content, encoding="utf-8")
+        self.get_vault_explorer(force_refresh=True)
+        return {
+            "status": "saved",
+            "path": str(resolved.relative_to(manager.vault_root)),
+            "bytes": len(content.encode("utf-8")),
+        }
+
+    def _resolve_vault_file_path(self, manager: VaultLearningManager, relative_path: str) -> Path:
+        normalized = relative_path.strip().lstrip("/")
+        if not normalized:
+            raise ValueError("Path is required.")
+        target = (manager.vault_root / normalized).resolve()
+        if manager.vault_root not in target.parents and target != manager.vault_root:
+            raise ValueError("Path is outside vault root.")
+        if not target.exists() or not target.is_file():
+            raise ValueError("Vault file not found.")
+        return target
+
+    def _is_vault_raw_source_path(self, manager: VaultLearningManager, path: Path) -> bool:
+        try:
+            relative = path.resolve().relative_to(manager.vault_root).as_posix()
+        except Exception:
+            return False
+        return relative.startswith("01_raw/sources/")
 
     def list_vault_action_items(self, *, limit: int = 100) -> dict[str, Any]:
         manager = self._default_vault_manager()

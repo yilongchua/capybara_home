@@ -96,6 +96,7 @@ class VaultLearningManager:
                 cot_model="",
                 vector_search_enabled=False,
                 vector_backend="hash",
+                vector_embedding_model="",
                 vector_dimensions=256,
                 vector_chunk_chars=1200,
                 vector_chunk_overlap_chars=200,

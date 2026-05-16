@@ -1,4 +1,5 @@
 import {
+  ChevronDownIcon,
   ChevronRightIcon,
   DownloadIcon,
   FolderIcon,
@@ -31,6 +32,13 @@ import { cn } from "@/lib/utils";
 
 import { useDirectory } from "./context";
 
+type FileTreeNode = {
+  name: string;
+  fullPath: string;
+  kind: "directory" | "file";
+  children: FileTreeNode[];
+};
+
 export function ArtifactFileList({
   className,
   files,
@@ -56,6 +64,7 @@ export function ArtifactFileList({
   const clearMountedFolder = useClearMountedFolder(threadId);
   const { data: mountedFolderFiles } = useMountedFolderFiles(threadId, Boolean(mountedFolder));
   const { pickFolder, isPicking } = useFolderPicker();
+  const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
 
   const { mountedFiles, createdFiles } = useMemo(() => {
     const mounted: string[] = [];
@@ -106,36 +115,49 @@ export function ArtifactFileList({
     return map;
   }, [mountedFiles]);
 
-  const buildEntries = useCallback(
-    (index: Map<string, string>, currentPath: string) => {
-      const dirs = new Set<string>();
-      const filesInCurrent: { rel: string; full: string }[] = [];
-      const normalized = currentPath ? `${currentPath.replace(/^\/+|\/+$/g, "")}/` : "";
-      for (const [rel, full] of index.entries()) {
-        if (!rel.startsWith(normalized)) continue;
-        const rest = rel.slice(normalized.length);
-        if (!rest || rest.startsWith("/")) continue;
-        const slashIndex = rest.indexOf("/");
-        if (slashIndex >= 0) {
-          dirs.add(rest.slice(0, slashIndex));
-          continue;
+  const buildTree = useCallback((index: Map<string, string>, rootLabel: string) => {
+    const roots: FileTreeNode[] = [
+      { name: rootLabel, fullPath: rootLabel, kind: "directory", children: [] },
+    ];
+    const root = roots[0]!;
+    for (const [rel, full] of index.entries()) {
+      const parts = rel.split("/").filter(Boolean);
+      let cursor = root;
+      for (let i = 0; i < parts.length; i += 1) {
+        const part = parts[i]!;
+        const isLeaf = i === parts.length - 1;
+        const nextFull = isLeaf ? full : `${cursor.fullPath}/${part}`;
+        let child = cursor.children.find((node) => node.name === part && node.kind === (isLeaf ? "file" : "directory"));
+        if (!child) {
+          child = {
+            name: part,
+            fullPath: nextFull,
+            kind: isLeaf ? "file" : "directory",
+            children: [],
+          };
+          cursor.children.push(child);
         }
-        filesInCurrent.push({ rel: rest, full });
+        cursor = child;
       }
-      const directoryEntries = Array.from(dirs).sort((a, b) => a.localeCompare(b));
-      filesInCurrent.sort((a, b) => a.rel.localeCompare(b.rel));
-      return { directoryEntries, filesInCurrent };
-    },
-    [],
-  );
+    }
+    const sortNodes = (nodes: FileTreeNode[]): FileTreeNode[] =>
+      [...nodes]
+        .sort((a, b) => {
+          if (a.kind !== b.kind) return a.kind === "directory" ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        })
+        .map((node) => ({ ...node, children: sortNodes(node.children) }));
+    root.children = sortNodes(root.children);
+    return root;
+  }, []);
 
-  const createdEntries = useMemo(
-    () => buildEntries(createdIndex, createdPath),
-    [buildEntries, createdIndex, createdPath],
+  const createdTree = useMemo(
+    () => buildTree(createdIndex, "/mnt/user-data/workspace"),
+    [buildTree, createdIndex],
   );
-  const mountedEntries = useMemo(
-    () => buildEntries(mountedIndex, mountedPath),
-    [buildEntries, mountedIndex, mountedPath],
+  const mountedTree = useMemo(
+    () => buildTree(mountedIndex, "/mnt/user-data/mounted"),
+    [buildTree, mountedIndex],
   );
 
   const handleClick = useCallback(
@@ -255,79 +277,44 @@ export function ArtifactFileList({
     [handleClick, handleInstallSkill, installingFile, mountedFolder, t, threadId],
   );
 
-  const renderBreadcrumb = useCallback(
-    (
-      label: string,
-      currentPath: string,
-      onPathChange: (path: string) => void,
-    ) => {
-      const parts = currentPath ? currentPath.split("/").filter(Boolean) : [];
-      let running = "";
-      return (
-        <div className="flex flex-wrap items-center gap-1 text-xs">
-          <button
-            type="button"
-            className={cn(
-              "text-foreground hover:text-foreground rounded px-1 py-0.5",
-              parts.length === 0 && "text-foreground font-medium",
-            )}
-            onClick={() => onPathChange("")}
-          >
-            {label}
-          </button>
-          {parts.map((part, index) => {
-            running = running ? `${running}/${part}` : part;
-            const isLast = index === parts.length - 1;
-            return (
-              <span key={running} className="flex items-center gap-1">
-                <ChevronRightIcon className="size-3" />
-                <button
-                  type="button"
-                  className={cn(
-                    "hover:text-foreground rounded px-1 py-0.5",
-                    isLast && "text-foreground font-medium",
-                  )}
-                  onClick={() => onPathChange(running)}
-                >
-                  {part}
-                </button>
-              </span>
-            );
-          })}
-        </div>
-      );
-    },
-    [],
-  );
-
-  const renderFolderRows = useCallback(
-    (
-      folders: string[],
-      currentPath: string,
-      onPathChange: (path: string) => void,
-    ) =>
-      folders.map((folder) => {
-        const next = currentPath ? `${currentPath}/${folder}` : folder;
+  const renderTree = useCallback(
+    (node: FileTreeNode, source: "created" | "mounted", depth = 0): React.ReactNode => {
+      if (node.kind === "file") {
         return (
-          <li key={`dir:${next}`}>
-            <button
-              type="button"
-              className="hover:bg-muted/50 grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-1.5 text-left"
-              onClick={() => onPathChange(next)}
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <FolderIcon className="text-muted-foreground size-4 shrink-0" />
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{folder}</p>
-                  <p className="text-muted-foreground truncate text-xs">Directory</p>
-                </div>
-              </div>
-              <ChevronRightIcon className="text-muted-foreground size-4" />
-            </button>
+          <li key={node.fullPath} className={depth > 0 ? "ml-0" : ""}>
+            <div style={{ paddingLeft: `${depth * 14}px` }}>
+              {renderRow(node.fullPath, source)}
+            </div>
           </li>
         );
-      }),
-    [],
+      }
+      const isOpen = expandedPaths[node.fullPath] ?? depth <= 1;
+      return (
+        <li key={node.fullPath}>
+          <button
+            type="button"
+            className="hover:bg-muted/50 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left"
+            style={{ paddingLeft: `${depth * 14 + 8}px` }}
+            onClick={() =>
+              setExpandedPaths((current) => ({
+                ...current,
+                [node.fullPath]: !isOpen,
+              }))
+            }
+          >
+            {isOpen ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
+            <FolderIcon className="text-muted-foreground size-4 shrink-0" />
+            <div className="min-w-0">
+              <p className={cn("truncate text-sm", depth <= 1 ? "font-medium" : "")}>{node.name}</p>
+            </div>
+          </button>
+          {isOpen && node.children.length > 0 ? (
+            <ul className="space-y-0.5">{node.children.map((child) => renderTree(child, source, depth + 1))}</ul>
+          ) : null}
+        </li>
+      );
+    },
+    [expandedPaths, renderRow],
   );
 
   return (
@@ -338,14 +325,8 @@ export function ArtifactFileList({
           <span className="font-medium uppercase tracking-wide">Created Files</span>
         </div>
         {createdFiles.length > 0 ? (
-          <div className="px-1">
-            {renderBreadcrumb("/mnt/user-data/workspace", createdPath, onCreatedPathChange)}
-          </div>
-        ) : null}
-        {createdFiles.length > 0 ? (
-          <ul className="divide-border border-border divide-y rounded-md border">
-            {renderFolderRows(createdEntries.directoryEntries, createdPath, onCreatedPathChange)}
-            {createdEntries.filesInCurrent.map((entry) => renderRow(entry.full, "created"))}
+          <ul className="space-y-0.5 rounded-md border p-1">
+            {renderTree(createdTree, "created")}
           </ul>
         ) : (
           <div className="text-muted-foreground rounded-md border px-3 py-2 text-xs">
@@ -390,16 +371,10 @@ export function ArtifactFileList({
                 Detected folder: <span className="text-foreground">/mnt/user-data/mounted/.docs</span>
               </div>
             )}
-            {mountedFiles.length > 0 && (
-              <div className="pt-1">
-                {renderBreadcrumb("/mnt/user-data/mounted", mountedPath, onMountedPathChange)}
-              </div>
-            )}
           </div>
           {mountedFiles.length > 0 ? (
-            <ul className="divide-border border-border divide-y rounded-md border">
-              {renderFolderRows(mountedEntries.directoryEntries, mountedPath, onMountedPathChange)}
-              {mountedEntries.filesInCurrent.map((entry) => renderRow(entry.full, "mounted"))}
+            <ul className="space-y-0.5 rounded-md border p-1">
+              {renderTree(mountedTree, "mounted")}
             </ul>
           ) : (
             <div className="text-muted-foreground rounded-md border px-3 py-2 text-xs">

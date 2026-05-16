@@ -315,6 +315,53 @@ export interface VaultWriteResponse {
   raw_path?: string | null;
 }
 
+export interface VaultExplorerFileNode {
+  name: string;
+  path: string;
+  kind: "directory" | "file" | string;
+  size?: number;
+  children?: VaultExplorerFileNode[];
+}
+
+export interface VaultExplorerSourceItem {
+  source_id: string;
+  title: string;
+  url: string;
+  ingested_at: string;
+  raw_path: string;
+  compiled_path: string;
+}
+
+export interface VaultExplorerResponse {
+  generated_at: string;
+  cache_ttl_seconds: number;
+  raw_sources: VaultExplorerSourceItem[];
+  knowledge: {
+    entities: VaultExplorerFileNode[];
+    concepts: VaultExplorerFileNode[];
+    sources: VaultExplorerFileNode[];
+    others: VaultExplorerFileNode[];
+  };
+  files: VaultExplorerFileNode[];
+  graph: {
+    generated_at?: string;
+    counts?: Record<string, unknown>;
+    nodes?: VaultGraphNode[];
+    edges?: VaultGraphEdge[];
+  };
+}
+
+export interface VaultFileResponse {
+  path: string;
+  editable: boolean;
+  content: string;
+}
+
+export interface VaultFileWriteRequest {
+  path: string;
+  content: string;
+}
+
 export interface VaultSaveRequest {
   title: string;
   content: string;

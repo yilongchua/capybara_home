@@ -95,6 +95,7 @@ class UnifiedVaultSearchService:
                     chunk_chars=int(vault_cfg.vector_chunk_chars),
                     overlap_chars=int(vault_cfg.vector_chunk_overlap_chars),
                     backend=str(vault_cfg.vector_backend),
+                    embedding_model=str(vault_cfg.vector_embedding_model),
                 )
                 if self._vector_enabled
                 else None

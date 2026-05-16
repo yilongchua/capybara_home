@@ -31,6 +31,9 @@ import type {
   VaultSufficiencyResponse,
   VaultStatusResponse,
   VaultWriteResponse,
+  VaultExplorerResponse,
+  VaultFileResponse,
+  VaultFileWriteRequest,
 } from "./types";
 
 async function parseError(response: Response, fallback: string) {
@@ -246,6 +249,50 @@ export async function getVaultGraph(limit = 200): Promise<VaultGraphResponse> {
     await parseError(response, `Failed to load vault graph: ${response.statusText}`);
   }
   return response.json() as Promise<VaultGraphResponse>;
+}
+
+export async function getVaultExplorer(): Promise<VaultExplorerResponse> {
+  const response = await fetch(`${getBackendBaseURL()}/api/vault/explorer`);
+  if (!response.ok) {
+    await parseError(response, `Failed to load vault explorer: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultExplorerResponse>;
+}
+
+export async function refreshVaultExplorer(): Promise<VaultExplorerResponse> {
+  const response = await fetch(`${getBackendBaseURL()}/api/vault/explorer/refresh`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    await parseError(response, `Failed to refresh vault explorer: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultExplorerResponse>;
+}
+
+export async function getVaultFile(path: string): Promise<VaultFileResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/vault/file?path=${encodeURIComponent(path)}`,
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to load vault file: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultFileResponse>;
+}
+
+export async function saveVaultFile(request: VaultFileWriteRequest): Promise<{
+  status: string;
+  path: string;
+  bytes: number;
+}> {
+  const response = await fetch(`${getBackendBaseURL()}/api/vault/file`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    await parseError(response, `Failed to save vault file: ${response.statusText}`);
+  }
+  return response.json() as Promise<{ status: string; path: string; bytes: number }>;
 }
 
 export async function evaluateVaultSufficiency(

@@ -24,6 +24,7 @@
         font-weight: 600;
       }
       input, textarea, button {
+      input, textarea, button, select {
         width: 100%;
         box-sizing: border-box;
         border-radius: 10px;
@@ -50,19 +51,38 @@
       .hint {
         color: #57534e;
       }
+      .preview {
+        margin-top: 10px;
+        max-height: 140px;
+        overflow: auto;
+        border: 1px solid #d6d3d1;
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 11px;
+        white-space: pre-wrap;
+        background: #fff;
+      }
     </style>
   </head>
   <body>
     <h1>Save To Vault</h1>
     <label for="apiBase">API Base</label>
     <input id="apiBase" value="http://127.0.0.1:8001" />
+    <label for="mode">Clip Mode</label>
+    <select id="mode">
+      <option value="article">Article/Main</option>
+      <option value="selection">Selection</option>
+      <option value="full">Full Page</option>
+    </select>
     <label for="topic">Topic Hint</label>
     <input id="topic" placeholder="optional topic" />
     <label for="notes">Extra Notes</label>
     <textarea id="notes" placeholder="optional context to prepend"></textarea>
+    <button id="previewButton" type="button">Preview</button>
     <button id="clipButton">Clip Current Page</button>
+    <div id="preview" class="preview" hidden></div>
     <div id="status" class="hint"></div>
-    <div class="hint">Selection is preferred. Otherwise the extension clips the visible article text.</div>
+    <div class="hint">Tip: right-click page/selection for quick clip. Shortcut: Alt+Shift+V.</div>
     <script src="popup.js"></script>
   </body>
   </html>

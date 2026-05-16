@@ -124,6 +124,56 @@ class VaultGraphResponse(BaseModel):
     highlights: dict[str, Any] = Field(default_factory=dict)
 
 
+class VaultFileNode(BaseModel):
+    name: str
+    path: str
+    kind: str
+    size: int | None = None
+    children: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class VaultExplorerSourceItem(BaseModel):
+    source_id: str
+    title: str
+    url: str = ""
+    ingested_at: str = ""
+    raw_path: str = ""
+    compiled_path: str = ""
+
+
+class VaultExplorerKnowledgeResponse(BaseModel):
+    entities: list[VaultFileNode] = Field(default_factory=list)
+    concepts: list[VaultFileNode] = Field(default_factory=list)
+    sources: list[VaultFileNode] = Field(default_factory=list)
+    others: list[VaultFileNode] = Field(default_factory=list)
+
+
+class VaultExplorerResponse(BaseModel):
+    generated_at: str
+    cache_ttl_seconds: int
+    raw_sources: list[VaultExplorerSourceItem] = Field(default_factory=list)
+    knowledge: VaultExplorerKnowledgeResponse = Field(default_factory=VaultExplorerKnowledgeResponse)
+    files: list[VaultFileNode] = Field(default_factory=list)
+    graph: dict[str, Any] = Field(default_factory=dict)
+
+
+class VaultFileResponse(BaseModel):
+    path: str
+    editable: bool
+    content: str
+
+
+class VaultFileWriteRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+    content: str = ""
+
+
+class VaultFileWriteResponse(BaseModel):
+    status: str
+    path: str
+    bytes: int
+
+
 @router.get("/status", response_model=VaultStatusResponse)
 async def get_vault_status() -> VaultStatusResponse:
     service = get_control_plane_service()
@@ -197,6 +247,40 @@ async def get_vault_graph(limit: int = Query(200, ge=1, le=1000)) -> VaultGraphR
     service = get_control_plane_service()
     payload = service.get_vault_graph(limit=limit)
     return VaultGraphResponse.model_validate(payload)
+
+
+@router.get("/explorer", response_model=VaultExplorerResponse)
+async def get_vault_explorer() -> VaultExplorerResponse:
+    service = get_control_plane_service()
+    payload = service.get_vault_explorer(force_refresh=False)
+    return VaultExplorerResponse.model_validate(payload)
+
+
+@router.post("/explorer/refresh", response_model=VaultExplorerResponse)
+async def refresh_vault_explorer() -> VaultExplorerResponse:
+    service = get_control_plane_service()
+    payload = service.get_vault_explorer(force_refresh=True)
+    return VaultExplorerResponse.model_validate(payload)
+
+
+@router.get("/file", response_model=VaultFileResponse)
+async def get_vault_file(path: str = Query(..., min_length=1)) -> VaultFileResponse:
+    service = get_control_plane_service()
+    try:
+        payload = service.get_vault_file(relative_path=path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return VaultFileResponse.model_validate(payload)
+
+
+@router.post("/file", response_model=VaultFileWriteResponse)
+async def write_vault_file(request: VaultFileWriteRequest) -> VaultFileWriteResponse:
+    service = get_control_plane_service()
+    try:
+        payload = service.save_vault_file(relative_path=request.path, content=request.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return VaultFileWriteResponse.model_validate(payload)
 
 
 @router.post("/sufficiency/evaluate", response_model=VaultSufficiencyResponse)
