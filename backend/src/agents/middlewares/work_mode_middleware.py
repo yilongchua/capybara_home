@@ -67,6 +67,7 @@ class WorkModeMiddlewareState(AgentState):
     phase_execution: NotRequired[dict | None]
     dreamy_mode: NotRequired[bool]
     complexity_tier: NotRequired[str | None]
+    deferred_task_calls: NotRequired[list[dict] | None]
 
 
 def _normalize_plan_status(raw: Any) -> str:
@@ -200,6 +201,7 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
 
         graph = state.get("todo_graph") or {}
         nodes: list[dict] | None = graph.get("nodes") if isinstance(graph, dict) else None
+        graph_update: dict[str, Any] | None = None
 
         # ── No plan yet ────────────────────────────────────────────────────────
         if not nodes:
@@ -222,6 +224,33 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
                 plan_status = "approved"
             if plan_status not in {"approved", "executing", "completed"}:
                 return None
+
+        # ── Self-heal stale in-progress todos ──────────────────────────────────
+        # If a previous run was interrupted (reload/crash/manual stop), todos can
+        # remain "in_progress" even though no subagent is currently running.
+        # Re-queue them as pending so Work Mode can retry automatically.
+        deferred_calls = state.get("deferred_task_calls") or []
+        running_deferred = [
+            item for item in deferred_calls
+            if isinstance(item, dict) and item.get("status") not in {"completed", "failed", "timed_out"}
+        ]
+        stale_in_progress_ids = [
+            str(n.get("id"))
+            for n in nodes
+            if isinstance(n, dict) and n.get("status") == "in_progress" and n.get("id")
+        ]
+        if stale_in_progress_ids and not running_deferred:
+            repaired_nodes: list[dict] = []
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                node_id = str(node.get("id") or "")
+                if node_id and node_id in stale_in_progress_ids:
+                    repaired_nodes.append({**node, "status": "pending"})
+                else:
+                    repaired_nodes.append(node)
+            nodes = repaired_nodes
+            graph_update = {**graph, "nodes": repaired_nodes}
 
         # ── Detect newly completed todos from previous cycle ───────────────────
         current_completed: frozenset[str] = frozenset(
@@ -283,7 +312,7 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
         if not pending_ready:
             if plan_state and plan_status in {"approved", "executing"}:
                 plan_id = str(plan_state.get("plan_id") or "").strip() or None
-                return {
+                update_payload: dict[str, Any] = {
                     "plan": {
                         **plan_state,
                         "status": "completed",
@@ -291,6 +320,9 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
                     },
                     "plan_history": _update_plan_history_status(plan_history, plan_id, "completed"),
                 }
+                if graph_update is not None:
+                    update_payload["todo_graph"] = graph_update
+                return update_payload
             return None
 
         # ── Emit phase_started and inject instruction ──────────────────────────
@@ -390,6 +422,8 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
             },
             "messages": [instruction],
         }
+        if graph_update is not None:
+            update_payload["todo_graph"] = graph_update
         if plan_update is not None:
             update_payload["plan"] = plan_update
             update_payload["plan_history"] = plan_history
