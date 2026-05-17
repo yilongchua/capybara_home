@@ -65,11 +65,13 @@ class TestClientInit:
                 thinking_enabled=False,
                 subagent_enabled=True,
                 plan_mode=True,
+                auto_mode=True,
             )
         assert c._model_name == "gpt-4"
         assert c._thinking_enabled is False
         assert c._subagent_enabled is True
         assert c._plan_mode is True
+        assert c._auto_mode is True
 
     def test_custom_config_path(self, mock_app_config):
         with (
@@ -185,6 +187,22 @@ class TestStream:
         assert types[-1] == "end"
         msg_events = _ai_events(events)
         assert msg_events[0].data["content"] == "Hello!"
+
+    def test_stream_forwards_auto_mode_context(self, client):
+        """stream() forwards auto/work mode flags used by runtime middleware."""
+        agent = _make_agent_mock([{"messages": [AIMessage(content="ok", id="ai-1")]}])
+
+        with (
+            patch.object(client, "_ensure_agent"),
+            patch.object(client, "_agent", agent),
+        ):
+            list(client.stream("hi", thread_id="t-auto", auto_mode=True, subagent_enabled=True))
+
+        _, kwargs = agent.stream.call_args
+        assert kwargs["context"]["auto_mode"] is True
+        assert kwargs["context"]["mode"] == "work"
+        assert kwargs["context"]["plan_behavior"] == "work_interactive"
+        assert kwargs["context"]["subagent_enabled"] is True
 
     def test_tool_call_and_result(self, client):
         """stream() emits messages-tuple events for tool calls and results."""

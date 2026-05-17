@@ -108,6 +108,7 @@ class CapybaraClient:
         thinking_enabled: bool = True,
         subagent_enabled: bool = False,
         plan_mode: bool = False,
+        auto_mode: bool = False,
     ):
         """Initialize the client.
 
@@ -122,6 +123,7 @@ class CapybaraClient:
             thinking_enabled: Enable model's extended thinking.
             subagent_enabled: Enable subagent delegation.
             plan_mode: Enable TodoList middleware for plan mode.
+            auto_mode: Automatically continue through plan/clarification gates.
         """
         if config_path is not None:
             reload_app_config(config_path)
@@ -132,6 +134,7 @@ class CapybaraClient:
         self._thinking_enabled = thinking_enabled
         self._subagent_enabled = subagent_enabled
         self._plan_mode = plan_mode
+        self._auto_mode = auto_mode
 
         # Lazy agent — created on first call, recreated when config changes.
         self._agent = None
@@ -177,7 +180,11 @@ class CapybaraClient:
             "thinking_enabled": overrides.get("thinking_enabled", self._thinking_enabled),
             "is_plan_mode": overrides.get("plan_mode", self._plan_mode),
             "subagent_enabled": overrides.get("subagent_enabled", self._subagent_enabled),
+            "auto_mode": overrides.get("auto_mode", self._auto_mode),
         }
+        mode = str(overrides.get("mode") or ("plan" if configurable["is_plan_mode"] else "work"))
+        configurable["mode"] = mode
+        configurable["plan_behavior"] = overrides.get("plan_behavior") or ("plan_foreground" if mode == "plan" else "work_interactive")
         return RunnableConfig(
             configurable=configurable,
             recursion_limit=overrides.get("recursion_limit", 100),
@@ -319,7 +326,16 @@ class CapybaraClient:
         state: dict[str, Any] = {"messages": [HumanMessage(content=message)]}
         cfg = config.get("configurable") or {}
         resolved_model = ModelRouter(app_config=self._app_config).resolve("generator", requested_model=cfg.get("model_name"))
-        context = {"thread_id": thread_id, "model_name": resolved_model}
+        context = {
+            "thread_id": thread_id,
+            "model_name": resolved_model,
+            "thinking_enabled": cfg.get("thinking_enabled", True),
+            "is_plan_mode": cfg.get("is_plan_mode", False),
+            "mode": cfg.get("mode", "work"),
+            "subagent_enabled": cfg.get("subagent_enabled", False),
+            "plan_behavior": cfg.get("plan_behavior", "work_interactive"),
+            "auto_mode": cfg.get("auto_mode", False),
+        }
 
         seen_ids: set[str] = set()
 

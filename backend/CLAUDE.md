@@ -393,6 +393,7 @@ Both can be modified at runtime via Gateway API endpoints or `CapybaraClient` me
 - Supports `checkpointer` parameter for state persistence across turns
 - `resume_run(thread_id, run_id, ...)` resumes from persisted thread checkpoints using `Command(resume=...)`
 - `reset_agent()` forces agent recreation (e.g. after memory or skill changes)
+- `auto_mode=True` is supported at client construction or per `chat()`/`stream()` call; the client forwards the same work-mode runtime context used by the frontend (`mode`, `plan_behavior`, `auto_mode`, `subagent_enabled`)
 
 **Gateway Equivalent Methods** (replaces Gateway API):
 

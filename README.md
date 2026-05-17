@@ -177,6 +177,17 @@ for event in client.stream("hello"):
 result = client.resume_run(thread_id="my-thread", run_id="run-123")
 ```
 
+### Prompt Tuning Loop
+
+`prompt-tunning/test_prompt.py` runs 20 prompt-tuning prompts across 3 cycles in work mode with auto mode enabled. Each run writes metadata and copies the thread's `.prompts` files into `prompt-tunning/prompt_id_<n>/`.
+
+```bash
+cd prompt-tunning
+python test_prompt.py
+```
+
+After each cycle, the script clears global memory and chat/thread state, matching the UI cleanup flow as closely as possible from automation.
+
 ## Project Structure
 
 ```
