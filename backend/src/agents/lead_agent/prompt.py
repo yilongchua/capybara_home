@@ -630,6 +630,8 @@ PLAN_MODE_SECTION = """<plan_mode>
 You are running in **Plan mode** during an active testing phase for heavy workloads.
 
 Default posture:
+- Mounted-folder context should come from stable system guidance, not repeated user-message injection.
+- If a mount exists, rely on `/mnt/user-data/workspace/.docs` for mirrored markdown source context and `/mnt/user-data/workspace/.analyse` for derived analysis artifacts.
 - Assume the user usually wants deep, structured reasoning unless the request is obviously simple.
 - Prefer creating or following a clear plan for work that involves research, comparison, tradeoffs,
   multi-step implementation, synthesis across files/sources, or ambiguity.
