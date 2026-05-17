@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 from langchain.chat_models import BaseChatModel
 
 from src.config import get_app_config, get_tracing_config, is_tracing_enabled
+from src.models.prompt_logging import PromptLoggingCallback
 from src.reflection import resolve_class
 
 logger = logging.getLogger(__name__)
@@ -133,6 +134,12 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
             model_instance.callbacks = [*existing_callbacks, ThinkingStreamCallback()]
         except Exception as e:
             logger.debug("Could not attach ThinkingStreamCallback: %s", e)
+
+    try:
+        existing_callbacks = list(model_instance.callbacks or [])
+        model_instance.callbacks = [*existing_callbacks, PromptLoggingCallback()]
+    except Exception as e:
+        logger.debug("Could not attach PromptLoggingCallback: %s", e)
 
     if is_tracing_enabled():
         try:
