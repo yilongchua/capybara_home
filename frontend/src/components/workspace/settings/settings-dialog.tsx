@@ -5,6 +5,8 @@ import {
   InfoIcon,
   BrainIcon,
   PaletteIcon,
+  ClockIcon,
+  FlaskConicalIcon,
   WrenchIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -18,8 +20,10 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { AboutSettingsPage } from "@/components/workspace/settings/about-settings-page";
 import { AppearanceSettingsPage } from "@/components/workspace/settings/appearance-settings-page";
+import { AutoresearchCleanupSettingsPage } from "@/components/workspace/settings/autoresearch-cleanup-settings-page";
 import { MemorySettingsPage } from "@/components/workspace/settings/memory-settings-page";
 import { NotificationSettingsPage } from "@/components/workspace/settings/notification-settings-page";
+import { PipelineCleanupSettingsPage } from "@/components/workspace/settings/pipeline-cleanup-settings-page";
 import { ToolSettingsPage } from "@/components/workspace/settings/tool-settings-page";
 import { useI18n } from "@/core/i18n/hooks";
 import { cn } from "@/lib/utils";
@@ -27,6 +31,8 @@ import { cn } from "@/lib/utils";
 type SettingsSection =
   | "appearance"
   | "memory"
+  | "pipelineCleanup"
+  | "autoresearchCleanup"
   | "tools"
   | "notification"
   | "about";
@@ -66,12 +72,24 @@ export function SettingsDialog(props: SettingsDialogProps) {
         label: t.settings.sections.memory,
         icon: BrainIcon,
       },
+      {
+        id: "pipelineCleanup",
+        label: t.settings.sections.pipelineCleanup,
+        icon: ClockIcon,
+      },
+      {
+        id: "autoresearchCleanup",
+        label: t.settings.sections.autoresearchCleanup,
+        icon: FlaskConicalIcon,
+      },
       { id: "tools", label: t.settings.sections.tools, icon: WrenchIcon },
       { id: "about", label: t.settings.sections.about, icon: InfoIcon },
     ],
     [
       t.settings.sections.appearance,
       t.settings.sections.memory,
+      t.settings.sections.pipelineCleanup,
+      t.settings.sections.autoresearchCleanup,
       t.settings.sections.tools,
       t.settings.sections.notification,
       t.settings.sections.about,
@@ -121,6 +139,8 @@ export function SettingsDialog(props: SettingsDialogProps) {
             <div className="space-y-8 p-6">
               {activeSection === "appearance" && <AppearanceSettingsPage />}
               {activeSection === "memory" && <MemorySettingsPage />}
+              {activeSection === "pipelineCleanup" && <PipelineCleanupSettingsPage />}
+              {activeSection === "autoresearchCleanup" && <AutoresearchCleanupSettingsPage />}
               {activeSection === "tools" && <ToolSettingsPage />}
               {activeSection === "notification" && <NotificationSettingsPage />}
               {activeSection === "about" && <AboutSettingsPage />}

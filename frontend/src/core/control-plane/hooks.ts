@@ -6,6 +6,8 @@ import {
 } from "../workspace-refresh";
 
 import {
+  cleanupAutoresearch,
+  cleanupPipelineRuns,
   createRuntimeSchedulerJob,
   evaluateVaultSufficiency,
   createFeedback,
@@ -49,6 +51,7 @@ import {
 } from "./api";
 import type {
   AutoresearchObjective,
+  CleanupPipelineRunsRequest,
   CreateFeedbackRequest,
   CreatePipelineRunRequest,
   ResolveProposalApprovalRequest,
@@ -320,6 +323,31 @@ export function useStartPipelineRun() {
       void queryClient.invalidateQueries({ queryKey: ["control-plane", "runs"] });
       void queryClient.invalidateQueries({ queryKey: ["control-plane", "approvals"] });
       publishControlPlaneRefresh(["runs", "approvals"]);
+    },
+  });
+}
+
+export function useCleanupPipelineRuns() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: CleanupPipelineRunsRequest) => cleanupPipelineRuns(request),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "runs"] });
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "autoresearch-objectives"] });
+      publishControlPlaneRefresh(["runs", "vault"]);
+    },
+  });
+}
+
+export function useCleanupAutoresearch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (includeRuns: boolean) => cleanupAutoresearch(includeRuns),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "runs"] });
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "autoresearch-objectives"] });
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "vault-status"] });
+      publishControlPlaneRefresh(["runs", "vault"]);
     },
   });
 }

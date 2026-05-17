@@ -130,3 +130,11 @@ export async function loadCompactions(workspaceId: string, limit = 100) {
   const json = await response.json();
   return (json?.items ?? []) as Array<Record<string, unknown>>;
 }
+
+export async function clearAllMemory(scope: MemoryScope = "global", workspaceId?: string | null) {
+  const response = await fetch(`${getBackendBaseURL()}/api/memory/clear?${scopeQuery(scope, workspaceId)}`, {
+    method: "POST",
+  });
+  await assertOk(response);
+  return response.json();
+}

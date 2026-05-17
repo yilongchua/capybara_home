@@ -71,6 +71,27 @@ class AutoresearchDeleteResponse(BaseModel):
     purge_result: dict[str, Any] = Field(default_factory=dict)
 
 
+class PipelineRunsCleanupRequest(BaseModel):
+    older_than_days: int = Field(default=14, ge=1, le=3650)
+    statuses: list[str] | None = None
+
+
+class PipelineRunsCleanupResponse(BaseModel):
+    deleted: int
+    deleted_run_ids: list[str] = Field(default_factory=list)
+    missing_run_ids: list[str] = Field(default_factory=list)
+
+
+class AutoresearchCleanupRequest(BaseModel):
+    include_runs: bool = True
+
+
+class AutoresearchCleanupResponse(BaseModel):
+    deleted_objectives: int
+    objective_ids: list[str] = Field(default_factory=list)
+    run_cleanup: dict[str, Any] = Field(default_factory=dict)
+
+
 @router.get("/pipelines", response_model=PipelineTemplateListResponse)
 async def list_pipelines() -> PipelineTemplateListResponse:
     service = get_control_plane_service()
@@ -143,6 +164,17 @@ async def start_pipeline_run(run_id: str) -> PipelineRun:
         return service.start_run(run_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/pipelines/runs/cleanup", response_model=PipelineRunsCleanupResponse)
+async def cleanup_pipeline_runs(request: PipelineRunsCleanupRequest) -> PipelineRunsCleanupResponse:
+    service = get_control_plane_service()
+    statuses = {str(item).strip() for item in (request.statuses or []) if str(item).strip()}
+    result = service.cleanup_old_scheduled_runs(
+        older_than_days=request.older_than_days,
+        statuses=statuses or None,
+    )
+    return PipelineRunsCleanupResponse.model_validate(result)
 
 
 @router.get("/pipelines/runs/{run_id}/artifacts/{artifact_name}")
@@ -254,3 +286,10 @@ async def delete_autoresearch(objective_id: str) -> AutoresearchDeleteResponse:
         return AutoresearchDeleteResponse.model_validate(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/pipelines/autoresearch/cleanup", response_model=AutoresearchCleanupResponse)
+async def cleanup_autoresearch(request: AutoresearchCleanupRequest) -> AutoresearchCleanupResponse:
+    service = get_control_plane_service()
+    payload = service.cleanup_autoresearch(include_runs=request.include_runs)
+    return AutoresearchCleanupResponse.model_validate(payload)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -238,6 +239,56 @@ class ControlPlaneService:
 
     def delete_autoresearch_objective(self, objective_id: str) -> dict[str, Any]:
         return self._autoresearch_orchestrator.delete_objective(objective_id=objective_id)
+
+    def cleanup_old_scheduled_runs(
+        self,
+        *,
+        older_than_days: int = 14,
+        statuses: set[str] | None = None,
+    ) -> dict[str, Any]:
+        now = utcnow()
+        cutoff = now - timedelta(days=max(1, older_than_days))
+        allowed_statuses = statuses or {"completed", "failed", "cancelled", "rejected"}
+        snapshot = self._store.read()
+        target_run_ids: list[str] = []
+        for run in snapshot.runs.values():
+            is_scheduled = bool(str(run.metadata.get("scheduler_job_id") or "").strip())
+            if not is_scheduled:
+                continue
+            if run.status not in allowed_statuses:
+                continue
+            if run.created_at >= cutoff:
+                continue
+            target_run_ids.append(run.id)
+        return self._delete_runs(run_ids=target_run_ids, reason="cleanup_old_scheduled_runs")
+
+    def cleanup_autoresearch(self, *, include_runs: bool = True) -> dict[str, Any]:
+        objectives = self.list_autoresearch_objectives()
+        deleted_objectives: list[str] = []
+        for objective in objectives:
+            try:
+                self.delete_autoresearch_objective(objective.objective_id)
+                deleted_objectives.append(objective.objective_id)
+            except ValueError:
+                continue
+
+        run_cleanup: dict[str, Any] = {"deleted": 0, "deleted_run_ids": []}
+        if include_runs:
+            snapshot = self._store.read()
+            target_run_ids = [
+                run.id
+                for run in snapshot.runs.values()
+                if bool(run.metadata.get("autoresearch_continuous"))
+                or run.template_id == "knowledge-vault-autoresearch"
+                or bool(str(run.metadata.get("objective_id") or run.inputs.get("objective_id") or "").strip())
+            ]
+            run_cleanup = self._delete_runs(run_ids=target_run_ids, reason="cleanup_autoresearch_runs")
+
+        return {
+            "deleted_objectives": len(deleted_objectives),
+            "objective_ids": deleted_objectives,
+            "run_cleanup": run_cleanup,
+        }
 
     def get_autoresearch_objective(self, objective_id: str) -> AutoresearchObjective:
         return self._autoresearch_orchestrator.get_objective(objective_id)
@@ -502,6 +553,44 @@ class ControlPlaneService:
         if limit is not None:
             return items[: max(1, limit)]
         return items
+
+    def _delete_runs(self, *, run_ids: list[str], reason: str) -> dict[str, Any]:
+        if not run_ids:
+            return {"deleted": 0, "deleted_run_ids": []}
+
+        run_id_set = set(run_ids)
+        deleted: list[str] = []
+        missing: list[str] = []
+        for run_id in run_ids:
+            run = self._store.read().runs.get(run_id)
+            if run is None:
+                missing.append(run_id)
+                continue
+            run_dir = self._run_dir(run_id)
+            if run_dir.exists() and run_dir.is_dir():
+                shutil.rmtree(run_dir, ignore_errors=True)
+            deleted.append(run_id)
+
+        def mutate(snapshot):
+            for run_id in run_id_set:
+                snapshot.runs.pop(run_id, None)
+            snapshot.approvals = {
+                approval_id: approval
+                for approval_id, approval in snapshot.approvals.items()
+                if approval.pipeline_run_id not in run_id_set
+            }
+            for state in snapshot.scheduler_jobs.values():
+                if state.last_run_id in run_id_set:
+                    state.last_run_id = None
+                    state.last_status = "never_run"
+
+        self._store.mutate(mutate)
+        self._append_audit_event(
+            "pipeline_runs_deleted",
+            f"Deleted {len(deleted)} pipeline runs ({reason}).",
+            metadata={"reason": reason, "deleted_run_ids": deleted, "missing_run_ids": missing},
+        )
+        return {"deleted": len(deleted), "deleted_run_ids": deleted, "missing_run_ids": missing}
 
     def get_run(self, run_id: str) -> PipelineRun:
         snapshot = self._store.read()

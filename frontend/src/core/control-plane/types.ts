@@ -279,6 +279,23 @@ export interface DeleteAutoresearchObjectiveResponse {
   purge_result: Record<string, unknown>;
 }
 
+export interface CleanupPipelineRunsRequest {
+  older_than_days: number;
+  statuses?: string[];
+}
+
+export interface CleanupPipelineRunsResponse {
+  deleted: number;
+  deleted_run_ids: string[];
+  missing_run_ids: string[];
+}
+
+export interface CleanupAutoresearchResponse {
+  deleted_objectives: number;
+  objective_ids: string[];
+  run_cleanup: Record<string, unknown>;
+}
+
 export interface VaultStatusResponse {
   summary: Record<string, unknown>;
   counts: Record<string, unknown>;

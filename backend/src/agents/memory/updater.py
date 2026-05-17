@@ -504,6 +504,24 @@ def forget_thread_facts(thread_id: str, *, scope: str = MEMORY_SCOPE_WORKSPACE, 
     return removed
 
 
+def clear_memory(
+    *,
+    scope: str = MEMORY_SCOPE_GLOBAL,
+    workspace_id: str | None = None,
+    source: str = "memory-ui",
+) -> dict[str, Any]:
+    normalized_scope = _normalize_scope(scope)
+    scope_id = workspace_id if normalized_scope == MEMORY_SCOPE_WORKSPACE else "global"
+    empty = _create_empty_memory(normalized_scope, scope_id=scope_id)
+    _save_memory_to_file(empty, source_thread=source, scope=normalized_scope, workspace_id=workspace_id)
+    get_memory_vector_store().upsert_facts(
+        scope=normalized_scope,
+        scope_id=workspace_id if normalized_scope == MEMORY_SCOPE_WORKSPACE else "global",
+        facts=[],
+    )
+    return empty
+
+
 def update_memory_from_conversation(
     messages: list[Any],
     thread_id: str | None = None,
@@ -523,4 +541,3 @@ def get_memory_version_reference(
     workspace_id: str | None = None,
 ) -> dict[str, Any] | None:
     return get_latest_memory_ref(agent_name, scope=scope, workspace_id=workspace_id)
-

@@ -126,6 +126,34 @@ export function MemorySettingsPage() {
         </div>
       </div>
 
+      <div className="rounded-lg border border-destructive/30 p-4 space-y-3">
+        <div className="font-medium">Delete All Memory</div>
+        <div className="text-sm text-muted-foreground">This permanently clears stored facts, rules, and summaries.</div>
+        <div className="flex gap-2">
+          <Button
+            variant="destructive"
+            onClick={() => {
+              if (!window.confirm("Delete all global memory? This cannot be undone.")) return;
+              globalMutations.clear.mutate();
+            }}
+            disabled={globalMutations.clear.isPending}
+          >
+            Delete Global Memory
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => {
+              if (!threadId) return;
+              if (!window.confirm("Delete all workspace memory for this thread? This cannot be undone.")) return;
+              workspaceMutations.clear.mutate();
+            }}
+            disabled={!threadId || workspaceMutations.clear.isPending}
+          >
+            Delete Workspace Memory
+          </Button>
+        </div>
+      </div>
+
       <div className="rounded-lg border p-4 space-y-3">
         <div className="font-medium">Compaction History</div>
         {!threadId ? <div className="text-sm text-muted-foreground">Open a chat thread to view compactions.</div> : null}

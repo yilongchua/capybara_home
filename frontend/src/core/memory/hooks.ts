@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   createBehaviorRule,
+  clearAllMemory,
   deleteBehaviorRule,
   deleteMemoryFact,
   forgetThreadMemory,
@@ -62,6 +63,10 @@ export function useMemoryMutations(scope: "global" | "workspace", workspaceId?: 
     mutationFn: (threadId: string) => forgetThreadMemory(String(workspaceId), threadId),
     onSuccess: invalidate,
   });
+  const clear = useMutation({
+    mutationFn: () => clearAllMemory(scope, workspaceId),
+    onSuccess: invalidate,
+  });
 
-  return { updateFact, removeFact, addRule, editRule, removeRule, forgetThread };
+  return { updateFact, removeFact, addRule, editRule, removeRule, forgetThread, clear };
 }

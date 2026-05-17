@@ -322,6 +322,8 @@ export const enUS: Translations = {
     sections: {
       appearance: "Appearance",
       memory: "Memory",
+      pipelineCleanup: "Pipeline Cleanup",
+      autoresearchCleanup: "Autoresearch Cleanup",
       tools: "Tools",
       notification: "Notification",
       about: "About",

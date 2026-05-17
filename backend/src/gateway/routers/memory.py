@@ -17,6 +17,7 @@ from src.agents.memory.store import (
 )
 from src.agents.memory.updater import (
     add_behavior_rule,
+    clear_memory,
     delete_behavior_rule,
     delete_fact,
     forget_thread_facts,
@@ -171,6 +172,13 @@ class ForgetThreadRequest(BaseModel):
 
 class CompactionEntriesResponse(BaseModel):
     items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class MemoryClearResponse(BaseModel):
+    success: bool = True
+    scope: str
+    scope_id: str
+    memory: MemoryResponse
 
 
 def _scope_args(scope: MemoryScope, workspace_id: str | None) -> tuple[str, str | None]:
@@ -396,3 +404,16 @@ async def get_compactions_endpoint(
 ) -> CompactionEntriesResponse:
     return CompactionEntriesResponse(items=read_compaction_entries(workspace_id, limit=limit))
 
+
+@router.post("/memory/clear", response_model=MemoryClearResponse, summary="Clear all memory in scope")
+async def clear_memory_endpoint(
+    scope: MemoryScope = Query(default="global"),
+    workspace_id: str | None = Query(default=None),
+) -> MemoryClearResponse:
+    normalized_scope, wsid = _scope_args(scope, workspace_id)
+    cleared = clear_memory(scope=normalized_scope, workspace_id=wsid)
+    return MemoryClearResponse(
+        scope=normalized_scope,
+        scope_id=wsid or "global",
+        memory=MemoryResponse(**cleared),
+    )

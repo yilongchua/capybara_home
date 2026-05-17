@@ -20,6 +20,9 @@ import type {
   StartAutoresearchObjectiveRequest,
   StartAutoresearchObjectiveResponse,
   DeleteAutoresearchObjectiveResponse,
+  CleanupAutoresearchResponse,
+  CleanupPipelineRunsRequest,
+  CleanupPipelineRunsResponse,
   AutoresearchObjective,
   SelfImproverDraftReport,
   StartupJob,
@@ -197,6 +200,32 @@ export async function deleteAutoresearchObjective(
     await parseError(response, `Failed to delete autoresearch objective: ${response.statusText}`);
   }
   return response.json() as Promise<DeleteAutoresearchObjectiveResponse>;
+}
+
+export async function cleanupPipelineRuns(
+  request: CleanupPipelineRunsRequest,
+): Promise<CleanupPipelineRunsResponse> {
+  const response = await fetch(`${getBackendBaseURL()}/api/pipelines/runs/cleanup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    await parseError(response, `Failed to clean pipeline runs: ${response.statusText}`);
+  }
+  return response.json() as Promise<CleanupPipelineRunsResponse>;
+}
+
+export async function cleanupAutoresearch(includeRuns = true): Promise<CleanupAutoresearchResponse> {
+  const response = await fetch(`${getBackendBaseURL()}/api/pipelines/autoresearch/cleanup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ include_runs: includeRuns }),
+  });
+  if (!response.ok) {
+    await parseError(response, `Failed to clean autoresearch data: ${response.statusText}`);
+  }
+  return response.json() as Promise<CleanupAutoresearchResponse>;
 }
 
 export async function getVaultStatus(): Promise<VaultStatusResponse> {

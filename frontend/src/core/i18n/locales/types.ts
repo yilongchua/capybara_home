@@ -269,6 +269,8 @@ export interface Translations {
     sections: {
       appearance: string;
       memory: string;
+      pipelineCleanup: string;
+      autoresearchCleanup: string;
       tools: string;
       notification: string;
       about: string;
