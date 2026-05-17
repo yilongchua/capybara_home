@@ -1117,9 +1117,14 @@ class ControlPlaneService:
             source_thread_id=source_thread_id,
         )
 
-    def get_vault_graph(self, *, limit: int = 200) -> dict[str, Any]:
+    def _default_vault_graph_limit(self) -> int:
+        configured = int(get_app_config().knowledge_vault.graph_limit)
+        return max(1, min(5000, configured))
+
+    def get_vault_graph(self, *, limit: int | None = None) -> dict[str, Any]:
         manager = self._default_vault_manager()
-        return manager.get_graph(limit=limit)
+        effective_limit = self._default_vault_graph_limit() if limit is None else max(1, int(limit))
+        return manager.get_graph(limit=effective_limit)
 
     def get_vault_source(self, source_id: str) -> dict[str, Any]:
         manager = self._default_vault_manager()
@@ -1192,7 +1197,7 @@ class ControlPlaneService:
             "others": _tree(manager.compiled_dir / "syntheses") + _tree(manager.compiled_dir / "queries"),
         }
 
-        graph = manager.get_graph(limit=200)
+        graph = manager.get_graph(limit=self._default_vault_graph_limit())
         return {
             "generated_at": datetime.now(UTC).isoformat(),
             "cache_ttl_seconds": self._vault_explorer_cache_ttl_seconds,

@@ -90,7 +90,10 @@ function sortTree(nodes: TreeNode[]): TreeNode[] {
 export default function VaultPage() {
   const { t } = useI18n();
   const { vaultStatus } = useVaultStatus({ refetchInterval: 20_000 });
-  const { explorer, isLoading: explorerLoading } = useVaultExplorer({ listenForRefreshEvents: false });
+  const { explorer, isLoading: explorerLoading } = useVaultExplorer({
+    refetchInterval: 10_000,
+    listenForRefreshEvents: true,
+  });
   const refreshExplorer = useRefreshVaultExplorer();
   const saveVaultFile = useSaveVaultFile();
   const deleteVaultFile = useDeleteVaultFile();
@@ -122,16 +125,9 @@ export default function VaultPage() {
   const [editorCollapsed, setEditorCollapsed] = useState(false);
   const editorPanelRef = usePanelRef();
   const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
-  const [explorerSnapshot, setExplorerSnapshot] = useState<VaultExplorerResponse | null>(null);
   const { vaultFile, isLoading: vaultFileLoading } = useVaultFile(selectedPath);
   const [editableContent, setEditableContent] = useState("");
-  useEffect(() => {
-    if (!explorerSnapshot && explorer) {
-      setExplorerSnapshot(explorer);
-    }
-  }, [explorer, explorerSnapshot]);
-
-  const effectiveExplorer = explorerSnapshot ?? explorer;
+  const effectiveExplorer: VaultExplorerResponse | null = explorer;
 
   const rawTree = useMemo(() => {
     const root: TreeNode[] = [];
@@ -238,6 +234,13 @@ export default function VaultPage() {
     const rawNodes = effectiveExplorer?.graph?.nodes ?? [];
     const rawEdges = effectiveExplorer?.graph?.edges ?? [];
     const MAX_GRAPH_NODES = 80;
+    const normalizeGraphKind = (value: string) => {
+      const kind = value.toLowerCase();
+      if (kind.includes("source")) return "source";
+      if (kind.includes("concept")) return "concept";
+      if (kind.includes("entity")) return "entity";
+      return "other";
+    };
 
     const normalized = (value: string) =>
       value
@@ -273,7 +276,7 @@ export default function VaultPage() {
 
     const nodesByKind = new Map<string, typeof nodes>();
     for (const node of nodes) {
-      const kind = (node.kind || "other").toLowerCase();
+      const kind = normalizeGraphKind(node.kind || "other");
       const bucket = nodesByKind.get(kind) ?? [];
       bucket.push(node);
       nodesByKind.set(kind, bucket);
@@ -382,10 +385,7 @@ export default function VaultPage() {
                     onClick={() => {
                       toast.message("Vault refresh started. Cached snapshot will update when complete.");
                       refreshExplorer.mutate(undefined, {
-                        onSuccess: (payload) => {
-                          setExplorerSnapshot(payload);
-                          toast.success("Vault cache refreshed.");
-                        },
+                        onSuccess: () => toast.success("Vault cache refreshed."),
                         onError: (error) => toast.error(error.message),
                       });
                     }}
@@ -398,10 +398,16 @@ export default function VaultPage() {
               </div>
               <div>
                 <ResizablePanelGroup
+                  id="vault-main-panel-group"
                   orientation="horizontal"
                   className="min-h-[78vh] gap-1"
                 >
-                  <ResizablePanel defaultSize={25} minSize={15} className="flex h-full flex-col space-y-3 rounded-md border p-3">
+                  <ResizablePanel
+                    id="vault-left-panel"
+                    defaultSize={25}
+                    minSize={15}
+                    className="flex h-full flex-col space-y-3 rounded-md border p-3"
+                  >
                     <div className="flex gap-2">
                       <Button size="sm" variant={leftSection === "raw" ? "default" : "outline"} onClick={() => setLeftSection("raw")}>Raw Sources</Button>
                       <Button size="sm" variant={leftSection === "knowledge" ? "default" : "outline"} onClick={() => setLeftSection("knowledge")}>Knowledge</Button>
@@ -450,8 +456,13 @@ export default function VaultPage() {
                       )}
                     </div>
                   </ResizablePanel>
-                  <ResizableHandle withHandle className="mx-2 bg-transparent" />
-                  <ResizablePanel defaultSize={75} minSize={30} className="flex h-full flex-col space-y-3 rounded-md border p-3">
+                  <ResizableHandle id="vault-main-handle" withHandle className="mx-2 bg-transparent" />
+                  <ResizablePanel
+                    id="vault-right-panel"
+                    defaultSize={75}
+                    minSize={30}
+                    className="flex h-full flex-col space-y-3 rounded-md border p-3"
+                  >
                     <div className="flex gap-2">
                       <Button size="sm" variant={previewTab === "preview" ? "default" : "outline"} onClick={() => setPreviewTab("preview")}>Preview</Button>
                       <Button size="sm" variant={previewTab === "graph" ? "default" : "outline"} onClick={() => setPreviewTab("graph")}>Knowledge Graph</Button>
@@ -535,10 +546,12 @@ export default function VaultPage() {
                           </div>
                         </div>
                         <ResizablePanelGroup
+                          id="vault-preview-panel-group"
                           orientation="horizontal"
                           className="min-h-0 flex-1"
                         >
                           <ResizablePanel
+                            id="vault-markdown-preview-panel"
                             defaultSize={60}
                             minSize={30}
                             className="min-h-0 overflow-y-auto rounded border p-3 text-sm"
@@ -551,10 +564,12 @@ export default function VaultPage() {
                             />
                           </ResizablePanel>
                           <ResizableHandle
+                            id="vault-preview-editor-handle"
                             withHandle
                             className={`mx-2 bg-transparent ${editorCollapsed ? "pointer-events-none opacity-0" : ""}`}
                           />
                           <ResizablePanel
+                            id="vault-editor-panel"
                             panelRef={editorPanelRef}
                             defaultSize={40}
                             minSize={20}

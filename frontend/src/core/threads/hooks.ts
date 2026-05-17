@@ -244,6 +244,21 @@ function isRetryableSteeringConflict(status: number, detail: string, failureStat
   return false;
 }
 
+function isRetryableSubmitConflictError(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : JSON.stringify(error);
+  const normalized = message.toLowerCase();
+  const isConflictStatus = normalized.includes("http 409") || normalized.includes("http 423");
+  if (!isConflictStatus) {
+    return false;
+  }
+  return normalized.includes("in-flight runs") || normalized.includes("temporarily locked");
+}
+
 export function useThreadStream({
   threadId,
   context,
@@ -274,6 +289,7 @@ export function useThreadStream({
   const activeSteerRequestRef = useRef<Set<string>>(new Set());
   const steeringLockUntilRef = useRef<Map<string, number>>(new Map());
   const steerRetryTimeoutRef = useRef<number | null>(null);
+  const queueRetryTimeoutRef = useRef<number | null>(null);
   const retrySteerRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const processQueueRef = useRef<() => void>(() => undefined);
 
@@ -355,6 +371,13 @@ export function useThreadStream({
     }
   }, []);
 
+  const clearScheduledQueueRetry = useCallback(() => {
+    if (queueRetryTimeoutRef.current !== null) {
+      window.clearTimeout(queueRetryTimeoutRef.current);
+      queueRetryTimeoutRef.current = null;
+    }
+  }, []);
+
   const scheduleSteerRetry = useCallback(
     (delayMs: number) => {
       clearScheduledSteerRetry();
@@ -369,8 +392,9 @@ export function useThreadStream({
   useEffect(
     () => () => {
       clearScheduledSteerRetry();
+      clearScheduledQueueRetry();
     },
-    [clearScheduledSteerRetry],
+    [clearScheduledQueueRetry, clearScheduledSteerRetry],
   );
 
   const queryClient = useQueryClient();
@@ -1277,6 +1301,7 @@ export function useThreadStream({
     applyQueue(remaining);
 
     let submitted = false;
+    let shouldRetryLater = false;
     void submitMessageNow(next.threadId, next.message, next.extraContext, next.options)
       .then(() => {
         submitted = true;
@@ -1284,6 +1309,15 @@ export function useThreadStream({
       .catch((error) => {
         const recovered = requeueFront(queueRef.current, next);
         applyQueue(recovered);
+        if (isRetryableSubmitConflictError(error)) {
+          shouldRetryLater = true;
+          clearScheduledQueueRetry();
+          queueRetryTimeoutRef.current = window.setTimeout(() => {
+            queueRetryTimeoutRef.current = null;
+            processQueueRef.current();
+          }, 2000);
+          return;
+        }
         console.error("Failed to send queued message:", error);
         toast.error("Failed to send queued message. It was returned to the queue.");
       })
@@ -1292,11 +1326,11 @@ export function useThreadStream({
         if (submitted) {
           void retrySteerRef.current();
         }
-        if (queueRef.current.length > 0) {
+        if (!shouldRetryLater && queueRef.current.length > 0) {
           processQueueRef.current();
         }
       });
-  }, [applyQueue, submitMessageNow, thread.isLoading]);
+  }, [applyQueue, clearScheduledQueueRetry, submitMessageNow, thread.isLoading]);
 
   useEffect(() => {
     processQueueRef.current = processQueue;

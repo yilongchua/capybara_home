@@ -272,7 +272,7 @@ async def list_vault_action_items(
 
 
 @router.get("/graph", response_model=VaultGraphResponse)
-async def get_vault_graph(limit: int = Query(200, ge=1, le=1000)) -> VaultGraphResponse:
+async def get_vault_graph(limit: int | None = Query(None, ge=1, le=5000)) -> VaultGraphResponse:
     service = get_control_plane_service()
     payload = service.get_vault_graph(limit=limit)
     return VaultGraphResponse.model_validate(payload)

@@ -2280,6 +2280,9 @@ class VaultLearningManager:
         failed = 0
         errors: list[dict[str, Any]] = []
 
+        if progress_callback is not None:
+            progress_callback(0, total, "", "", "started", None)
+
         for source_id, record in items:
             processed += 1
             title = str(record.get("title") or record.get("url") or source_id)

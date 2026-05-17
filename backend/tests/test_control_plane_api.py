@@ -159,6 +159,7 @@ def control_plane_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             enabled=True,
             path=str(tmp_path / "knowledge_vault"),
             min_trust_score=0.2,
+            graph_limit=400,
         ),
     )
 
@@ -582,6 +583,37 @@ def test_vault_clip_save_and_graph_api(control_plane_client: TestClient):
     assert graph_payload["counts"]["nodes"] >= 1
     assert isinstance(graph_payload["nodes"], list)
 
+
+def test_vault_graph_limit_defaults_from_config_and_explorer_snapshot_uses_it(
+    control_plane_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import src.control_plane.vault_learning as vault_learning_module
+
+    seen_limits: list[int] = []
+    original_get_graph = vault_learning_module.VaultLearningManager.get_graph
+
+    def patched_get_graph(self, *, limit: int = 200):  # noqa: ANN001
+        seen_limits.append(limit)
+        return original_get_graph(self, limit=limit)
+
+    monkeypatch.setattr(
+        vault_learning_module.VaultLearningManager,
+        "get_graph",
+        patched_get_graph,
+    )
+
+    graph_response = control_plane_client.get("/api/vault/graph")
+    assert graph_response.status_code == 200
+    assert seen_limits[-1] == 400
+
+    explicit_graph_response = control_plane_client.get("/api/vault/graph?limit=50")
+    assert explicit_graph_response.status_code == 200
+    assert seen_limits[-1] == 50
+
+    explorer_response = control_plane_client.get("/api/vault/explorer")
+    assert explorer_response.status_code == 200
+    assert seen_limits[-1] == 400
 
 def test_start_integration_service_success(
     control_plane_client: TestClient,

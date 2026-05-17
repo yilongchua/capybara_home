@@ -131,6 +131,12 @@ class KnowledgeVaultConfig(BaseModel):
         le=50000,
         description="Maximum queue entries retained before older terminal records are trimmed",
     )
+    graph_limit: int = Field(
+        default=400,
+        ge=1,
+        le=5000,
+        description="Default node limit for vault graph snapshots used by explorer and /api/vault/graph when no explicit limit is provided",
+    )
     vector_search_enabled: bool = Field(default=True, description="Enable local vector indexing and hybrid vault search")
     vector_backend: str = Field(
         default="openai_compatible",

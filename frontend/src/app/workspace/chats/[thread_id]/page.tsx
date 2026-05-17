@@ -74,11 +74,23 @@ function getMountedFolderName(
 }
 
 function formatMountedThreadTitle(title: string): string {
-  return `📁 ${title}`;
+  const trimmed = title.trim();
+  const normalized = trimmed.startsWith("📁 ")
+    ? trimmed.slice("📁 ".length).trim()
+    : trimmed;
+  return `📁 ${normalized}`;
 }
 
 function isMountPlaceholderTitle(title: string): boolean {
   return title === "" || title === "mount-drive";
+}
+
+function upsertNotice(
+  notices: LiveGenerationNotice[],
+  notice: LiveGenerationNotice,
+): LiveGenerationNotice[] {
+  const next = notices.filter((item) => item.id !== notice.id);
+  return [...next, notice];
 }
 
 export default function ChatPage() {
@@ -149,8 +161,11 @@ function ChatPageContent({
   const suppressedAutoExecutePlanKeyRef = useRef<string | null>(null);
   const executePlanRetryCountRef = useRef(0);
   const finalizedMountedTitleRef = useRef<string | null>(null);
+  const finalizingMountedTitleRef = useRef<string | null>(null);
   const mountBootstrapSentRef = useRef<string | null>(null);
   const renameThread = useRenameThread();
+  const mountStatusNoticeId = `mount-status-${threadId}`;
+  const mountedNoticeId = `mount-ready-${threadId}`;
 
   const isInFlightRunConflict = useCallback((statusCode: number, rawBody: string): boolean => {
     if (statusCode === 409 || statusCode === 423) {
@@ -256,19 +271,17 @@ function ChatPageContent({
       if (!content || custom.detail?.threadId !== threadId) {
         return;
       }
-      setUiNotices((prev) => [
-        ...prev,
-        {
-          id: `mounted-${Date.now()}`,
+      setUiNotices((prev) =>
+        upsertNotice(prev, {
+          id: mountedNoticeId,
           content,
-        },
-      ]);
+        }));
     };
     window.addEventListener("chat-mounted-notice", handler as EventListener);
     return () => {
       window.removeEventListener("chat-mounted-notice", handler as EventListener);
     };
-  }, [threadId]);
+  }, [mountedNoticeId, threadId]);
 
   useEffect(() => {
     const payload = getPendingChatLaunchPayload();
@@ -277,17 +290,15 @@ function ChatPageContent({
     }
     const normalizedMountedPath = payload.mountedPath?.trim();
     setPendingMountPath(normalizedMountedPath && normalizedMountedPath.length > 0 ? normalizedMountedPath : null);
-    setUiNotices((prev) => [
-      ...prev,
-      {
-        id: `mounting-${payload.targetThreadId}`,
+    setUiNotices((prev) =>
+      upsertNotice(prev, {
+        id: mountStatusNoticeId,
         content: payload.mountedPath
           ? `Mounting files from ${payload.mountedPath}...`
           : "Mounting files...",
-      },
-    ]);
+      }));
     clearPendingChatLaunchPayload();
-  }, [threadId]);
+  }, [mountStatusNoticeId, threadId]);
 
   useEffect(() => {
     if (!pendingMountPath) {
@@ -318,6 +329,9 @@ function ChatPageContent({
     if (finalizedMountedTitleRef.current === threadId) {
       return;
     }
+    if (finalizingMountedTitleRef.current === threadId) {
+      return;
+    }
     if (!mountedFolderFiles) {
       return;
     }
@@ -333,6 +347,9 @@ function ChatPageContent({
     if (currentTitle === formattedTitle) {
       finalizedMountedTitleRef.current = threadId;
       setPendingMountPath(null);
+      setUiNotices((prev) =>
+        prev.filter((notice) => notice.id !== mountStatusNoticeId),
+      );
       return;
     }
     if (!pendingMountPath && !isMountPlaceholderTitle(currentTitle) && currentTitle !== derivedTitle) {
@@ -340,6 +357,7 @@ function ChatPageContent({
     }
 
     void (async () => {
+      finalizingMountedTitleRef.current = threadId;
       try {
         await renameThread.mutateAsync({
           threadId,
@@ -347,12 +365,21 @@ function ChatPageContent({
         });
         finalizedMountedTitleRef.current = threadId;
         setPendingMountPath(null);
-        toast.success(`Mounted folder ready: ${formattedTitle}`);
+        setUiNotices((prev) =>
+          prev.filter((notice) => notice.id !== mountStatusNoticeId),
+        );
+        toast.success(`Mounted folder ready: ${formattedTitle}`, {
+          id: mountedNoticeId,
+        });
       } catch (error) {
         console.error("Failed to finalize mounted thread title:", error);
+      } finally {
+        if (finalizingMountedTitleRef.current === threadId) {
+          finalizingMountedTitleRef.current = null;
+        }
       }
     })();
-  }, [mountedFolder, mountedFolderFiles, pendingMountPath, renameThread, thread.values.title, threadId]);
+  }, [mountStatusNoticeId, mountedFolder, mountedFolderFiles, mountedNoticeId, pendingMountPath, renameThread, thread.values.title, threadId]);
 
   useEffect(() => {
     if (planCreatedEvent && settings.context.auto_mode === true) {
