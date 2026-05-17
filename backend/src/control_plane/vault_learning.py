@@ -2247,6 +2247,143 @@ class VaultLearningManager:
             "removed_paths": removed_paths,
         }
 
+    def reprocess_existing_sources(
+        self,
+        *,
+        only_missing: bool = True,
+        progress_callback: Any | None = None,
+    ) -> dict[str, Any]:
+        """Re-run analysis on already-ingested sources to backfill entities/concepts.
+
+        - When ``only_missing`` is True, skip sources whose manifest entry already
+          lists at least one entity_ref or concept_ref.
+        - ``progress_callback(index, total, source_id, title, status, error)`` is
+          invoked after each source so callers can surface progress to users.
+        """
+        sources = self._manifest.get("sources", {})
+        items = [
+            (source_id, record)
+            for source_id, record in sources.items()
+            if isinstance(record, dict) and str(record.get("status") or "") == "ingested"
+        ]
+        if only_missing:
+            items = [
+                (source_id, record)
+                for source_id, record in items
+                if not (record.get("entity_refs") or record.get("concept_refs"))
+            ]
+
+        total = len(items)
+        processed = 0
+        updated = 0
+        skipped_no_raw = 0
+        failed = 0
+        errors: list[dict[str, Any]] = []
+
+        for source_id, record in items:
+            processed += 1
+            title = str(record.get("title") or record.get("url") or source_id)
+            raw_path_str = str(record.get("raw_path") or "").strip()
+            if not raw_path_str:
+                skipped_no_raw += 1
+                if progress_callback is not None:
+                    progress_callback(processed, total, source_id, title, "skipped_no_raw", None)
+                continue
+            raw_path = Path(raw_path_str)
+            try:
+                raw_text = raw_path.read_text(encoding="utf-8") if raw_path.exists() else ""
+            except Exception as exc:
+                failed += 1
+                errors.append({"source_id": source_id, "reason": f"read_error:{exc}"})
+                if progress_callback is not None:
+                    progress_callback(processed, total, source_id, title, "failed", str(exc))
+                continue
+
+            if not raw_text.strip():
+                skipped_no_raw += 1
+                if progress_callback is not None:
+                    progress_callback(processed, total, source_id, title, "skipped_no_raw", None)
+                continue
+
+            raw_text = raw_text[: self.max_content_chars]
+            topic_tags = [str(item).strip() for item in record.get("topic_tags", []) if str(item).strip()]
+            topic_hint = topic_tags[0].replace("-", " ") if topic_tags else title
+            try:
+                analysis = self._analyze_source(
+                    title=title,
+                    url=str(record.get("url") or ""),
+                    topic=topic_hint,
+                    raw_text=raw_text,
+                    topic_tags=topic_tags,
+                    concept_refs=[],
+                    entity_refs=[],
+                    target_synthesis_refs=[],
+                )
+            except Exception as exc:
+                failed += 1
+                errors.append({"source_id": source_id, "reason": f"analysis_error:{exc}"})
+                if progress_callback is not None:
+                    progress_callback(processed, total, source_id, title, "failed", str(exc))
+                continue
+
+            entity_refs = [str(item).strip() for item in analysis.get("entities", []) if str(item).strip()]
+            concept_refs = [str(item).strip() for item in analysis.get("concepts", []) if str(item).strip()]
+
+            if not entity_refs and not concept_refs:
+                if progress_callback is not None:
+                    progress_callback(processed, total, source_id, title, "no_refs", None)
+                continue
+
+            for entity_ref in entity_refs:
+                self._update_reference_page(
+                    path=self._compiled_entity_path(entity_ref),
+                    title=entity_ref.replace("-", " ").title(),
+                    kind="entity",
+                    source_id=source_id,
+                    source_title=title,
+                    topic_tags=topic_tags,
+                )
+            for concept_ref in concept_refs:
+                self._update_reference_page(
+                    path=self._compiled_concept_path(concept_ref),
+                    title=concept_ref.replace("-", " ").title(),
+                    kind="concept",
+                    source_id=source_id,
+                    source_title=title,
+                    topic_tags=topic_tags,
+                )
+
+            record["entity_refs"] = sorted(set(record.get("entity_refs", []) + entity_refs))
+            record["concept_refs"] = sorted(set(record.get("concept_refs", []) + concept_refs))
+            record["last_reviewed_at"] = _utcnow_iso()
+            sources[source_id] = record
+            updated += 1
+
+            if updated % 25 == 0:
+                self._save_manifest()
+
+            if progress_callback is not None:
+                progress_callback(processed, total, source_id, title, "updated", None)
+
+        self._manifest["last_run_summary"] = {
+            "step": "reprocess",
+            "updated_at": _utcnow_iso(),
+            "processed": processed,
+            "updated": updated,
+            "skipped_no_raw": skipped_no_raw,
+            "failed": failed,
+        }
+        self._save_manifest()
+
+        return {
+            "total": total,
+            "processed": processed,
+            "updated": updated,
+            "skipped_no_raw": skipped_no_raw,
+            "failed": failed,
+            "errors": errors[:50],
+        }
+
 
 def _query_id_for_identity(query_text: str, topic_tags: list[str]) -> str:
     normalized = f"{query_text.strip().lower()}|{'|'.join(sorted(_slugify(tag) for tag in topic_tags if tag.strip()))}"

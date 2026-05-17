@@ -36,11 +36,14 @@ import {
   runSchedulerJob,
   saveToVault,
   saveVaultFile,
+  deleteVaultFile,
   searchVault,
   setIntegrationServiceEnabled,
   startIntegrationService,
   startAutoresearchObjective,
   startPipelineRun,
+  startVaultIngest,
+  getVaultIngestStatus,
   refreshVaultExplorer,
   resumeAutoresearchObjective,
 } from "./api";
@@ -61,6 +64,7 @@ import type {
   VaultStatusResponse,
   VaultExplorerResponse,
   VaultFileWriteRequest,
+  VaultIngestStatusResponse,
   StartAutoresearchObjectiveRequest,
 } from "./types";
 
@@ -186,12 +190,12 @@ export function useVaultGraph(options?: { refetchInterval?: number; limit?: numb
   return { vaultGraph: data ?? null, isLoading, error };
 }
 
-export function useVaultExplorer(options?: { refetchInterval?: number }) {
+export function useVaultExplorer(options?: { refetchInterval?: number; listenForRefreshEvents?: boolean }) {
   const { data, isLoading, error } = useWorkspaceRefreshQuery<VaultExplorerResponse>({
     queryKey: ["control-plane", "vault-explorer"],
     queryFn: () => getVaultExplorer(),
     refetchInterval: options?.refetchInterval,
-    refreshDomains: ["vault"],
+    refreshDomains: options?.listenForRefreshEvents === false ? [] : ["vault"],
   });
   return { explorer: data ?? null, isLoading, error };
 }
@@ -217,10 +221,52 @@ export function useRefreshVaultExplorer() {
   });
 }
 
+export function useVaultIngestStatus(options?: { refetchInterval?: number; enabled?: boolean }) {
+  const { data, isLoading, error } = useWorkspaceRefreshQuery<VaultIngestStatusResponse>({
+    queryKey: ["control-plane", "vault-ingest-status"],
+    queryFn: () => getVaultIngestStatus(),
+    enabled: options?.enabled ?? true,
+    refetchInterval: (query) => {
+      if (typeof options?.refetchInterval === "number") {
+        return options.refetchInterval;
+      }
+      const status = query.state.data?.status;
+      return status === "running" ? 2_000 : 15_000;
+    },
+    refreshDomains: ["vault"],
+  });
+  return { ingestStatus: data ?? null, isLoading, error };
+}
+
+export function useStartVaultIngest() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (options?: { forceReanalyze?: boolean }) => startVaultIngest(options),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "vault-ingest-status"] });
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "vault-status"] });
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "vault-explorer"] });
+      publishControlPlaneRefresh(["vault"]);
+    },
+  });
+}
+
 export function useSaveVaultFile() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (request: VaultFileWriteRequest) => saveVaultFile(request),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "vault-file"] });
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "vault-explorer"] });
+      publishControlPlaneRefresh(["vault"]);
+    },
+  });
+}
+
+export function useDeleteVaultFile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => deleteVaultFile(path),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["control-plane", "vault-file"] });
       void queryClient.invalidateQueries({ queryKey: ["control-plane", "vault-explorer"] });

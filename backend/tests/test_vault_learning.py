@@ -170,3 +170,79 @@ def test_status_includes_memory_progress_and_action_items(tmp_path: Path) -> Non
     assert "progress" in summary
     assert "action_items" in summary
     assert int(summary["memory"]["raw_bytes"]) >= 3
+
+
+def test_reprocess_existing_sources_backfills_entities_and_concepts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class _MockResponse:
+        def __init__(self) -> None:
+            self.text = (
+                "<html><head><title>Quantum Compute Review</title></head>"
+                "<body><main><p>Quantum hybrid architectures power scientific computing research today.</p></main></body></html>"
+            )
+
+        def raise_for_status(self) -> None:
+            return None
+
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _MockResponse())
+
+    vault = VaultLearningManager(vault_root=tmp_path, min_trust_score=0.2)
+    vault.ingest(
+        urls=["https://example.com/quantum-review"],
+        source="test",
+        topic="quantum hybrid computing",
+    )
+
+    # Simulate older buggy records that left entity_refs/concept_refs empty.
+    sources = vault._manifest["sources"]
+    assert sources, "Ingest should have produced at least one source"
+    for record in sources.values():
+        record["entity_refs"] = []
+        record["concept_refs"] = []
+    vault._save_manifest()
+
+    progress_events: list[tuple[int, int, str]] = []
+
+    def _track(index, total, source_id, title, status, error):  # noqa: ANN001
+        progress_events.append((index, total, status))
+
+    report = vault.reprocess_existing_sources(progress_callback=_track)
+
+    assert report["total"] >= 1
+    assert report["processed"] >= 1
+    assert progress_events, "Progress callback should fire at least once"
+    refreshed = list(vault._manifest["sources"].values())[0]
+    assert refreshed["concept_refs"], "Reprocess should backfill concept_refs"
+    compiled_concepts = list((tmp_path / "02_compiled" / "concepts").glob("*.md"))
+    assert any(path.name != "index.md" for path in compiled_concepts)
+
+
+def test_reprocess_existing_sources_only_missing_skips_populated(tmp_path: Path, monkeypatch) -> None:
+    class _MockResponse:
+        def __init__(self) -> None:
+            self.text = (
+                "<html><head><title>Maritime Data</title></head>"
+                "<body><main><p>Maritime quality programs continue to improve significantly.</p></main></body></html>"
+            )
+
+        def raise_for_status(self) -> None:
+            return None
+
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _MockResponse())
+
+    vault = VaultLearningManager(vault_root=tmp_path, min_trust_score=0.2)
+    vault.ingest(
+        urls=["https://example.com/maritime"],
+        source="test",
+        topic="maritime data quality",
+    )
+
+    for record in vault._manifest["sources"].values():
+        record["entity_refs"] = ["existing-entity"]
+        record["concept_refs"] = ["existing-concept"]
+    vault._save_manifest()
+
+    report = vault.reprocess_existing_sources(only_missing=True)
+    assert report["total"] == 0
+    assert report["processed"] == 0

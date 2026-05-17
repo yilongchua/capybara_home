@@ -1079,3 +1079,61 @@ def test_proposal_apply_rolls_back_on_post_write_validation_failure(
     assert payload["status"] == "apply_failed"
     assert "rolled back" in (payload.get("error") or "")
     assert skill_path.read_text(encoding="utf-8") == before
+
+
+def test_vault_ingest_endpoints_idle_then_start(control_plane_client: TestClient):
+    initial = control_plane_client.get("/api/vault/ingest/status")
+    assert initial.status_code == 200
+    initial_payload = initial.json()
+    assert initial_payload["status"] == "idle"
+    assert initial_payload["processed"] == 0
+
+    start_response = control_plane_client.post(
+        "/api/vault/ingest/start",
+        json={"force_reanalyze": False},
+    )
+    assert start_response.status_code == 200
+    started_payload = start_response.json()
+    assert started_payload["status"] in {"running", "success"}
+    assert started_payload["job_id"]
+    assert started_payload["log_path"].endswith("vault_ingest.log")
+    assert started_payload["accepted"] is True
+
+    # Wait briefly for the background thread to drain (zero sources → finishes fast).
+    import time
+
+    deadline = time.monotonic() + 5.0
+    final_payload = started_payload
+    while time.monotonic() < deadline:
+        status_response = control_plane_client.get("/api/vault/ingest/status")
+        assert status_response.status_code == 200
+        final_payload = status_response.json()
+        if final_payload["status"] in {"success", "failed", "idle"}:
+            break
+        time.sleep(0.05)
+    assert final_payload["status"] in {"success", "failed", "idle"}
+    if final_payload["status"] == "success":
+        assert final_payload["total"] == 0
+
+
+def test_vault_ingest_start_rejects_when_already_running(control_plane_client: TestClient, monkeypatch):
+    import src.gateway.routers.vault as vault_router_module
+
+    service = vault_router_module.get_control_plane_service()
+    # Force the job to look running so the next start call is rejected.
+    with service._vault_ingest_lock:  # noqa: SLF001
+        service._vault_ingest_job.update(  # noqa: SLF001
+            {"status": "running", "job_id": "preexisting-job"}
+        )
+    try:
+        response = control_plane_client.post(
+            "/api/vault/ingest/start",
+            json={"force_reanalyze": False},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["accepted"] is False
+        assert "already running" in (payload["message"] or "").lower()
+    finally:
+        with service._vault_ingest_lock:  # noqa: SLF001
+            service._vault_ingest_job = service._new_vault_ingest_job_state()  # noqa: SLF001

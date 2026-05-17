@@ -14,12 +14,11 @@ import {
 import { useDreamy } from "@/core/dreamy/context";
 import { useDreamyProgress } from "@/core/dreamy/hooks/use-dreamy-progress";
 import { useWorkflowJson } from "@/core/dreamy/hooks/use-workflow-json";
+import type { SelectedFile } from "@/core/dreamy/types";
 import { cn } from "@/lib/utils";
 
 import { DreamyAddStepDialog } from "./dreamy-add-step-dialog";
 import { DreamyDirectoryTab } from "./dreamy-directory-tab";
-import type { SelectedFile } from "@/core/dreamy/types";
-
 import { DreamyFilePreview } from "./dreamy-file-preview";
 import { DreamyStepEditor } from "./dreamy-step-editor";
 import { DreamyStepsList } from "./dreamy-steps-list";

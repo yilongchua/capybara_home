@@ -8,8 +8,12 @@ import { cn } from "@/lib/utils";
 
 function ResizablePanelGroup({
   className,
+  autoSaveId: _autoSaveId,
   ...props
-}: React.ComponentProps<typeof ResizablePrimitive.Group>) {
+}: React.ComponentProps<typeof ResizablePrimitive.Group> & {
+  // Legacy prop from older react-resizable-panels API; ignore to avoid leaking onto DOM.
+  autoSaveId?: string;
+}) {
   return (
     <ResizablePrimitive.Group
       data-slot="resizable-panel-group"

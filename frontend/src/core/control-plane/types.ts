@@ -394,6 +394,27 @@ export interface VaultGraphResponse {
   highlights: Record<string, unknown>;
 }
 
+export interface VaultIngestStatusResponse {
+  job_id: string;
+  status: "idle" | "running" | "success" | "failed" | string;
+  total: number;
+  processed: number;
+  updated: number;
+  skipped_no_raw: number;
+  failed: number;
+  current_index: number;
+  current_source_id: string;
+  current_title: string;
+  last_status: string;
+  last_error?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at?: string | null;
+  log_path: string;
+  accepted?: boolean | null;
+  message?: string | null;
+}
+
 export interface VaultActionItem {
   kind: string;
   priority: string;

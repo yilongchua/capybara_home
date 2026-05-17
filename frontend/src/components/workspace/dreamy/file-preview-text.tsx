@@ -1,10 +1,11 @@
 "use client";
 
+import { Streamdown } from "streamdown";
+
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CodeEditor } from "@/components/workspace/code-editor";
 import { useFilePreviewContent } from "@/core/dreamy/hooks/use-file-preview-content";
 import { streamdownPlugins } from "@/core/streamdown";
-import { Streamdown } from "streamdown";
 
 import { ErrorState, LoadingState } from "./file-preview-shared";
 

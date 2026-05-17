@@ -18,12 +18,12 @@ import {
 } from "@/components/ui/tooltip";
 import { getBackendBaseURL } from "@/core/config";
 import { useCheckpoint } from "@/core/dreamy/hooks/use-checkpoint";
-import { useI18n } from "@/core/i18n/hooks";
 import {
   isMacOS,
   useMacOSFileActions,
 } from "@/core/dreamy/hooks/use-macos-file-actions";
 import type { SelectedFile } from "@/core/dreamy/types";
+import { useI18n } from "@/core/i18n/hooks";
 import { checkCodeFile, getFileIcon } from "@/core/utils/files";
 
 import {

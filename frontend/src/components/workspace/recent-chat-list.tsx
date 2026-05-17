@@ -48,7 +48,11 @@ export function RecentChatList() {
   const router = useRouter();
   const pathname = usePathname();
   const { thread_id: threadIdFromPath } = useParams<{ thread_id: string }>();
-  const { data: threads = [] } = useThreads();
+  const {
+    data: threads = [],
+    isLoading: threadsLoading,
+    error: threadsError,
+  } = useThreads();
   const deleteThreadMutation = useDeleteThread();
   const { mutate: renameThread } = useRenameThread();
 
@@ -130,6 +134,36 @@ export function RecentChatList() {
     threadIdToDelete !== null
       ? threads.find((thread) => thread.thread_id === threadIdToDelete) ?? null
       : null;
+
+  if (threadsLoading) {
+    return (
+      <SidebarGroup>
+        <SidebarGroupLabel>
+          {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true"
+            ? t.sidebar.recentChats
+            : t.sidebar.demoChats}
+        </SidebarGroupLabel>
+        <SidebarGroupContent className="group-data-[collapsible=icon]:pointer-events-none group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0">
+          <p className="text-muted-foreground px-2 py-1 text-xs">Loading chats...</p>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    );
+  }
+
+  if (threadsError) {
+    return (
+      <SidebarGroup>
+        <SidebarGroupLabel>
+          {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true"
+            ? t.sidebar.recentChats
+            : t.sidebar.demoChats}
+        </SidebarGroupLabel>
+        <SidebarGroupContent className="group-data-[collapsible=icon]:pointer-events-none group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0">
+          <p className="text-destructive px-2 py-1 text-xs">Failed to load chats.</p>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    );
+  }
 
   if (threads.length === 0) {
     return null;

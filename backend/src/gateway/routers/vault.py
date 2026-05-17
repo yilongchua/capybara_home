@@ -124,6 +124,31 @@ class VaultGraphResponse(BaseModel):
     highlights: dict[str, Any] = Field(default_factory=dict)
 
 
+class VaultIngestStartRequest(BaseModel):
+    force_reanalyze: bool = False
+
+
+class VaultIngestStatusResponse(BaseModel):
+    job_id: str = ""
+    status: str = "idle"
+    total: int = 0
+    processed: int = 0
+    updated: int = 0
+    skipped_no_raw: int = 0
+    failed: int = 0
+    current_index: int = 0
+    current_source_id: str = ""
+    current_title: str = ""
+    last_status: str = ""
+    last_error: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    updated_at: str | None = None
+    log_path: str = ""
+    accepted: bool | None = None
+    message: str | None = None
+
+
 class VaultFileNode(BaseModel):
     name: str
     path: str
@@ -172,6 +197,10 @@ class VaultFileWriteResponse(BaseModel):
     status: str
     path: str
     bytes: int
+
+class VaultFileDeleteResponse(BaseModel):
+    status: str
+    path: str
 
 
 @router.get("/status", response_model=VaultStatusResponse)
@@ -263,6 +292,21 @@ async def refresh_vault_explorer() -> VaultExplorerResponse:
     return VaultExplorerResponse.model_validate(payload)
 
 
+@router.post("/ingest/start", response_model=VaultIngestStatusResponse)
+async def start_vault_ingest(request: VaultIngestStartRequest | None = None) -> VaultIngestStatusResponse:
+    service = get_control_plane_service()
+    force = bool(request.force_reanalyze) if request is not None else False
+    payload = service.start_vault_ingest_job(force_reanalyze=force)
+    return VaultIngestStatusResponse.model_validate(payload)
+
+
+@router.get("/ingest/status", response_model=VaultIngestStatusResponse)
+async def get_vault_ingest_status() -> VaultIngestStatusResponse:
+    service = get_control_plane_service()
+    payload = service.get_vault_ingest_status()
+    return VaultIngestStatusResponse.model_validate(payload)
+
+
 @router.get("/file", response_model=VaultFileResponse)
 async def get_vault_file(path: str = Query(..., min_length=1)) -> VaultFileResponse:
     service = get_control_plane_service()
@@ -281,6 +325,15 @@ async def write_vault_file(request: VaultFileWriteRequest) -> VaultFileWriteResp
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return VaultFileWriteResponse.model_validate(payload)
+
+@router.delete("/file", response_model=VaultFileDeleteResponse)
+async def delete_vault_file(path: str = Query(..., min_length=1)) -> VaultFileDeleteResponse:
+    service = get_control_plane_service()
+    try:
+        payload = service.delete_vault_file(relative_path=path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return VaultFileDeleteResponse.model_validate(payload)
 
 
 @router.post("/sufficiency/evaluate", response_model=VaultSufficiencyResponse)

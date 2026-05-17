@@ -1,73 +1,46 @@
 "use client";
 
 import {
-  CalendarClockIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  CopyIcon,
+  DownloadIcon,
   FileTextIcon,
   FolderIcon,
-  ListChecksIcon,
+  Loader2Icon,
+  NetworkIcon,
+  PanelRightCloseIcon,
+  PanelRightOpenIcon,
   PlayIcon,
-  PlusIcon,
   RefreshCwIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { usePanelRef } from "react-resizable-panels";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Progress } from "@/components/ui/progress";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Textarea } from "@/components/ui/textarea";
+import { MarkdownContent } from "@/components/workspace/messages/markdown-content";
 import {
   WorkspaceBody,
   WorkspaceContainer,
   WorkspaceHeader,
 } from "@/components/workspace/workspace-container";
-import { getBackendBaseURL } from "@/core/config";
 import {
-  useAutoresearchObjectives,
-  useDeleteAutoresearchObjective,
-  useIntegrationStatus,
-  useRunSchedulerJob,
+  useDeleteVaultFile,
   useRefreshVaultExplorer,
   useSaveVaultFile,
-  useStartAutoresearchObjective,
-  useUpdateRuntimeSchedulerJob,
-  useUpdateRuntimeSchedulerJobTime,
+  useStartVaultIngest,
   useVaultExplorer,
   useVaultFile,
+  useVaultIngestStatus,
   useVaultStatus,
 } from "@/core/control-plane";
+import type { VaultExplorerResponse } from "@/core/control-plane";
 import { useI18n } from "@/core/i18n/hooks";
-import { formatTimeAgo } from "@/core/utils/datetime";
+import { streamdownPlugins } from "@/core/streamdown";
 
 type TreeNode = {
   name: string;
@@ -114,85 +87,59 @@ function sortTree(nodes: TreeNode[]): TreeNode[] {
     }));
 }
 
-const SCHEDULE_OPTIONS = Array.from({ length: 96 }, (_, i) => {
-  const h = Math.floor(i / 4).toString().padStart(2, "0");
-  const m = ((i % 4) * 15).toString().padStart(2, "0");
-  return `${h}:${m}`;
-});
-
-function EndpointInput({
-  initialValue,
-  placeholder,
-  onSave,
-}: {
-  initialValue: string;
-  placeholder: string;
-  onSave: (value: string) => void;
-}) {
-  const [value, setValue] = useState(initialValue);
-  const savedRef = useRef(initialValue.trim());
-
-  useEffect(() => {
-    setValue(initialValue);
-    savedRef.current = initialValue.trim();
-  }, [initialValue]);
-
-  const commit = () => {
-    const trimmed = value.trim();
-    if (trimmed === savedRef.current) return;
-    savedRef.current = trimmed;
-    onSave(trimmed);
-  };
-
-  return (
-    <Textarea
-      className="max-h-36 min-h-24 overflow-y-auto text-xs"
-      placeholder={placeholder || "Enter endpoint goal…"}
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") e.currentTarget.blur();
-      }}
-    />
-  );
-}
-
 export default function VaultPage() {
   const { t } = useI18n();
-  const { integrationStatus } = useIntegrationStatus();
-  const { objectives, isLoading } = useAutoresearchObjectives({
-    refetchInterval: 20_000,
-  });
   const { vaultStatus } = useVaultStatus({ refetchInterval: 20_000 });
-  const { explorer, isLoading: explorerLoading } = useVaultExplorer();
+  const { explorer, isLoading: explorerLoading } = useVaultExplorer({ listenForRefreshEvents: false });
   const refreshExplorer = useRefreshVaultExplorer();
   const saveVaultFile = useSaveVaultFile();
-  const startAutoresearch = useStartAutoresearchObjective();
-  const runSchedulerJob = useRunSchedulerJob();
-  const deleteAutoresearchObjective = useDeleteAutoresearchObjective();
-  const updateSchedulerJobTime = useUpdateRuntimeSchedulerJobTime();
-  const updateSchedulerJob = useUpdateRuntimeSchedulerJob();
-  const [openCreateDialog, setOpenCreateDialog] = useState(false);
-  const [newTopic, setNewTopic] = useState("");
-  const [endpointGoal, setEndpointGoal] = useState("");
-  const [objectiveProgress, setObjectiveProgress] = useState<Record<string, number>>({});
+  const deleteVaultFile = useDeleteVaultFile();
+  const { ingestStatus } = useVaultIngestStatus();
+  const startIngest = useStartVaultIngest();
+  const ingestRunning = ingestStatus?.status === "running" || startIngest.isPending;
+  const ingestProgressLabel = (() => {
+    if (!ingestStatus) return "";
+    if (ingestStatus.status === "running") {
+      const total = ingestStatus.total || 0;
+      const current = ingestStatus.current_index || 0;
+      const title = (ingestStatus.current_title || "").trim();
+      const truncated = title.length > 48 ? `${title.slice(0, 48)}…` : title;
+      const totalLabel = total > 0 ? String(total) : "?";
+      return `Source ${current}/${totalLabel} ingesting${truncated ? ` ${truncated}` : "..."}`;
+    }
+    if (ingestStatus.status === "success" && ingestStatus.processed > 0) {
+      return `Last ingest: updated ${ingestStatus.updated} / ${ingestStatus.processed}`;
+    }
+    if (ingestStatus.status === "failed" && ingestStatus.last_error) {
+      return `Ingest failed: ${ingestStatus.last_error}`;
+    }
+    return "";
+  })();
   const [leftSection, setLeftSection] = useState<"raw" | "knowledge" | "files">("raw");
+  const [rootCollapsed, setRootCollapsed] = useState<Record<string, boolean>>({});
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [previewTab, setPreviewTab] = useState<"preview" | "graph">("preview");
+  const [editorCollapsed, setEditorCollapsed] = useState(false);
+  const editorPanelRef = usePanelRef();
   const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
+  const [explorerSnapshot, setExplorerSnapshot] = useState<VaultExplorerResponse | null>(null);
   const { vaultFile, isLoading: vaultFileLoading } = useVaultFile(selectedPath);
   const [editableContent, setEditableContent] = useState("");
-  const toText = (value: unknown) => (typeof value === "string" ? value : "");
-  const firstNonEmpty = (...values: string[]) =>
-    values.map((item) => item.trim()).find((item) => item.length > 0) ?? "";
+  useEffect(() => {
+    if (!explorerSnapshot && explorer) {
+      setExplorerSnapshot(explorer);
+    }
+  }, [explorer, explorerSnapshot]);
+
+  const effectiveExplorer = explorerSnapshot ?? explorer;
+
   const rawTree = useMemo(() => {
     const root: TreeNode[] = [];
-    (explorer?.raw_sources ?? []).forEach((item) => {
+    (effectiveExplorer?.raw_sources ?? []).forEach((item) => {
       if (item.raw_path) insertTreePath(root, item.raw_path);
     });
     return sortTree(root);
-  }, [explorer?.raw_sources]);
+  }, [effectiveExplorer?.raw_sources]);
 
   const knowledgeTree = useMemo(() => {
     const groups: Array<{ label: string; key: "entities" | "concepts" | "sources" | "others" }> = [
@@ -206,7 +153,7 @@ export default function VaultPage() {
       path: `knowledge/${group.key}`,
       kind: "directory" as const,
       children: sortTree(
-        (explorer?.knowledge?.[group.key] ?? []).map((node) => ({
+        (effectiveExplorer?.knowledge?.[group.key] ?? []).map((node) => ({
           name: node.name,
           path: node.path,
           kind: node.kind === "directory" ? "directory" : "file",
@@ -219,19 +166,19 @@ export default function VaultPage() {
         })),
       ),
     }));
-  }, [explorer?.knowledge]);
+  }, [effectiveExplorer?.knowledge]);
 
   const filesTree = useMemo(
     () =>
       sortTree(
-        (explorer?.files ?? []).map((node) => ({
+        (effectiveExplorer?.files ?? []).map((node) => ({
           name: node.name,
           path: node.path,
           kind: node.kind === "directory" ? "directory" : "file",
           children: node.children as TreeNode[] | undefined,
         })),
       ),
-    [explorer?.files],
+    [effectiveExplorer?.files],
   );
 
   const togglePath = (path: string) => {
@@ -254,6 +201,7 @@ export default function VaultPage() {
                 return;
               }
               setSelectedPath(node.path);
+              setPreviewTab("preview");
             }}
           >
             {isDir ? (
@@ -286,146 +234,345 @@ export default function VaultPage() {
     setEditableContent(vaultFile?.content ?? "");
   }, [vaultFile?.content, vaultFile?.path]);
 
-  const handleCreateObjective = () => {
-    const topic = newTopic.trim();
-    const endpoint = endpointGoal.trim();
-    if (!topic) {
-      toast.error("Enter a topic first.");
-      return;
-    }
-    if (!endpoint) {
-      toast.error("Enter an endpoint goal.");
-      return;
-    }
-    startAutoresearch.mutate(
-      { topic, endpoint_goal: endpoint, bootstrap: true },
-      {
-        onSuccess: () => {
-          toast.success("Autoresearch objective created.");
-          setOpenCreateDialog(false);
-          setNewTopic("");
-          setEndpointGoal("");
-        },
-        onError: (error) => toast.error(error.message),
-      },
-    );
-  };
+  const graphLayout = useMemo(() => {
+    const rawNodes = effectiveExplorer?.graph?.nodes ?? [];
+    const rawEdges = effectiveExplorer?.graph?.edges ?? [];
+    const MAX_GRAPH_NODES = 80;
 
-  const suggestEndpoint = (topic: string) =>
-    `Deliver a complete, evidence-backed research brief for ${topic || "this topic"} with actionable next steps.`;
+    const normalized = (value: string) =>
+      value
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
 
-  const scheduleJobByObjectiveId = useMemo(() => {
-    const entries = (integrationStatus?.scheduler.jobs ?? []).filter(
-      (job) => (job.schedule_type ?? "interval") === "daily_time",
-    );
-    return new Map(
-      entries
-        .map((job) => [toText(job.inputs?.objective_id).trim(), job] as const)
-        .filter(([objectiveId]) => objectiveId.length > 0),
-    );
-  }, [integrationStatus?.scheduler.jobs]);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadProgress() {
-      const entries = await Promise.all(
-        objectives.map(async (objective) => {
-          const link = `${getBackendBaseURL()}/api/vault/objectives/${encodeURIComponent(
-            objective.objective_id,
-          )}/progress.md`;
-          try {
-            const response = await fetch(link);
-            if (!response.ok) return [objective.objective_id, 0] as const;
-            const markdown = await response.text();
-            const percentPattern = /- Percent:\s*`?([0-9]+(?:\.[0-9]+)?)%`?/i;
-            const match = percentPattern.exec(markdown);
-            const parsed = match ? Number(match[1]) : 0;
-            return [objective.objective_id, Number.isFinite(parsed) ? parsed : 0] as const;
-          } catch {
-            return [objective.objective_id, 0] as const;
-          }
-        }),
-      );
-      if (cancelled) return;
-      setObjectiveProgress(Object.fromEntries(entries));
+    const dedupByLabel = new Map<string, (typeof rawNodes)[number]>();
+    for (const node of rawNodes) {
+      const key = normalized(node.label || node.id || "");
+      if (!key) continue;
+      const existing = dedupByLabel.get(key);
+      if (!existing || (node.degree ?? 0) > (existing.degree ?? 0)) {
+        dedupByLabel.set(key, node);
+      }
     }
-    void loadProgress();
-    return () => {
-      cancelled = true;
+    const dedupedNodes = [...dedupByLabel.values()].sort((a, b) => (b.degree ?? 0) - (a.degree ?? 0));
+    const nodes = dedupedNodes.slice(0, MAX_GRAPH_NODES);
+    const nodeIdSet = new Set(nodes.map((n) => n.id));
+    const edges = rawEdges.filter((e) => nodeIdSet.has(e.source) && nodeIdSet.has(e.target));
+
+    const width = 900;
+    const height = 520;
+    const cx = width / 2;
+    const cy = height / 2;
+    const radiusByKind: Record<string, number> = {
+      source: Math.min(width, height) * 0.18,
+      concept: Math.min(width, height) * 0.28,
+      entity: Math.min(width, height) * 0.38,
+      other: Math.min(width, height) * 0.46,
     };
-  }, [objectives]);
+
+    const nodesByKind = new Map<string, typeof nodes>();
+    for (const node of nodes) {
+      const kind = (node.kind || "other").toLowerCase();
+      const bucket = nodesByKind.get(kind) ?? [];
+      bucket.push(node);
+      nodesByKind.set(kind, bucket);
+    }
+
+    const kindOrder = ["source", "concept", "entity", "other"];
+    const positioned = kindOrder.flatMap((kind) => {
+      const bucket = nodesByKind.get(kind) ?? [];
+      return bucket.map((node, index) => {
+        const angle = (index / Math.max(1, bucket.length)) * Math.PI * 2;
+        const radius = radiusByKind[kind] ?? radiusByKind.other ?? 180;
+        return {
+          ...node,
+          x: cx + Math.cos(angle) * radius,
+          y: cy + Math.sin(angle) * radius,
+        };
+      });
+    });
+
+    const label = (text: string) => {
+      const clean = text.replace(/\s+/g, " ").trim();
+      return clean.length > 24 ? `${clean.slice(0, 24)}...` : clean;
+    };
+
+    const colorForKind = (kind: string) => {
+      const normalizedKind = kind.toLowerCase();
+      if (normalizedKind.includes("source")) return "#0f766e";
+      if (normalizedKind.includes("concept")) return "#1d4ed8";
+      if (normalizedKind.includes("entity")) return "#7c3aed";
+      return "#64748b";
+    };
+
+    const byId = new Map(positioned.map((node) => [node.id, node] as const));
+    const visibleEdges = edges
+      .map((edge) => {
+        const source = byId.get(edge.source);
+        const target = byId.get(edge.target);
+        if (!source || !target) return null;
+        return {
+          ...edge,
+          source,
+          target,
+        };
+      })
+      .filter((edge): edge is NonNullable<typeof edge> => Boolean(edge));
+    return { width, height, nodes: positioned, edges: visibleEdges, label, colorForKind };
+  }, [effectiveExplorer?.graph?.edges, effectiveExplorer?.graph?.nodes]);
 
   return (
     <WorkspaceContainer>
       <WorkspaceHeader />
       <WorkspaceBody>
-        <div className="flex size-full flex-col overflow-y-auto">
-          <div className="border-b px-6 py-4">
-            <h1 className="text-xl font-semibold">{t.pages.vault}</h1>
-            <p className="text-muted-foreground mt-0.5 text-sm">
-              Knowledge Vault
-              {" · "}
-              Sources {Number(vaultStatus?.counts?.sources_total ?? 0)}
-              {" · "}
-              Queued {Number(vaultStatus?.counts?.queued_search_results ?? 0)}
-              {" · "}
-              Objectives {objectives.length}
-            </p>
-          </div>
-
-          <div className="grid gap-4 p-6 md:grid-cols-2 xl:grid-cols-3">
-            <Card className="md:col-span-2 xl:col-span-3">
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="text-base">Knowledge Vault Directory</CardTitle>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    toast.message("Vault refresh started. Cached snapshot will update when complete.");
-                    refreshExplorer.mutate(undefined, {
-                      onSuccess: () => toast.success("Vault cache refreshed."),
-                      onError: (error) => toast.error(error.message),
-                    });
-                  }}
-                  disabled={refreshExplorer.isPending}
+        <div className="flex size-full flex-col overflow-y-auto p-6">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="md:col-span-2 xl:col-span-3">
+              <div className="mb-3 flex flex-row items-center justify-between gap-3">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                  <h2 className="text-base font-semibold">
+                    Knowledge Vault · Sources {Number(vaultStatus?.counts?.sources_total ?? 0)} · Queued{" "}
+                    {Number(vaultStatus?.counts?.queued_search_results ?? 0)}
+                  </h2>
+                  {ingestProgressLabel ? (
+                    <span
+                      className={`flex items-center gap-1 truncate text-xs ${
+                        ingestStatus?.status === "failed" ? "text-destructive" : "text-muted-foreground"
+                      }`}
+                      title={ingestStatus?.current_title ?? ingestProgressLabel}
+                    >
+                      {ingestRunning ? <Loader2Icon className="size-3.5 animate-spin" /> : null}
+                      <span className="truncate">· {ingestProgressLabel}</span>
+                    </span>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      if (ingestRunning) {
+                        toast.message("Ingest already running.");
+                        return;
+                      }
+                      startIngest.mutate(undefined, {
+                        onSuccess: (payload) => {
+                          if (payload.accepted === false) {
+                            toast.message(payload.message ?? "Vault ingest already running.");
+                          } else {
+                            toast.success("Vault ingest started.");
+                          }
+                        },
+                        onError: (error) => toast.error(error.message),
+                      });
+                    }}
+                    disabled={ingestRunning}
+                  >
+                    {ingestRunning ? (
+                      <Loader2Icon className="mr-2 size-4 animate-spin" />
+                    ) : (
+                      <PlayIcon className="mr-2 size-4" />
+                    )}
+                    {ingestRunning ? "Ingesting..." : "Run Ingest"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      toast.message("Vault refresh started. Cached snapshot will update when complete.");
+                      refreshExplorer.mutate(undefined, {
+                        onSuccess: (payload) => {
+                          setExplorerSnapshot(payload);
+                          toast.success("Vault cache refreshed.");
+                        },
+                        onError: (error) => toast.error(error.message),
+                      });
+                    }}
+                    disabled={refreshExplorer.isPending}
+                  >
+                    <RefreshCwIcon className={`mr-2 size-4 ${refreshExplorer.isPending ? "animate-spin" : ""}`} />
+                    {refreshExplorer.isPending ? "Refreshing..." : "Refresh Cache"}
+                  </Button>
+                </div>
+              </div>
+              <div>
+                <ResizablePanelGroup
+                  orientation="horizontal"
+                  className="min-h-[78vh] gap-1"
                 >
-                  <RefreshCwIcon className={`mr-2 size-4 ${refreshExplorer.isPending ? "animate-spin" : ""}`} />
-                  {refreshExplorer.isPending ? "Refreshing..." : "Refresh Cache"}
-                </Button>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="space-y-3 rounded-md border p-3">
+                  <ResizablePanel defaultSize={25} minSize={15} className="flex h-full flex-col space-y-3 rounded-md border p-3">
                     <div className="flex gap-2">
                       <Button size="sm" variant={leftSection === "raw" ? "default" : "outline"} onClick={() => setLeftSection("raw")}>Raw Sources</Button>
                       <Button size="sm" variant={leftSection === "knowledge" ? "default" : "outline"} onClick={() => setLeftSection("knowledge")}>Knowledge</Button>
                       <Button size="sm" variant={leftSection === "files" ? "default" : "outline"} onClick={() => setLeftSection("files")}>Files</Button>
                     </div>
-                    <div className="max-h-80 overflow-y-auto space-y-1 text-xs">
-                      {leftSection === "raw" && renderTree(rawTree)}
-                      {leftSection === "knowledge" && renderTree(knowledgeTree)}
-                      {leftSection === "files" && renderTree(filesTree)}
-                      {!explorerLoading && !(explorer?.raw_sources?.length || explorer?.files?.length) && (
+                    <div className="min-h-0 flex-1 overflow-y-auto space-y-1 text-xs">
+                      {(() => {
+                        const rootLabels: Record<string, string> = {
+                          raw: "01_raw",
+                          knowledge: "02_knowledge",
+                          files: "vault",
+                        };
+                        const isCollapsed = rootCollapsed[leftSection] ?? false;
+                        const activeTree =
+                          leftSection === "raw" ? rawTree : leftSection === "knowledge" ? knowledgeTree : filesTree;
+                        return (
+                          <>
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-1 rounded px-2 py-1 text-left font-medium hover:bg-muted"
+                              onClick={() =>
+                                setRootCollapsed((current) => ({
+                                  ...current,
+                                  [leftSection]: !isCollapsed,
+                                }))
+                              }
+                              aria-expanded={!isCollapsed}
+                              title={isCollapsed ? "Expand root" : "Collapse root"}
+                            >
+                              {isCollapsed ? (
+                                <ChevronRightIcon className="size-3.5" />
+                              ) : (
+                                <ChevronDownIcon className="size-3.5" />
+                              )}
+                              <FolderIcon className="size-3.5" />
+                              <span>{rootLabels[leftSection]}</span>
+                            </button>
+                            {!isCollapsed && renderTree(activeTree, 1)}
+                          </>
+                        );
+                      })()}
+                      {!explorerLoading &&
+                      (effectiveExplorer?.raw_sources?.length ?? 0) === 0 &&
+                      (effectiveExplorer?.files?.length ?? 0) === 0 && (
                         <p className="text-muted-foreground px-1">No cached vault items yet.</p>
                       )}
                     </div>
-                  </div>
-                  <div className="space-y-3 rounded-md border p-3">
+                  </ResizablePanel>
+                  <ResizableHandle withHandle className="mx-2 bg-transparent" />
+                  <ResizablePanel defaultSize={75} minSize={30} className="flex h-full flex-col space-y-3 rounded-md border p-3">
                     <div className="flex gap-2">
                       <Button size="sm" variant={previewTab === "preview" ? "default" : "outline"} onClick={() => setPreviewTab("preview")}>Preview</Button>
                       <Button size="sm" variant={previewTab === "graph" ? "default" : "outline"} onClick={() => setPreviewTab("graph")}>Knowledge Graph</Button>
                     </div>
                     {previewTab === "preview" ? (
-                      <div className="space-y-2">
-                        <p className="text-muted-foreground text-xs">{selectedPath ?? "Select a file to preview."}</p>
-                        <Textarea
-                          value={editableContent}
-                          onChange={(event) => setEditableContent(event.target.value)}
-                          className="min-h-72 font-mono text-xs"
-                          readOnly={!vaultFile?.editable}
-                          placeholder={vaultFileLoading ? "Loading..." : "No file selected"}
-                        />
-                        {vaultFile?.editable && (
+                      <div className="flex min-h-0 flex-1 flex-col space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-muted-foreground truncate text-xs">{selectedPath ?? "Preview"}</p>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={async () => {
+                                await navigator.clipboard.writeText(editableContent);
+                                toast.success("Content copied.");
+                              }}
+                              disabled={!vaultFile?.path}
+                            >
+                              <CopyIcon className="mr-1 size-3.5" />
+                              Copy
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                if (!vaultFile?.path) return;
+                                const blob = new Blob([editableContent], { type: "text/markdown;charset=utf-8" });
+                                const url = URL.createObjectURL(blob);
+                                const anchor = document.createElement("a");
+                                anchor.href = url;
+                                anchor.download = vaultFile.path.split("/").pop() ?? "vault-source.md";
+                                anchor.click();
+                                URL.revokeObjectURL(url);
+                              }}
+                              disabled={!vaultFile?.path}
+                            >
+                              <DownloadIcon className="mr-1 size-3.5" />
+                              Download
+                            </Button>
+                            {vaultFile?.editable ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  if (!vaultFile?.path) return;
+                                  if (!window.confirm("Delete this raw source file? This cannot be undone.")) return;
+                                  deleteVaultFile.mutate(vaultFile.path, {
+                                    onSuccess: () => {
+                                      toast.success("Raw source deleted.");
+                                      setSelectedPath(null);
+                                      setEditableContent("");
+                                    },
+                                    onError: (error) => toast.error(error.message),
+                                  });
+                                }}
+                                disabled={deleteVaultFile.isPending}
+                              >
+                                <Trash2Icon className="mr-1 size-3.5" />
+                                Delete Source
+                              </Button>
+                            ) : null}
+                            <Button
+                              size="icon-sm"
+                              variant="ghost"
+                              onClick={() => {
+                                if (editorCollapsed) {
+                                  editorPanelRef.current?.expand();
+                                } else {
+                                  editorPanelRef.current?.collapse();
+                                }
+                              }}
+                              title={editorCollapsed ? "Show editor" : "Hide editor"}
+                              aria-label={editorCollapsed ? "Show editor" : "Hide editor"}
+                            >
+                              {editorCollapsed ? (
+                                <PanelRightOpenIcon className="size-4" />
+                              ) : (
+                                <PanelRightCloseIcon className="size-4" />
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                        <ResizablePanelGroup
+                          orientation="horizontal"
+                          className="min-h-0 flex-1"
+                        >
+                          <ResizablePanel
+                            defaultSize={60}
+                            minSize={30}
+                            className="min-h-0 overflow-y-auto rounded border p-3 text-sm"
+                          >
+                            <MarkdownContent
+                              content={editableContent}
+                              isLoading={vaultFileLoading}
+                              rehypePlugins={streamdownPlugins.rehypePlugins}
+                              className="prose prose-sm max-w-none"
+                            />
+                          </ResizablePanel>
+                          <ResizableHandle
+                            withHandle
+                            className={`mx-2 bg-transparent ${editorCollapsed ? "pointer-events-none opacity-0" : ""}`}
+                          />
+                          <ResizablePanel
+                            panelRef={editorPanelRef}
+                            defaultSize={40}
+                            minSize={20}
+                            collapsible
+                            collapsedSize={0}
+                            onResize={(size) => setEditorCollapsed(size.asPercentage < 1)}
+                            className="min-h-0"
+                          >
+                            <Textarea
+                              value={editableContent}
+                              onChange={(event) => setEditableContent(event.target.value)}
+                              className="size-full min-h-0 resize-none font-mono text-xs"
+                              readOnly={!vaultFile?.editable}
+                              placeholder={vaultFileLoading ? "Loading..." : "No file selected"}
+                            />
+                          </ResizablePanel>
+                        </ResizablePanelGroup>
+                        {vaultFile?.editable && !editorCollapsed ? (
                           <Button
                             size="sm"
                             onClick={() => {
@@ -439,282 +586,61 @@ export default function VaultPage() {
                               );
                             }}
                             disabled={saveVaultFile.isPending}
+                            className="self-start"
                           >
-                            {saveVaultFile.isPending ? "Saving..." : "Save Raw Source"}
+                            {saveVaultFile.isPending ? "Saving..." : "Save Changes"}
                           </Button>
-                        )}
+                        ) : null}
                       </div>
                     ) : (
-                      <div className="space-y-2 text-xs">
-                        <p>Nodes: {Number(explorer?.graph?.counts?.nodes ?? 0)}</p>
-                        <p>Edges: {Number(explorer?.graph?.counts?.edges ?? 0)}</p>
-                        <div className="max-h-72 space-y-1 overflow-y-auto rounded border p-2">
-                          {(explorer?.graph?.nodes ?? []).slice(0, 40).map((node) => (
-                            <div key={node.id} className="text-muted-foreground">
-                              {node.kind}: {node.label}
-                            </div>
-                          ))}
+                      <div className="min-h-0 flex-1 space-y-2 text-xs">
+                        <p className="text-muted-foreground">
+                          <NetworkIcon className="mr-1 inline size-3.5" />
+                          Nodes {graphLayout.nodes.length} (trimmed) · Edges {graphLayout.edges.length}
+                        </p>
+                        <div className="h-full min-h-0 overflow-auto rounded border p-2">
+                          <svg
+                            viewBox={`0 0 ${graphLayout.width} ${graphLayout.height}`}
+                            className="h-full min-h-[420px] w-full"
+                            role="img"
+                            aria-label="Knowledge graph"
+                          >
+                            {graphLayout.edges.map((edge, index) => (
+                              <line
+                                key={`${edge.source.id}-${edge.target.id}-${index}`}
+                                x1={edge.source.x}
+                                y1={edge.source.y}
+                                x2={edge.target.x}
+                                y2={edge.target.y}
+                                stroke="currentColor"
+                                strokeOpacity={0.22}
+                                strokeWidth={1}
+                              />
+                            ))}
+                            {graphLayout.nodes.map((node) => (
+                              <g key={node.id}>
+                                <title>{`${node.label} (${node.kind})`}</title>
+                                <circle
+                                  cx={node.x}
+                                  cy={node.y}
+                                  r={Math.max(5, Math.min(10, 5 + ((node.degree ?? 0) / 4)))}
+                                  fill={graphLayout.colorForKind(node.kind ?? "other")}
+                                  fillOpacity={0.9}
+                                />
+                                <text x={node.x + 10} y={node.y + 3} fontSize={10} fill="currentColor" fillOpacity={0.85}>
+                                  {graphLayout.label(node.label)}
+                                </text>
+                              </g>
+                            ))}
+                          </svg>
                         </div>
                       </div>
                     )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {isLoading ? (
-              <Card>
-                <CardContent className="pt-6 text-sm">{t.common.loading}</CardContent>
-              </Card>
-            ) : (
-              objectives.map((objective) => {
-                const nextQueries = objective.recommended_queries ?? [];
-                const nextTasks = objective.recommended_tasks ?? [];
-                const markdownPath = objective.progress_markdown_path ?? "";
-                const progressLink = `${getBackendBaseURL()}/api/vault/objectives/${encodeURIComponent(
-                  objective.objective_id,
-                )}/progress.md`;
-                const progressPercent = objectiveProgress[objective.objective_id] ?? 0;
-
-                return (
-                  <Card key={objective.id} className="h-full">
-                    <CardHeader className="space-y-1">
-                      <div className="flex items-start justify-between gap-2">
-                        <CardTitle className="text-base">
-                          {objective.topic || objective.objective_id}
-                        </CardTitle>
-                        <Badge
-                          variant={
-                            objective.status === "active" ? "secondary" : "outline"
-                          }
-                        >
-                          {objective.status}
-                        </Badge>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-end text-xs">
-                          <span className="text-muted-foreground">{progressPercent.toFixed(1)}%</span>
-                        </div>
-                        <Progress value={Math.max(0, Math.min(100, progressPercent))} className="h-1.5" />
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-3 text-sm">
-                      {(() => {
-                        const job = scheduleJobByObjectiveId.get(objective.objective_id);
-                        if (!job) return null;
-                        const currentTime = job.daily_time ?? "02:00";
-                        const endpointPlaceholder = firstNonEmpty(
-                          objective.endpoint_goal ?? "",
-                          toText(job.inputs?.endpoint_goal),
-                          "Enter endpoint goal…",
-                        );
-                        const endpointValue = firstNonEmpty(
-                          toText(job.inputs?.endpoint_goal),
-                          objective.endpoint_goal ?? "",
-                        );
-
-                        return (
-                          <div className="space-y-3 rounded-md border p-3">
-                            <p className="flex items-center gap-1 text-xs font-medium">
-                              <CalendarClockIcon className="size-3.5" />
-                              Scheduled Pipeline Controls
-                            </p>
-                            <div className="flex items-center gap-2 text-xs">
-                              <span className="text-muted-foreground shrink-0">Schedule:</span>
-                              <Select
-                                value={currentTime}
-                                onValueChange={(value) =>
-                                  updateSchedulerJobTime.mutate(
-                                    { jobId: job.id, dailyTime: value },
-                                    {
-                                      onSuccess: () => toast.success(`Schedule updated to ${value}.`),
-                                      onError: (error) => toast.error(error.message),
-                                    },
-                                  )
-                                }
-                              >
-                                <SelectTrigger className="h-7 w-28 text-xs">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent className="max-h-56">
-                                  {SCHEDULE_OPTIONS.map((time) => (
-                                    <SelectItem key={time} value={time} className="text-xs">
-                                      {time}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <span className="text-muted-foreground">(workspace timezone)</span>
-                            </div>
-                            <div className="space-y-1">
-                              <p className="text-muted-foreground text-xs">Endpoint:</p>
-                              <EndpointInput
-                                initialValue={endpointValue}
-                                placeholder={endpointPlaceholder}
-                                onSave={(newValue) =>
-                                  updateSchedulerJob.mutate(
-                                    { jobId: job.id, patch: { endpoint_goal: newValue } },
-                                    {
-                                      onSuccess: () => toast.success("Endpoint updated."),
-                                      onError: (error) => toast.error(error.message),
-                                    },
-                                  )
-                                }
-                              />
-                            </div>
-                            <div className="flex gap-2">
-                              <Button
-                                className="flex-1"
-                                size="sm"
-                                onClick={() =>
-                                  runSchedulerJob.mutate(job.id, {
-                                    onSuccess: () => toast.success("Run started."),
-                                    onError: (error) => toast.error(error.message),
-                                  })
-                                }
-                                disabled={runSchedulerJob.isPending}
-                              >
-                                <PlayIcon className="size-4" />
-                                Run
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        className="w-full"
-                        onClick={() => {
-                          if (!window.confirm("Delete this objective and all its vault tracking files? This cannot be undone.")) return;
-                          deleteAutoresearchObjective.mutate(objective.objective_id, {
-                            onSuccess: () => toast.success("Objective deleted."),
-                            onError: (error) => toast.error(error.message),
-                          });
-                        }}
-                        disabled={deleteAutoresearchObjective.isPending}
-                      >
-                        <Trash2Icon className="size-4" />
-                        Delete Objective
-                      </Button>
-
-                      <div className="rounded-md border p-3">
-                        <p className="text-xs font-medium">Tracking Markdown</p>
-                        <a
-                          className="text-primary mt-1 inline-flex items-center gap-1 text-xs underline"
-                          href={progressLink}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          <FileTextIcon className="size-3.5" />
-                          {markdownPath || "Open objective ledger"}
-                        </a>
-                      </div>
-
-                      <Collapsible>
-                        <CollapsibleTrigger className="flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-xs font-medium">
-                          <span className="inline-flex items-center gap-1">
-                            <ListChecksIcon className="size-3.5" />
-                            Action Items / Next Queries
-                          </span>
-                          <ChevronDownIcon className="size-4" />
-                        </CollapsibleTrigger>
-                        <CollapsibleContent className="mt-2 rounded-md border p-3">
-                          {nextTasks.length > 0 && (
-                            <div className="mb-2">
-                              <p className="mb-1 text-[11px] font-medium">Action items</p>
-                              <ul className="space-y-1">
-                                {nextTasks.map((task, idx) => (
-                                  <li key={`${objective.id}-task-${idx}`} className="text-xs">
-                                    {idx + 1}. {task}
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-                          {nextQueries.length === 0 ? (
-                            <p className="text-muted-foreground text-xs">
-                              No next queries yet.
-                            </p>
-                          ) : (
-                            <ul className="space-y-1">
-                              {nextQueries.map((query, idx) => (
-                                <li key={`${objective.id}-query-${idx}`} className="text-xs">
-                                  {idx + 1}. {query}
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </CollapsibleContent>
-                      </Collapsible>
-
-                      <p className="text-muted-foreground text-[11px]">
-                        Updated {formatTimeAgo(objective.updated_at)}
-                      </p>
-                    </CardContent>
-                  </Card>
-                );
-              })
-            )}
+                  </ResizablePanel>
+                </ResizablePanelGroup>
+              </div>
+            </div>
           </div>
-
-          <div className="pointer-events-none fixed right-6 bottom-6">
-            <Button
-              className="pointer-events-auto h-12 w-12 rounded-full shadow-lg"
-              size="icon"
-              onClick={() => {
-                setOpenCreateDialog(true);
-                if (!endpointGoal.trim()) {
-                  setEndpointGoal(suggestEndpoint(newTopic.trim()));
-                }
-              }}
-            >
-              <PlusIcon className="size-5" />
-            </Button>
-          </div>
-
-          <Dialog open={openCreateDialog} onOpenChange={setOpenCreateDialog}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Add Autoresearch Topic</DialogTitle>
-                <DialogDescription>
-                  Create a new objective to start tracking research progress.
-                </DialogDescription>
-              </DialogHeader>
-              <Input
-                value={newTopic}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setNewTopic(value);
-                  if (!endpointGoal.trim()) {
-                    setEndpointGoal(suggestEndpoint(value));
-                  }
-                }}
-                placeholder="e.g. maritime fuel decarbonization regulations"
-              />
-              <Input
-                value={endpointGoal}
-                onChange={(event) => setEndpointGoal(event.target.value)}
-                placeholder="Suggested endpoint goal"
-              />
-              <DialogFooter>
-                <Button
-                  variant="outline"
-                  onClick={() => setOpenCreateDialog(false)}
-                  disabled={startAutoresearch.isPending}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleCreateObjective}
-                  disabled={startAutoresearch.isPending}
-                >
-                  {startAutoresearch.isPending ? "Creating..." : "Create"}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
         </div>
       </WorkspaceBody>
     </WorkspaceContainer>

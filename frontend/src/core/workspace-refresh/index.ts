@@ -309,16 +309,19 @@ export function useWorkspaceRefreshQuery<
 ) {
   const queryClient = useQueryClient();
   const query = useQuery(options);
+  const shouldSubscribe = (options.refreshDomains?.length ?? 0) > 0;
 
-  useWorkspaceRefreshSubscription(options.refreshDomains ?? [], () => {
-    if (options.enabled === false) {
-      return;
-    }
-    void queryClient.invalidateQueries({
-      queryKey: options.invalidateQueryKey ?? options.queryKey,
-      exact: options.invalidateExact ?? true,
+  useWorkspaceRefreshSubscription(
+    shouldSubscribe ? options.refreshDomains ?? [] : [],
+    () => {
+      if (!shouldSubscribe || options.enabled === false) {
+        return;
+      }
+      void queryClient.invalidateQueries({
+        queryKey: options.invalidateQueryKey ?? options.queryKey,
+        exact: options.invalidateExact ?? true,
+      });
     });
-  });
 
   return query;
 }

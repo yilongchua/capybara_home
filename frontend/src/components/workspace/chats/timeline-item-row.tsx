@@ -50,7 +50,7 @@ export const TimelineItemRow = memo(function TimelineItemRow_({
   groupCollapsed: boolean;
   onToggleGroup: (groupId: string) => void;
 }) {
-  const spineColor = kindToSpineColor(item.kind as TimelineItemKind);
+  const spineColor = kindToSpineColor(item.kind);
   const hasGroup = Boolean(item.groupId) && groupSize > 1;
 
   return (

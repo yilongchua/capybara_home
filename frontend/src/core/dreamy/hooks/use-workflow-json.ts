@@ -3,13 +3,12 @@
 import { useEffect, useState } from "react";
 
 import { getBackendBaseURL } from "@/core/config";
+import { api } from "@/core/dreamy/api";
+import { REFRESH_INTERVAL_ACTIVE, REFRESH_INTERVAL_IDLE } from "@/core/dreamy/constants";
 import {
   publishWorkspaceRefresh,
   useWorkspaceRefreshQuery,
 } from "@/core/workspace-refresh";
-
-import { api } from "@/core/dreamy/api";
-import { REFRESH_INTERVAL_ACTIVE, REFRESH_INTERVAL_IDLE } from "@/core/dreamy/constants";
 
 import { useDreamy } from "../context";
 import type { WorkflowJson } from "../types";

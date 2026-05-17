@@ -285,42 +285,49 @@ const ChatBox: React.FC<{
               value="directory"
               className="min-h-0 flex-1 overflow-hidden p-0"
             >
-              <div className="grid size-full grid-cols-[minmax(240px,42%)_minmax(0,58%)] gap-3 p-3">
-                <div className="min-h-0 overflow-y-auto rounded-md border p-2">
-                  {directoryFiles?.length === 0 ? (
-                    <ConversationEmptyState
-                      icon={<FilesIcon />}
-                      title="No directories yet"
-                      description="Directories will appear here once files are generated."
-                    />
-                  ) : (
-                    <ArtifactFileList
-                      className="size-full"
-                      files={directoryFiles ?? []}
-                      threadId={threadId}
-                      createdPath={createdDirectoryPath}
-                      onCreatedPathChange={setCreatedDirectoryPath}
-                      mountedPath={mountedDirectoryPath}
-                      onMountedPathChange={setMountedDirectoryPath}
-                    />
-                  )}
-                </div>
-                <div className="min-h-0 overflow-y-auto rounded-md border">
-                  {selectedFile ? (
-                    <ArtifactFileDetail
-                      className="size-full"
-                      filepath={selectedFile}
-                      threadId={threadId}
-                      onSubmitPlanRevision={onSubmitPlanRevision}
-                    />
-                  ) : (
-                    <ConversationEmptyState
-                      icon={<FilesIcon />}
-                      title="Select a file to preview"
-                      description="Choose a file from the explorer to open it in this preview pane."
-                    />
-                  )}
-                </div>
+              <div className="size-full p-3">
+                <ResizablePanelGroup orientation="horizontal" id="workspace-directory-panel-group">
+                  <ResizablePanel defaultSize={42} minSize={24} id="workspace-directory-explorer">
+                    <div className="size-full overflow-y-auto rounded-md border p-2">
+                      {directoryFiles?.length === 0 ? (
+                        <ConversationEmptyState
+                          icon={<FilesIcon />}
+                          title="No directories yet"
+                          description="Directories will appear here once files are generated."
+                        />
+                      ) : (
+                        <ArtifactFileList
+                          className="size-full"
+                          files={directoryFiles ?? []}
+                          threadId={threadId}
+                          createdPath={createdDirectoryPath}
+                          onCreatedPathChange={setCreatedDirectoryPath}
+                          mountedPath={mountedDirectoryPath}
+                          onMountedPathChange={setMountedDirectoryPath}
+                        />
+                      )}
+                    </div>
+                  </ResizablePanel>
+                  <ResizableHandle id="workspace-directory-panel-separator" className="mx-1 opacity-33 hover:opacity-100" />
+                  <ResizablePanel defaultSize={58} minSize={24} id="workspace-directory-preview">
+                    <div className="size-full overflow-y-auto rounded-md border">
+                      {selectedFile ? (
+                        <ArtifactFileDetail
+                          className="size-full"
+                          filepath={selectedFile}
+                          threadId={threadId}
+                          onSubmitPlanRevision={onSubmitPlanRevision}
+                        />
+                      ) : (
+                        <ConversationEmptyState
+                          icon={<FilesIcon />}
+                          title="Select a file to preview"
+                          description="Choose a file from the explorer to open it in this preview pane."
+                        />
+                      )}
+                    </div>
+                  </ResizablePanel>
+                </ResizablePanelGroup>
               </div>
             </TabsContent>
           </Tabs>

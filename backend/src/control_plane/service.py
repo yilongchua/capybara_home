@@ -97,6 +97,9 @@ class ControlPlaneService:
         self._vault_explorer_cache: dict[str, Any] = {}
         self._vault_explorer_cache_ttl_seconds = 300
         self._vault_explorer_cache_lock = threading.Lock()
+        self._vault_ingest_job: dict[str, Any] = self._new_vault_ingest_job_state()
+        self._vault_ingest_lock = threading.Lock()
+        self._vault_ingest_logger: logging.Logger | None = None
         self._seed_from_config()
 
     def _build_agent_registry(self) -> dict[str, Any]:
@@ -1228,6 +1231,18 @@ class ControlPlaneService:
             "bytes": len(content.encode("utf-8")),
         }
 
+    def delete_vault_file(self, *, relative_path: str) -> dict[str, Any]:
+        manager = self._default_vault_manager()
+        resolved = self._resolve_vault_file_path(manager, relative_path)
+        if not self._is_vault_raw_source_path(manager, resolved):
+            raise ValueError("Only raw source files are deletable.")
+        resolved.unlink(missing_ok=False)
+        self.get_vault_explorer(force_refresh=True)
+        return {
+            "status": "deleted",
+            "path": str(resolved.relative_to(manager.vault_root)),
+        }
+
     def _resolve_vault_file_path(self, manager: VaultLearningManager, relative_path: str) -> Path:
         normalized = relative_path.strip().lstrip("/")
         if not normalized:
@@ -1245,6 +1260,195 @@ class ControlPlaneService:
         except Exception:
             return False
         return relative.startswith("01_raw/sources/")
+
+    def _new_vault_ingest_job_state(self) -> dict[str, Any]:
+        return {
+            "job_id": "",
+            "status": "idle",
+            "total": 0,
+            "processed": 0,
+            "updated": 0,
+            "skipped_no_raw": 0,
+            "failed": 0,
+            "current_index": 0,
+            "current_source_id": "",
+            "current_title": "",
+            "last_status": "",
+            "last_error": None,
+            "started_at": None,
+            "finished_at": None,
+            "updated_at": None,
+            "log_path": "",
+        }
+
+    def _vault_ingest_log_path(self) -> Path:
+        # base_dir is typically `<repo>/backend/.capybara-home`; logs live at `<repo>/logs/`.
+        base_dir = get_paths().base_dir
+        logs_dir = base_dir.parent.parent / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        return logs_dir / "vault_ingest.log"
+
+    def _get_vault_ingest_logger(self) -> logging.Logger:
+        if self._vault_ingest_logger is not None:
+            return self._vault_ingest_logger
+        logger_obj = logging.getLogger("capybara.vault_ingest")
+        logger_obj.setLevel(logging.INFO)
+        logger_obj.propagate = False
+        log_path = self._vault_ingest_log_path()
+        already_attached = any(
+            isinstance(handler, logging.FileHandler)
+            and getattr(handler, "baseFilename", "") == str(log_path)
+            for handler in logger_obj.handlers
+        )
+        if not already_attached:
+            handler = logging.FileHandler(str(log_path), encoding="utf-8")
+            handler.setFormatter(
+                logging.Formatter(
+                    fmt="%(asctime)s %(levelname)s %(message)s",
+                    datefmt="%Y-%m-%d %H:%M:%S",
+                )
+            )
+            logger_obj.addHandler(handler)
+        self._vault_ingest_logger = logger_obj
+        return logger_obj
+
+    def start_vault_ingest_job(self, *, force_reanalyze: bool = False) -> dict[str, Any]:
+        with self._vault_ingest_lock:
+            if self._vault_ingest_job.get("status") == "running":
+                snapshot = dict(self._vault_ingest_job)
+                snapshot["accepted"] = False
+                snapshot["message"] = "A vault ingest job is already running."
+                return snapshot
+            job_id = f"vault_ingest_{uuid4().hex[:12]}"
+            log_path = self._vault_ingest_log_path()
+            self._vault_ingest_job = self._new_vault_ingest_job_state()
+            self._vault_ingest_job.update(
+                {
+                    "job_id": job_id,
+                    "status": "running",
+                    "started_at": self._utcnow_iso(),
+                    "updated_at": self._utcnow_iso(),
+                    "log_path": str(log_path),
+                }
+            )
+
+        logger_obj = self._get_vault_ingest_logger()
+        logger_obj.info(
+            "vault_ingest_start job_id=%s force_reanalyze=%s log_path=%s",
+            job_id,
+            force_reanalyze,
+            log_path,
+        )
+
+        def _runner() -> None:
+            try:
+                manager = self._default_vault_manager()
+
+                def _progress(
+                    index: int,
+                    total: int,
+                    source_id: str,
+                    title: str,
+                    status: str,
+                    error: str | None,
+                ) -> None:
+                    with self._vault_ingest_lock:
+                        self._vault_ingest_job.update(
+                            {
+                                "total": total,
+                                "processed": index,
+                                "current_index": index,
+                                "current_source_id": source_id,
+                                "current_title": title,
+                                "last_status": status,
+                                "last_error": error,
+                                "updated_at": self._utcnow_iso(),
+                            }
+                        )
+                        if status == "updated":
+                            self._vault_ingest_job["updated"] = int(self._vault_ingest_job.get("updated", 0)) + 1
+                        elif status == "skipped_no_raw":
+                            self._vault_ingest_job["skipped_no_raw"] = int(self._vault_ingest_job.get("skipped_no_raw", 0)) + 1
+                        elif status == "failed":
+                            self._vault_ingest_job["failed"] = int(self._vault_ingest_job.get("failed", 0)) + 1
+                    if status == "failed":
+                        logger_obj.warning(
+                            "vault_ingest_item index=%d/%d source_id=%s title=%r status=%s error=%s",
+                            index,
+                            total,
+                            source_id,
+                            title,
+                            status,
+                            error,
+                        )
+                    else:
+                        logger_obj.info(
+                            "vault_ingest_item index=%d/%d source_id=%s title=%r status=%s",
+                            index,
+                            total,
+                            source_id,
+                            title,
+                            status,
+                        )
+
+                report = manager.reprocess_existing_sources(
+                    only_missing=not force_reanalyze,
+                    progress_callback=_progress,
+                )
+
+                with self._vault_ingest_lock:
+                    self._vault_ingest_job.update(
+                        {
+                            "status": "success",
+                            "total": int(report.get("total") or 0),
+                            "processed": int(report.get("processed") or 0),
+                            "updated": int(report.get("updated") or 0),
+                            "skipped_no_raw": int(report.get("skipped_no_raw") or 0),
+                            "failed": int(report.get("failed") or 0),
+                            "finished_at": self._utcnow_iso(),
+                            "updated_at": self._utcnow_iso(),
+                            "last_error": None,
+                        }
+                    )
+                logger_obj.info(
+                    "vault_ingest_done job_id=%s total=%d processed=%d updated=%d skipped_no_raw=%d failed=%d",
+                    job_id,
+                    int(report.get("total") or 0),
+                    int(report.get("processed") or 0),
+                    int(report.get("updated") or 0),
+                    int(report.get("skipped_no_raw") or 0),
+                    int(report.get("failed") or 0),
+                )
+                with self._vault_explorer_cache_lock:
+                    self._vault_explorer_cache = {}
+            except Exception as exc:
+                logger_obj.exception("vault_ingest_failed job_id=%s error=%s", job_id, exc)
+                with self._vault_ingest_lock:
+                    self._vault_ingest_job.update(
+                        {
+                            "status": "failed",
+                            "last_error": str(exc),
+                            "finished_at": self._utcnow_iso(),
+                            "updated_at": self._utcnow_iso(),
+                        }
+                    )
+
+        thread = threading.Thread(
+            target=_runner,
+            daemon=True,
+            name=f"vault-ingest-{job_id}",
+        )
+        thread.start()
+
+        with self._vault_ingest_lock:
+            snapshot = dict(self._vault_ingest_job)
+        snapshot["accepted"] = True
+        snapshot["message"] = "Vault ingest job started."
+        return snapshot
+
+    def get_vault_ingest_status(self) -> dict[str, Any]:
+        with self._vault_ingest_lock:
+            return dict(self._vault_ingest_job)
 
     def list_vault_action_items(self, *, limit: int = 100) -> dict[str, Any]:
         manager = self._default_vault_manager()

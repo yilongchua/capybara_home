@@ -34,6 +34,7 @@ import type {
   VaultExplorerResponse,
   VaultFileResponse,
   VaultFileWriteRequest,
+  VaultIngestStatusResponse,
 } from "./types";
 
 async function parseError(response: Response, fallback: string) {
@@ -269,6 +270,28 @@ export async function refreshVaultExplorer(): Promise<VaultExplorerResponse> {
   return response.json() as Promise<VaultExplorerResponse>;
 }
 
+export async function startVaultIngest(
+  options?: { forceReanalyze?: boolean },
+): Promise<VaultIngestStatusResponse> {
+  const response = await fetch(`${getBackendBaseURL()}/api/vault/ingest/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force_reanalyze: Boolean(options?.forceReanalyze) }),
+  });
+  if (!response.ok) {
+    await parseError(response, `Failed to start vault ingest: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultIngestStatusResponse>;
+}
+
+export async function getVaultIngestStatus(): Promise<VaultIngestStatusResponse> {
+  const response = await fetch(`${getBackendBaseURL()}/api/vault/ingest/status`);
+  if (!response.ok) {
+    await parseError(response, `Failed to load vault ingest status: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultIngestStatusResponse>;
+}
+
 export async function getVaultFile(path: string): Promise<VaultFileResponse> {
   const response = await fetch(
     `${getBackendBaseURL()}/api/vault/file?path=${encodeURIComponent(path)}`,
@@ -293,6 +316,17 @@ export async function saveVaultFile(request: VaultFileWriteRequest): Promise<{
     await parseError(response, `Failed to save vault file: ${response.statusText}`);
   }
   return response.json() as Promise<{ status: string; path: string; bytes: number }>;
+}
+
+export async function deleteVaultFile(path: string): Promise<{ status: string; path: string }> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/vault/file?path=${encodeURIComponent(path)}`,
+    { method: "DELETE" },
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to delete vault file: ${response.statusText}`);
+  }
+  return response.json() as Promise<{ status: string; path: string }>;
 }
 
 export async function evaluateVaultSufficiency(

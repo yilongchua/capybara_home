@@ -4,10 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import { getBackendBaseURL } from "@/core/config";
-import type { LongRunningTask, LongRunningTaskStatus } from "@/core/long-running/types";
-
 import { api } from "@/core/dreamy/api";
 import { REFRESH_INTERVAL_LRT } from "@/core/dreamy/constants";
+import type { LongRunningTask, LongRunningTaskStatus } from "@/core/long-running/types";
 
 import type { WorkflowJson } from "../types";
 

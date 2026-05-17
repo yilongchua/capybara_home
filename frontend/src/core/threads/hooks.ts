@@ -1423,66 +1423,77 @@ export function useThreadStream({
 }
 
 export function useThreads(
-  params: Parameters<ThreadsClient["search"]>[0] = {
+  params?: Parameters<ThreadsClient["search"]>[0],
+) {
+  const apiClient = getAPIClient();
+  const effectiveParams: Parameters<ThreadsClient["search"]>[0] = params ?? {
     limit: 50,
     sortBy: "updated_at",
     sortOrder: "desc",
     select: ["thread_id", "updated_at", "values"],
-  },
-) {
-  const apiClient = getAPIClient();
+  };
   return useWorkspaceRefreshQuery<AgentThread[]>({
-    queryKey: ["threads", "search", params],
+    // Keep key deterministic to prevent accidental query churn/cancellation loops.
+    queryKey: [
+      "threads",
+      "search",
+      effectiveParams.limit ?? null,
+      effectiveParams.offset ?? null,
+      effectiveParams.sortBy ?? null,
+      effectiveParams.sortOrder ?? null,
+      Array.isArray(effectiveParams.select) ? effectiveParams.select.join(",") : null,
+      Array.isArray(effectiveParams.ids) ? effectiveParams.ids.join(",") : null,
+      effectiveParams.status ?? null,
+    ],
     queryFn: async () => {
-      const maxResults = params.limit;
-      const initialOffset = params.offset ?? 0;
-      const DEFAULT_PAGE_SIZE = 50;
+      const searchWithTimeout = async (
+        query: Parameters<ThreadsClient["search"]>[0],
+        timeoutMs: number,
+      ) => {
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          return await apiClient.threads.search<AgentThreadState>({
+            ...query,
+            signal: controller.signal,
+          });
+        } finally {
+          window.clearTimeout(timer);
+        }
+      };
 
-      // Preserve prior semantics: if a non-positive limit is explicitly provided,
-      // delegate to a single search call with the original parameters.
-      if (maxResults !== undefined && maxResults <= 0) {
-        const response = await apiClient.threads.search<AgentThreadState>(params);
+      // Prefer full records (including values.title) for proper recent-chat labels.
+      // If this fails (e.g. oversized/invalid state payload in one thread), fall
+      // back to a lightweight list so the sidebar still renders past chats.
+      try {
+        const response = await searchWithTimeout(effectiveParams, 8_000);
+        if (!Array.isArray(response)) {
+          return [];
+        }
         return response as AgentThread[];
-      }
-
-      const pageSize =
-        typeof maxResults === "number" && maxResults > 0
-          ? Math.min(DEFAULT_PAGE_SIZE, maxResults)
-          : DEFAULT_PAGE_SIZE;
-
-      const threads: AgentThread[] = [];
-      let offset = initialOffset;
-
-      while (true) {
-        if (typeof maxResults === "number" && threads.length >= maxResults) {
-          break;
+      } catch (error) {
+        console.warn("Primary threads.search failed; falling back to lightweight thread list.", error);
+        const fallbackResponse = await searchWithTimeout({
+          limit: effectiveParams.limit,
+          offset: effectiveParams.offset,
+          sortBy: effectiveParams.sortBy,
+          sortOrder: effectiveParams.sortOrder,
+          metadata: effectiveParams.metadata,
+          status: effectiveParams.status,
+          ids: effectiveParams.ids,
+          // Avoid selecting values in fallback to bypass state serialization issues.
+          select: ["thread_id", "updated_at"],
+        }, 5_000);
+        if (!Array.isArray(fallbackResponse)) {
+          return [];
         }
-
-        const currentLimit =
-          typeof maxResults === "number"
-            ? Math.min(pageSize, maxResults - threads.length)
-            : pageSize;
-
-        if (typeof maxResults === "number" && currentLimit <= 0) {
-          break;
-        }
-
-        const response = (await apiClient.threads.search<AgentThreadState>({
-          ...params,
-          limit: currentLimit,
-          offset,
+        return fallbackResponse.map((thread) => ({
+          ...thread,
+          values: {
+            title: "Untitled",
+          },
         })) as AgentThread[];
-
-        threads.push(...response);
-
-        if (response.length < currentLimit) {
-          break;
-        }
-
-        offset += response.length;
       }
-
-      return threads;
     },
     refreshDomains: ["threads"],
     invalidateQueryKey: ["threads", "search"],
