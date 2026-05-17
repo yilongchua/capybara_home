@@ -1,4 +1,4 @@
-"""Middleware to inject mounted folder info into agent context for any thread."""
+"""Middleware to inject mounted folder info for work-mode mounted threads."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from src.config.paths import get_paths
 logger = logging.getLogger(__name__)
 
 VIRTUAL_MOUNT_PATH = "/mnt/user-data/mounted"
-VIRTUAL_DOCS_MIRROR_PATH = "/mnt/user-data/workspace/.docs"
 VIRTUAL_ANALYSE_PATH = "/mnt/user-data/workspace/.analyse"
 
 
@@ -27,12 +26,15 @@ class DreamyMountState(AgentState):
 
 
 class DreamyMountMiddleware(AgentMiddleware[DreamyMountState]):
-    """Inject mounted folder info into agent context for any thread.
+    """Inject mounted folder info into agent context for work mode only.
 
     Reads dreamy_mount.json, registers the real path under the virtual path
     /mnt/user-data/mounted so all sandbox tools (read_file, write_file, bash,
-    str_replace) can access it, and prepends a <mounted_folder> block to the
-    last human message so the agent knows which files are available.
+    str_replace) can access it.
+
+    To reduce token bloat, the <mounted_folder> block is prepended only once per
+    mounted path and only for work-mode runs. Plan mode relies on persistent
+    lead-agent prompt instructions instead of per-turn injection.
     """
 
     state_schema = DreamyMountState
@@ -40,6 +42,7 @@ class DreamyMountMiddleware(AgentMiddleware[DreamyMountState]):
     @override
     def before_agent(self, state: DreamyMountState, runtime: Runtime) -> dict | None:
         context = runtime.context if isinstance(runtime.context, dict) else {}
+        mode = str(context.get("mode") or "").strip().lower() or "work"
         thread_id = context.get("thread_id")
         if not thread_id:
             return None
@@ -69,6 +72,12 @@ class DreamyMountMiddleware(AgentMiddleware[DreamyMountState]):
         existing_thread_data: ThreadDataState = state.get("thread_data") or {}
         updated_thread_data: ThreadDataState = {**existing_thread_data, "mounted_path": mounted_path_str}
 
+        if mode == "plan":
+            return {"thread_data": updated_thread_data}
+
+        if existing_thread_data.get("mounted_prompt_injected_path") == mounted_path_str:
+            return {"thread_data": updated_thread_data}
+
         messages = list(state.get("messages", []))
         if not messages:
             return {"thread_data": updated_thread_data}
@@ -83,10 +92,7 @@ class DreamyMountMiddleware(AgentMiddleware[DreamyMountState]):
             f"A local folder is mounted and accessible at the virtual path: {VIRTUAL_MOUNT_PATH}",
             f"Real path on host: {mounted_path_str}",
             "",
-            f"important: A mirror of the mounted folder is located within {VIRTUAL_DOCS_MIRROR_PATH}",
-            "inside contains all the markdown version of the mounted folder. always use this as search source of truth",
-            f"Derived analysis artifacts such as repo_overview.md, failed_files.md, and file_catalog.md are stored in {VIRTUAL_ANALYSE_PATH}",
-            "",
+            f"Derived analysis artifacts such as repo_overview.md, failed_files.md, and file_catalog.md are stored in {VIRTUAL_ANALYSE_PATH}.",
             "",
             f"Use {VIRTUAL_MOUNT_PATH}/<filename> with read_file, write_file, str_replace, bash, and ls.",
             "When the user references @filename (e.g. @work.txt), resolve it to "
@@ -110,4 +116,7 @@ class DreamyMountMiddleware(AgentMiddleware[DreamyMountState]):
             id=last_msg.id,
             additional_kwargs=last_msg.additional_kwargs,
         )
-        return {"thread_data": updated_thread_data, "messages": messages}
+        return {
+            "thread_data": {**updated_thread_data, "mounted_prompt_injected_path": mounted_path_str},
+            "messages": messages,
+        }

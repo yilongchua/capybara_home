@@ -20,6 +20,7 @@ class ThreadDataState(TypedDict):
     uploads_path: NotRequired[str | None]
     outputs_path: NotRequired[str | None]
     mounted_path: NotRequired[str | None]
+    mounted_prompt_injected_path: NotRequired[str | None]
 
 
 class ViewedImageData(TypedDict):
