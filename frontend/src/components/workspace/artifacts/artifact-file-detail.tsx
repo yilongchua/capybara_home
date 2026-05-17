@@ -104,7 +104,7 @@ export function ArtifactFileDetail({
   const { content } = useArtifactContent({
     threadId,
     filepath: filepathFromProps,
-    enabled: (isCodeFile && !isWriteFile) || isPlanFile,
+    enabled: !isWriteFile && (isCodeFile || isPlanFile),
   });
 
   const displayContent = content ?? "";

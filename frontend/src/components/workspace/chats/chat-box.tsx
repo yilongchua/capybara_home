@@ -24,6 +24,10 @@ import { useThread } from "../messages/context";
 import { ChatActivityPanel } from "./chat-activity-panel";
 
 const ARTIFACTS_POLL_INTERVAL_MS = 5 * 60_000;
+const DIRECTORY_ARTIFACT_ROOTS = [
+  "/mnt/user-data/workspace/",
+  "/mnt/user-data/mounted/",
+];
 
 function sameStringArray(a: string[], b: string[]) {
   if (a.length !== b.length) {
@@ -35,6 +39,10 @@ function sameStringArray(a: string[], b: string[]) {
     }
   }
   return true;
+}
+
+function isDirectoryArtifactPath(file: string) {
+  return DIRECTORY_ARTIFACT_ROOTS.some((root) => file.startsWith(root));
 }
 
 const ChatBox: React.FC<{
@@ -144,9 +152,7 @@ const ChatBox: React.FC<{
           return;
         }
         setSandboxOutputFiles(
-          (payload.files ?? []).filter((file) =>
-            file.startsWith("/mnt/user-data/workspace/"),
-          ),
+          (payload.files ?? []).filter((file) => isDirectoryArtifactPath(file)),
         );
       } catch {
         // Keep current directory view on transient poll failures.
@@ -179,9 +185,7 @@ const ChatBox: React.FC<{
       }
       const payload = (await response.json()) as { files?: string[] };
       setSandboxOutputFiles(
-        (payload.files ?? []).filter((file) =>
-          file.startsWith("/mnt/user-data/workspace/"),
-        ),
+        (payload.files ?? []).filter((file) => isDirectoryArtifactPath(file)),
       );
     } catch {
       // Keep current state if manual refresh fails.
@@ -290,23 +294,15 @@ const ChatBox: React.FC<{
                 <ResizablePanelGroup orientation="horizontal" id="workspace-directory-panel-group">
                   <ResizablePanel defaultSize={42} minSize={24} id="workspace-directory-explorer">
                     <div className="size-full overflow-y-auto rounded-md border p-2">
-                      {directoryFiles?.length === 0 ? (
-                        <ConversationEmptyState
-                          icon={<FilesIcon />}
-                          title="No directories yet"
-                          description="Directories will appear here once files are generated."
-                        />
-                      ) : (
-                        <ArtifactFileList
-                          className="size-full"
-                          files={directoryFiles ?? []}
-                          threadId={threadId}
-                          createdPath={createdDirectoryPath}
-                          onCreatedPathChange={setCreatedDirectoryPath}
-                          mountedPath={mountedDirectoryPath}
-                          onMountedPathChange={setMountedDirectoryPath}
-                        />
-                      )}
+                      <ArtifactFileList
+                        className="size-full"
+                        files={directoryFiles ?? []}
+                        threadId={threadId}
+                        createdPath={createdDirectoryPath}
+                        onCreatedPathChange={setCreatedDirectoryPath}
+                        mountedPath={mountedDirectoryPath}
+                        onMountedPathChange={setMountedDirectoryPath}
+                      />
                     </div>
                   </ResizablePanel>
                   <ResizableHandle

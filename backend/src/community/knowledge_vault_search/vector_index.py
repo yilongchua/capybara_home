@@ -110,6 +110,10 @@ class OpenAICompatibleEmbedder:
             vectors.append(_normalize(vector))
         return vectors
 
+    def resolved_model_name(self) -> str:
+        _base_url, _api_key, model_name = self._resolve_client_config()
+        return str(model_name or "").strip()
+
     def embed_one(self, text: str) -> np.ndarray | None:
         batched = self.embed_batch([text])
         if not batched:
@@ -219,13 +223,16 @@ class VaultVectorIndex:
         if not chunks:
             return np.empty((0, self.dimensions), dtype=np.float32), "none"
         texts = [str(item["text"]) for item in chunks]
-        if self.backend == "openai_compatible":
-            vectors = self._embedder.embed_batch(texts)
-            if vectors and len(vectors) == len(chunks):
-                matrix = np.vstack([_normalize(v.astype(np.float32)) for v in vectors])
-                return matrix, "openai_compatible"
-        matrix = np.vstack([_hash_embed_text(text, dimensions=self.dimensions) for text in texts]).astype(np.float32)
-        return matrix, "hash_fallback"
+        # Strict mode: Vault ingestion must use embedding endpoint; do not fallback to hash vectors.
+        vectors = self._embedder.embed_batch(texts)
+        if not vectors or len(vectors) != len(chunks):
+            configured = self.embedding_model or "<default-first-configured-model>"
+            raise RuntimeError(
+                "Vault vector indexing requires /embeddings and received no usable vectors "
+                f"(configured_embedding_model={configured!r})."
+            )
+        matrix = np.vstack([_normalize(v.astype(np.float32)) for v in vectors])
+        return matrix, "openai_compatible"
 
     def build(self) -> dict[str, Any]:
         chunks = self._build_chunks()
@@ -242,6 +249,7 @@ class VaultVectorIndex:
             "backend": self.backend,
             "effective_backend": effective_backend,
             "embedding_model": self.embedding_model,
+            "effective_embedding_model": self._embedder.resolved_model_name(),
             "dimensions": int(matrix.shape[1]) if matrix.ndim == 2 and matrix.shape[0] > 0 else self.dimensions,
             "chunk_chars": self.chunk_chars,
             "overlap_chars": self.overlap_chars,
@@ -251,6 +259,22 @@ class VaultVectorIndex:
         }
         self.metadata_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         return payload
+
+    def ensure_embeddings_available(self) -> dict[str, Any]:
+        """Verify the configured embedding endpoint is reachable before ingest/compile."""
+        probe = self._embedder.embed_batch(["vault embedding healthcheck"])
+        if not probe or len(probe) != 1:
+            configured = self.embedding_model or "<default-first-configured-model>"
+            raise RuntimeError(
+                "Vault vector indexing requires /embeddings, but the embedding endpoint is unavailable "
+                f"(configured_embedding_model={configured!r})."
+            )
+        return {
+            "backend": self.backend,
+            "effective_backend": "openai_compatible",
+            "embedding_model": self.embedding_model,
+            "effective_embedding_model": self._embedder.resolved_model_name(),
+        }
 
     def load(self) -> dict[str, Any]:
         if not self.metadata_path.exists():
@@ -291,6 +315,13 @@ class VaultVectorIndex:
             "backend": str(payload.get("backend") or self.backend),
             "effective_backend": str(payload.get("effective_backend") or self.backend),
             "embedding_model": str(payload.get("embedding_model") or self.embedding_model or ""),
+            "effective_embedding_model": str(
+                payload.get("effective_embedding_model")
+                or self._embedder.resolved_model_name()
+                or payload.get("embedding_model")
+                or self.embedding_model
+                or ""
+            ),
             "built_at": payload.get("built_at"),
             "chunk_count": int(payload.get("chunk_count") or 0),
             "dimensions": int(payload.get("dimensions") or self.dimensions),

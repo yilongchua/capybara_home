@@ -194,12 +194,17 @@ class KnowledgeVaultAgent(BaseControlPlaneAgent):
             topic=topic,
             max_items=int(context.definition.config.get("max_queue_items") or 10),
         )
-        report = manager.ingest(
-            urls=urls,
-            source=profile.source,
-            topic=topic,
-            queue_items=queue_items,
-        )
+        try:
+            report = manager.ingest(
+                urls=urls,
+                source=profile.source,
+                topic=topic,
+                queue_items=queue_items,
+            )
+        except Exception:
+            queue_ids = [str(item.get("queue_id") or "") for item in queue_items if str(item.get("queue_id") or "").strip()]
+            manager.requeue_claimed_items(queue_ids, reason="ingest_failed_retry")
+            raise
         report["objective_id"] = objective_id
         artifacts = self._service._write_vault_step_artifacts(
             run_id=context.run_id,

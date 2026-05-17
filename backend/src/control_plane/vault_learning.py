@@ -869,6 +869,25 @@ class VaultLearningManager:
                 item["reason"] = reason
         self._save_queue(queue)
 
+    def requeue_claimed_items(self, queue_ids: list[str], *, reason: str = "ingest_failed_retry") -> None:
+        """Return claimed items back to queued so a later ingest run can retry them."""
+        if not queue_ids:
+            return
+        queue = self._load_queue()
+        now = _utcnow_iso()
+        queue_id_set = set(queue_ids)
+        for item in queue:
+            if str(item.get("queue_id") or "") not in queue_id_set:
+                continue
+            if str(item.get("status") or "") != "claimed":
+                continue
+            item["status"] = "queued"
+            item["updated_at"] = now
+            if reason:
+                item["reason"] = reason
+            item.pop("claimed_at", None)
+        self._save_queue(queue)
+
     def clear_queued_search_results(self, *, reason: str = "rejected_by_user") -> int:
         queue = self._load_queue()
         queued_ids = [str(item.get("queue_id") or "") for item in queue if str(item.get("status") or "") == "queued"]
@@ -1365,6 +1384,38 @@ class VaultLearningManager:
         topic: str = "",
         queue_items: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        # Strict embedding gate: do not ingest any sources unless /embeddings is reachable.
+        search_service = UnifiedVaultSearchService(self.vault_root)
+        try:
+            vector_preflight = search_service.ensure_vector_ready()
+        except Exception as exc:
+            queue_item_ids = [str(item.get("queue_id") or "") for item in (queue_items or []) if str(item.get("queue_id") or "").strip()]
+            self.requeue_claimed_items(queue_item_ids, reason="embedding_unavailable_retry")
+            report = {
+                "source": source,
+                "topic": topic,
+                "status": "deferred_embedding_unavailable",
+                "processed_count": 0,
+                "ingested_count": 0,
+                "skipped_unchanged_count": 0,
+                "rejected_for_trust_count": 0,
+                "rejected_for_policy_count": 0,
+                "queue_items_claimed": len(queue_items or []),
+                "queue_items_requeued": len(queue_item_ids),
+                "error": str(exc),
+            }
+            report_path = self.ingest_reports_dir / f"{_utcnow().strftime('%Y%m%dT%H%M%SZ')}-ingest.json"
+            report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+            self._manifest["last_run_summary"] = {
+                "step": "ingest",
+                "status": report["status"],
+                "updated_at": _utcnow_iso(),
+                "queue_items_claimed": report["queue_items_claimed"],
+                "queue_items_requeued": report["queue_items_requeued"],
+            }
+            self._save_manifest()
+            return report
+
         normalized = self._normalize_urls(urls)
         ingested: list[dict[str, Any]] = []
         skipped_unchanged: list[dict[str, Any]] = []
@@ -1413,6 +1464,13 @@ class VaultLearningManager:
             elif status == "rejected_for_trust":
                 rejected_for_trust.append(result)
 
+        try:
+            compile_report = self.compile_incremental()
+        except Exception:
+            if queue_item_ids:
+                self.requeue_claimed_items(queue_item_ids, reason="compile_failed_retry")
+            raise
+
         if queue_item_ids:
             ingested_ids = {item["url"] for item in ingested if item.get("url")}
             rejected_ids = {item["url"] for item in rejected_for_trust if item.get("url")}
@@ -1423,11 +1481,10 @@ class VaultLearningManager:
             self._mark_queue_items(queue_to_ingested, status="ingested", reason="converted_to_vault_source")
             self._mark_queue_items(queue_to_rejected, status="rejected", reason="trust_score_below_threshold")
             self._mark_queue_items(queue_to_failed, status="rejected", reason="policy_or_fetch_error")
-
-        compile_report = self.compile_incremental()
         report = {
             "source": source,
             "topic": topic,
+            "status": "completed",
             "processed_count": len(normalized) + len(queue_items or []),
             "ingested_count": len(ingested),
             "skipped_unchanged_count": len(skipped_unchanged),
@@ -1438,6 +1495,7 @@ class VaultLearningManager:
             "rejected_for_trust": rejected_for_trust,
             "rejected_for_policy": rejected_for_policy,
             "queue_items_claimed": len(queue_items or []),
+            "vector_preflight": vector_preflight,
             "compile": compile_report,
         }
         report_path = self.ingest_reports_dir / f"{_utcnow().strftime('%Y%m%dT%H%M%SZ')}-ingest.json"

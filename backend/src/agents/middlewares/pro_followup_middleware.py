@@ -110,6 +110,9 @@ def _run_background_followup(
 class PlanFollowupMiddleware(AgentMiddleware[PlanFollowupState]):
     state_schema = PlanFollowupState
 
+    def _has_plan_context(self, state: PlanFollowupState) -> bool:
+        return bool(state.get("plan") or state.get("todo_graph"))
+
     @override
     def before_model(self, state: PlanFollowupState, runtime: Runtime) -> dict | None:
         runtime_context = getattr(runtime, "context", None) or {}
@@ -139,7 +142,11 @@ class PlanFollowupMiddleware(AgentMiddleware[PlanFollowupState]):
             "execution_intent": {
                 "mode": mode,
                 "plan_behavior": str(runtime_context.get("plan_behavior") or ("plan_foreground" if mode == "plan" else "work_interactive")),
-                "allow_background_deepen": mode == "plan" and not bool(runtime_context.get("background_followup")),
+                "allow_background_deepen": (
+                    mode == "plan"
+                    and not bool(runtime_context.get("background_followup"))
+                    and self._has_plan_context(state)
+                ),
                 "max_primary_subagents": 1,
             }
         }
@@ -161,6 +168,8 @@ class PlanFollowupMiddleware(AgentMiddleware[PlanFollowupState]):
         if str(runtime_context.get("mode") or "").strip().lower() != "plan":
             return None
         if bool(runtime_context.get("background_followup")):
+            return None
+        if not self._has_plan_context(state):
             return None
         if not self._is_terminal_answer(state):
             return None

@@ -43,10 +43,10 @@ export function ArtifactFileList({
   className,
   files,
   threadId,
-  createdPath,
-  onCreatedPathChange,
-  mountedPath,
-  onMountedPathChange,
+  createdPath: _createdPath,
+  onCreatedPathChange: _onCreatedPathChange,
+  mountedPath: _mountedPath,
+  onMountedPathChange: _onMountedPathChange,
 }: {
   className?: string;
   files: string[];
@@ -329,7 +329,7 @@ export function ArtifactFileList({
           </div>
         ) : (
           <div className="text-muted-foreground rounded-md border px-3 py-2 text-xs">
-            No files found in /mnt/user-data/workspace.
+            No files found in /mnt/user-data/workspace
           </div>
         )}
       </section>

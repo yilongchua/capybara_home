@@ -276,6 +276,11 @@ class UnifiedVaultSearchService:
             return {"enabled": False, "chunk_count": 0, "built_at": None}
         return self._vector_index.status()
 
+    def ensure_vector_ready(self) -> dict[str, Any]:
+        if not self._vector_index:
+            return {"enabled": False}
+        return self._vector_index.ensure_embeddings_available()
+
 
 class VaultSearcher(UnifiedVaultSearchService):
     """Backwards-compatible alias for the shared vault search service."""

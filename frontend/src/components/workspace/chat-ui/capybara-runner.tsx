@@ -83,6 +83,13 @@ export function CapybaraRunner({
 
   const dotText = DOTS_INTERVALS[dotIndex % DOTS_INTERVALS.length];
   const icon = useMemo(() => getTaskIcon(taskDescription), [taskDescription]);
+  const showWorkingGif = actor === "capybara" || actor === "baby_capy";
+  const gifClassName = cn(
+    "shrink-0 object-contain",
+    size === "sm" && "size-4",
+    size === "md" && "size-5",
+    size === "lg" && "size-6",
+  );
 
   return (
     <div
@@ -95,19 +102,14 @@ export function CapybaraRunner({
     >
       {taskDescription ? (
         <>
-          {(actor === "capybara" || actor === "baby_capy") && (
+          {showWorkingGif && (
             <Image
               src="/capybara-working.gif"
               alt={actor === "baby_capy" ? "Baby Capy working" : "Capybara working"}
               width={20}
               height={20}
               unoptimized
-              className={cn(
-                "shrink-0 object-contain",
-                size === "sm" && "size-4",
-                size === "md" && "size-5",
-                size === "lg" && "size-6",
-              )}
+              className={gifClassName}
             />
           )}
           <span className="text-muted-foreground font-medium">
@@ -123,12 +125,24 @@ export function CapybaraRunner({
           </span>
         </>
       ) : (
-        <span className="text-muted-foreground animate-pulse">
-          {actor === "baby_capy"
-            ? t.chatUI.capybaraRunner.babyThinking
-            : t.chatUI.capybaraRunner.thinking}
-          <span className="animate-pulse">{dotText}</span>
-        </span>
+        <>
+          {showWorkingGif && (
+            <Image
+              src="/capybara-working.gif"
+              alt={actor === "baby_capy" ? "Baby Capy thinking" : "Capybara thinking"}
+              width={20}
+              height={20}
+              unoptimized
+              className={gifClassName}
+            />
+          )}
+          <span className="text-muted-foreground animate-pulse">
+            {actor === "baby_capy"
+              ? t.chatUI.capybaraRunner.babyThinking
+              : t.chatUI.capybaraRunner.thinking}
+            <span className="animate-pulse">{dotText}</span>
+          </span>
+        </>
       )}
     </div>
   );

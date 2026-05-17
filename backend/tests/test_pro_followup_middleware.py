@@ -125,3 +125,33 @@ class TestPlanFollowupFailureSurfacing:
         # thread-A entry must still be present (not consumed by thread-B's call)
         with mod._failed_jobs_lock:
             assert "thread-A" in mod._failed_jobs
+
+    def test_before_model_disables_background_deepen_without_plan_context(self):
+        """Plan mode without plan/todo context must not advertise background deepening."""
+        mod = self._mod
+        middleware = mod.PlanFollowupMiddleware()
+        runtime = _make_runtime("thread-no-plan")
+
+        result = middleware.before_model({}, runtime)
+
+        assert result is not None
+        assert result["execution_intent"]["mode"] == "plan"
+        assert result["execution_intent"]["allow_background_deepen"] is False
+
+    def test_after_model_skips_background_followup_without_plan_context(self):
+        """Terminal plan-mode answers should not spawn deepening jobs when no plan/todos exist."""
+        mod = self._mod
+        middleware = mod.PlanFollowupMiddleware()
+        runtime = _make_runtime("thread-no-plan")
+        state = {
+            "messages": [
+                SimpleNamespace(type="human", content="Check if drive is mounted."),
+                SimpleNamespace(type="ai", content="Yes", tool_calls=[]),
+            ]
+        }
+
+        with patch("src.agents.middlewares.pro_followup_middleware.threading.Thread") as mock_thread:
+            result = middleware.after_model(state, runtime)
+
+        assert result is None
+        mock_thread.assert_not_called()
