@@ -30,6 +30,7 @@ third the user must intervene manually.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from datetime import UTC, datetime
@@ -46,6 +47,30 @@ from src.agents.middlewares.todo_dag_middleware import _materialize_ready_ids
 logger = logging.getLogger(__name__)
 
 _MAX_AUTO_ADAPTATION_ATTEMPTS = 2
+_WORD_RE = re.compile(r"\b\w+\b")
+_COMPLEX_KEYWORDS = (
+    "plan",
+    "analyze",
+    "analyse",
+    "compare",
+    "design",
+    "build",
+    "implement",
+    "refactor",
+    "migrate",
+    "audit",
+    "review",
+    "investigate",
+    "explore",
+    "research",
+    "end-to-end",
+    "comprehensive",
+    "all of",
+    "multi-step",
+    "roadmap",
+    "architecture",
+    "proposal",
+)
 
 
 def _utc_now_iso() -> str:
@@ -55,6 +80,48 @@ def _utc_now_iso() -> str:
 def _is_report_todo(todo_content: str) -> bool:
     lowered = (todo_content or "").lower()
     return "report" in lowered or "comprehensive" in lowered
+
+
+def _extract_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return "\n".join(parts)
+    return str(content)
+
+
+def _has_keyword(text: str, keyword: str) -> bool:
+    if " " in keyword or "-" in keyword:
+        return keyword in text
+    return keyword in set(_WORD_RE.findall(text))
+
+
+def _classify_complexity(user_prompt: str) -> str:
+    text = user_prompt.strip()
+    lowered = text.lower()
+    if not text or len(text) < 25:
+        return "trivial"
+    if any(_has_keyword(lowered, kw) for kw in _COMPLEX_KEYWORDS):
+        return "complex"
+    if len(text) > 300 or "\n" in text:
+        return "complex"
+    return "moderate"
+
+
+def _latest_human_prompt(messages: list[Any]) -> str:
+    for message in reversed(messages):
+        if getattr(message, "type", None) != "human":
+            continue
+        text = _extract_text(getattr(message, "content", ""))
+        if text.strip():
+            return text
+    return ""
 
 
 class WorkModeMiddlewareState(AgentState):
@@ -206,6 +273,18 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
         # ── No plan yet ────────────────────────────────────────────────────────
         if not nodes:
             complexity_tier = state.get("complexity_tier")
+            if not complexity_tier:
+                prompt = _latest_human_prompt(state.get("messages", []) or [])
+                if prompt:
+                    complexity_tier = _classify_complexity(prompt)
+                    if complexity_tier:
+                        if complexity_tier == "complex":
+                            self._handle_complexity_escalation(
+                                auto_mode=auto_mode,
+                                thread_id=thread_id,
+                                requested_model_name=requested_model_name,
+                            )
+                        return {"complexity_tier": complexity_tier}
             if complexity_tier == "complex":
                 self._handle_complexity_escalation(
                     auto_mode=auto_mode,

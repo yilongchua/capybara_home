@@ -93,6 +93,25 @@ function upsertNotice(
   return [...next, notice];
 }
 
+function parseErrorDetail(rawBody: string): string {
+  const trimmed = rawBody.trim();
+  if (!trimmed) {
+    return "Unknown error";
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (typeof parsed === "object" && parsed !== null && "detail" in parsed) {
+      const detail = (parsed as { detail?: unknown }).detail;
+      if (typeof detail === "string" && detail.trim()) {
+        return detail.trim();
+      }
+    }
+  } catch {
+    // fall through to raw body
+  }
+  return trimmed;
+}
+
 export default function ChatPage() {
   const { threadId, isNewThread, setIsNewThread, isMock } = useThreadChat();
 
@@ -240,8 +259,9 @@ function ChatPageContent({
               setPendingExecutePlan(true);
               return;
             }
+            throw new Error("Thread still has an active run. Please wait and retry Execute Plan.");
           }
-          throw new Error(raw);
+          throw new Error(parseErrorDetail(raw));
         }
         executePlanRetryCountRef.current = 0;
         setPendingExecutePlan(false);

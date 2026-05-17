@@ -102,6 +102,7 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         before_summarization: list[BeforeSummarizationHook] | None = None,
         preserve_recent_skill_count: int = 5,
         preserve_recent_skill_tokens: int = 25_000,
+        preserve_user_anchor_count: int = 1,
         **kwargs,
     ) -> None:
         # Capture trigger tuples before super().__init__ may raise a ValueError
@@ -121,6 +122,7 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         self._before_summarization_hooks: list[BeforeSummarizationHook] = before_summarization or []
         self._preserve_recent_skill_count = max(0, preserve_recent_skill_count)
         self._preserve_recent_skill_tokens = max(0, preserve_recent_skill_tokens)
+        self._preserve_user_anchor_count = max(0, preserve_user_anchor_count)
         self._last_trigger_type: str = "manual"
         # Threshold / observed values for the most recent trigger detection,
         # captured so the compaction trajectory event can carry "why now":
@@ -248,6 +250,35 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
             return True
         return normalized.lower().startswith("error generating summary:")
 
+    @staticmethod
+    def _looks_like_empty_context_summary(summary: str) -> bool:
+        normalized = summary.strip().lower()
+        if not normalized:
+            return False
+        markers = (
+            "no prior context",
+            "no prior conversation",
+            "awaiting initial prompt",
+            "session is fresh",
+            "no artifacts, file paths, commands",
+        )
+        return any(marker in normalized for marker in markers)
+
+    @staticmethod
+    def _has_substantive_context(messages: list[AnyMessage]) -> bool:
+        for msg in messages:
+            content = str(getattr(msg, "content", "")).strip()
+            if not content:
+                continue
+            if isinstance(msg, HumanMessage) and getattr(msg, "name", None) == "active_skills":
+                continue
+            lowered = content.lower()
+            if "/mnt/" in lowered or ".md" in lowered or "write file" in lowered:
+                return True
+            if len(content) > 80:
+                return True
+        return False
+
     def _deterministic_fallback_summary(self, messages: list[AnyMessage]) -> str:
         state = self._summary_state_snapshot or {}
         todos_block = "- No todo graph available."
@@ -303,6 +334,11 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         except Exception as exc:  # noqa: BLE001
             summary = f"Error generating summary: {exc}"
             self._last_summary_error = str(exc)
+        if self._looks_like_empty_context_summary(summary) and self._has_substantive_context(messages):
+            self._last_summary_error = "summary_quality_guard: empty-context summary contradicted by conversation state"
+            self._last_summary_quality = "fallback"
+            self._last_summary_source = "deterministic_state"
+            return self._deterministic_fallback_summary(messages)
         if self._is_failed_summary(summary):
             self._last_summary_quality = "fallback"
             self._last_summary_source = "deterministic_state"
@@ -320,6 +356,11 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         except Exception as exc:  # noqa: BLE001
             summary = f"Error generating summary: {exc}"
             self._last_summary_error = str(exc)
+        if self._looks_like_empty_context_summary(summary) and self._has_substantive_context(messages):
+            self._last_summary_error = "summary_quality_guard: empty-context summary contradicted by conversation state"
+            self._last_summary_quality = "fallback"
+            self._last_summary_source = "deterministic_state"
+            return self._deterministic_fallback_summary(messages)
         if self._is_failed_summary(summary):
             self._last_summary_quality = "fallback"
             self._last_summary_source = "deterministic_state"
@@ -339,19 +380,55 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         """Standard partition then rescue recently-injected skill blocks."""
         to_summarize, preserved = self._partition_messages(messages, cutoff_index)
 
-        if self._preserve_recent_skill_count == 0 or not to_summarize:
+        if not to_summarize:
             return to_summarize, preserved
 
         try:
             rescued, remaining = self._rescue_skill_messages(to_summarize)
         except Exception:
             logger.exception("Skill rescue during summarization failed; using default partition")
+            rescued, remaining = [], to_summarize
+
+        try:
+            anchors, remaining = self._rescue_user_anchor_messages(remaining)
+        except Exception:
+            logger.exception("User-anchor rescue during summarization failed; using default remaining set")
+            anchors = []
+
+        rescue_bundle = [*anchors, *rescued]
+        if not rescue_bundle:
             return to_summarize, preserved
 
-        if not rescued:
-            return to_summarize, preserved
+        return remaining, rescue_bundle + preserved
 
-        return remaining, rescued + preserved
+    def _rescue_user_anchor_messages(
+        self,
+        messages: list[AnyMessage],
+    ) -> tuple[list[AnyMessage], list[AnyMessage]]:
+        """Keep earliest non-skill user message(s) as continuity anchors."""
+        if self._preserve_user_anchor_count <= 0 or not messages:
+            return [], messages
+
+        anchor_indices: list[int] = []
+        for i, msg in enumerate(messages):
+            if not isinstance(msg, HumanMessage):
+                continue
+            if getattr(msg, "name", None) == "active_skills":
+                continue
+            content = str(getattr(msg, "content", "")).strip()
+            if not content:
+                continue
+            anchor_indices.append(i)
+            if len(anchor_indices) >= self._preserve_user_anchor_count:
+                break
+
+        if not anchor_indices:
+            return [], messages
+
+        anchor_set = set(anchor_indices)
+        anchors = [messages[i] for i in anchor_indices]
+        remaining = [msg for i, msg in enumerate(messages) if i not in anchor_set]
+        return anchors, remaining
 
     def _rescue_skill_messages(
         self,

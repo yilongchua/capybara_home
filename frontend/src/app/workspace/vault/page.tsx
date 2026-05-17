@@ -234,6 +234,7 @@ export default function VaultPage() {
     const rawNodes = effectiveExplorer?.graph?.nodes ?? [];
     const rawEdges = effectiveExplorer?.graph?.edges ?? [];
     const MAX_GRAPH_NODES = 80;
+    const MAX_CONCEPT_SEEDS = 28;
     const normalizeGraphKind = (value: string) => {
       const kind = value.toLowerCase();
       if (kind.includes("source")) return "source";
@@ -259,30 +260,62 @@ export default function VaultPage() {
       }
     }
     const dedupedNodes = [...dedupByLabel.values()].sort((a, b) => (b.degree ?? 0) - (a.degree ?? 0));
-    const nodes = dedupedNodes.slice(0, MAX_GRAPH_NODES);
-    const nodeIdSet = new Set(nodes.map((n) => n.id));
-    const edges = rawEdges.filter((e) => nodeIdSet.has(e.source) && nodeIdSet.has(e.target));
+    const byId = new Map(dedupedNodes.map((node) => [node.id, node] as const));
+    const connectedEdges = rawEdges.filter((edge) => byId.has(edge.source) && byId.has(edge.target));
+
+    const conceptSeeds = dedupedNodes
+      .filter((node) => normalizeGraphKind(node.kind || "other") === "concept")
+      .slice(0, MAX_CONCEPT_SEEDS);
+
+    const selectedNodeIds = new Set<string>(conceptSeeds.map((node) => node.id));
+    if (selectedNodeIds.size > 0) {
+      const neighborScore = new Map<string, number>();
+      for (const edge of connectedEdges) {
+        const sourceSelected = selectedNodeIds.has(edge.source);
+        const targetSelected = selectedNodeIds.has(edge.target);
+        if (!sourceSelected && !targetSelected) continue;
+        const neighborId = sourceSelected ? edge.target : edge.source;
+        if (selectedNodeIds.has(neighborId)) continue;
+        const neighbor = byId.get(neighborId);
+        if (!neighbor) continue;
+        const score = Number(neighbor.degree ?? 0) + 1;
+        neighborScore.set(neighborId, (neighborScore.get(neighborId) ?? 0) + score);
+      }
+      const rankedNeighbors = [...neighborScore.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([nodeId]) => nodeId);
+      for (const nodeId of rankedNeighbors) {
+        if (selectedNodeIds.size >= MAX_GRAPH_NODES) break;
+        selectedNodeIds.add(nodeId);
+      }
+    }
+    const selectedNodes =
+      selectedNodeIds.size > 0
+        ? dedupedNodes.filter((node) => selectedNodeIds.has(node.id))
+        : dedupedNodes.slice(0, MAX_GRAPH_NODES);
+    const nodeIdSet = new Set(selectedNodes.map((node) => node.id));
+    const edges = connectedEdges.filter((edge) => nodeIdSet.has(edge.source) && nodeIdSet.has(edge.target));
 
     const width = 900;
     const height = 520;
     const cx = width / 2;
     const cy = height / 2;
     const radiusByKind: Record<string, number> = {
-      source: Math.min(width, height) * 0.18,
-      concept: Math.min(width, height) * 0.28,
-      entity: Math.min(width, height) * 0.38,
+      concept: Math.min(width, height) * 0.18,
+      entity: Math.min(width, height) * 0.28,
+      source: Math.min(width, height) * 0.36,
       other: Math.min(width, height) * 0.46,
     };
 
-    const nodesByKind = new Map<string, typeof nodes>();
-    for (const node of nodes) {
+    const nodesByKind = new Map<string, typeof selectedNodes>();
+    for (const node of selectedNodes) {
       const kind = normalizeGraphKind(node.kind || "other");
       const bucket = nodesByKind.get(kind) ?? [];
       bucket.push(node);
       nodesByKind.set(kind, bucket);
     }
 
-    const kindOrder = ["source", "concept", "entity", "other"];
+    const kindOrder = ["concept", "entity", "source", "other"];
     const positioned = kindOrder.flatMap((kind) => {
       const bucket = nodesByKind.get(kind) ?? [];
       return bucket.map((node, index) => {
@@ -309,11 +342,11 @@ export default function VaultPage() {
       return "#64748b";
     };
 
-    const byId = new Map(positioned.map((node) => [node.id, node] as const));
+    const positionedById = new Map(positioned.map((node) => [node.id, node] as const));
     const visibleEdges = edges
       .map((edge) => {
-        const source = byId.get(edge.source);
-        const target = byId.get(edge.target);
+        const source = positionedById.get(edge.source);
+        const target = positionedById.get(edge.target);
         if (!source || !target) return null;
         return {
           ...edge,

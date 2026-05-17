@@ -252,11 +252,34 @@ function isRetryableSubmitConflictError(error: unknown): boolean {
         ? error
         : JSON.stringify(error);
   const normalized = message.toLowerCase();
-  const isConflictStatus = normalized.includes("http 409") || normalized.includes("http 423");
-  if (!isConflictStatus) {
+
+  const asAny = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+  };
+  const status = typeof asAny?.status === "number"
+    ? asAny.status
+    : typeof asAny?.statusCode === "number"
+      ? asAny.statusCode
+      : typeof asAny?.response?.status === "number"
+        ? asAny.response.status
+        : null;
+
+  const hasConflictStatus =
+    status === 409 ||
+    status === 423 ||
+    normalized.includes("http 409") ||
+    normalized.includes("http 423");
+  if (!hasConflictStatus) {
     return false;
   }
-  return normalized.includes("in-flight runs") || normalized.includes("temporarily locked");
+
+  return (
+    normalized.includes("in-flight runs") ||
+    normalized.includes("temporarily locked") ||
+    normalized.includes("no tasks in progress")
+  );
 }
 
 export function useThreadStream({
