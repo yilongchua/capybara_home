@@ -186,7 +186,7 @@ cd prompt-tunning
 python test_prompt.py
 ```
 
-After each cycle, the script clears global memory and chat/thread state, matching the UI cleanup flow as closely as possible from automation.
+After each run completes, the script waits 20 seconds immediately before submitting the next prompt. After each cycle, it clears global memory and chat/thread state, matching the UI cleanup flow as closely as possible from automation.
 
 ## Project Structure
 

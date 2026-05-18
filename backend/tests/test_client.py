@@ -150,6 +150,18 @@ def _make_agent_mock(chunks: list[dict]):
     return agent
 
 
+def _make_async_agent_mock(chunks: list[dict]):
+    """Create a mock agent whose .astream() yields the given chunks."""
+    agent = MagicMock()
+
+    async def _astream(*args, **kwargs):  # noqa: ARG001
+        for chunk in chunks:
+            yield chunk
+
+    agent.astream = _astream
+    return agent
+
+
 def _ai_events(events):
     """Filter messages-tuple events with type=ai and non-empty content."""
     return [e for e in events if e.type == "messages-tuple" and e.data.get("type") == "ai" and e.data.get("content")]
@@ -332,6 +344,20 @@ class TestChat:
             result = client.chat("q", thread_id="t7")
 
         assert result == ""
+
+    def test_achat_returns_last_message(self, client):
+        """achat() returns the last AI message text from async stream."""
+        ai1 = AIMessage(content="thinking...", id="ai-1")
+        ai2 = AIMessage(content="final answer", id="ai-2")
+        agent = _make_async_agent_mock([{"messages": [ai1]}, {"messages": [ai2]}])
+
+        with (
+            patch.object(client, "_ensure_agent"),
+            patch.object(client, "_agent", agent),
+        ):
+            result = asyncio.run(client.achat("q", thread_id="t-async"))
+
+        assert result == "final answer"
 
 
 # ---------------------------------------------------------------------------
