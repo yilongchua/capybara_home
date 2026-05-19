@@ -4,7 +4,7 @@ import logging
 import time
 import uuid
 from dataclasses import replace
-from typing import Annotated, Literal
+from typing import Annotated
 
 from langchain.tools import InjectedToolCallId, ToolRuntime, tool
 from langgraph.config import get_config, get_stream_writer
@@ -21,6 +21,7 @@ from src.agents.middlewares.runtime_events import append_runtime_event
 from src.agents.thread_state import ThreadState
 from src.subagents import SubagentExecutor, get_subagent_config
 from src.subagents.executor import SubagentStatus, cleanup_background_task, get_background_task_result
+from src.subagents.registry import get_subagent_names
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,35 @@ def _normalize_plan_status(raw: object) -> str:
     if value in {"draft", "approved", "executing", "completed"}:
         return value
     return "draft"
+
+
+def _parent_agent_name(runtime: ToolRuntime[ContextT, ThreadState] | None) -> str | None:
+    if runtime is None:
+        return None
+    runtime_cfg = getattr(runtime, "config", None)
+    configurable = runtime_cfg.get("configurable", {}) if isinstance(runtime_cfg, dict) else {}
+    metadata = runtime_cfg.get("metadata", {}) if isinstance(runtime_cfg, dict) else {}
+    context = getattr(runtime, "context", None) or {}
+    for source in (configurable, metadata, context):
+        if isinstance(source, dict):
+            agent_name = source.get("agent_name")
+            if isinstance(agent_name, str) and agent_name.strip() and agent_name != "default":
+                return agent_name.strip()
+    return None
+
+
+def _parent_tool_groups(runtime: ToolRuntime[ContextT, ThreadState] | None) -> list[str] | None:
+    agent_name = _parent_agent_name(runtime)
+    if not agent_name:
+        return None
+    try:
+        from src.config.agents_config import load_agent_config
+
+        agent_config = load_agent_config(agent_name)
+    except Exception:
+        logger.exception("Failed to load parent agent config for subagent tool scoping: %s", agent_name)
+        return []
+    return list(agent_config.tool_groups or []) if agent_config and agent_config.tool_groups is not None else None
 
 
 def _extract_reasoning_from_subagent_message(message: dict) -> str | None:
@@ -98,7 +128,7 @@ def task_tool(
     runtime: ToolRuntime[ContextT, ThreadState],
     description: str,
     prompt: str,
-    subagent_type: Literal["general-purpose", "bash"],
+    subagent_type: str,
     tool_call_id: Annotated[str, InjectedToolCallId],
     max_turns: int | None = None,
 ) -> str:
@@ -115,6 +145,14 @@ def task_tool(
       multiple dependent steps, or would benefit from isolated context.
     - **bash**: Command execution specialist for running bash commands. Use for
       git operations, build processes, or when command output would be verbose.
+    - **source-researcher**: External source researcher for one narrow live-source,
+      RSS, or direct-source research objective.
+    - **docs-explorer**: Local corpus explorer for uploaded or mounted documents
+      mirrored into `/mnt/user-data/workspace/.docs`.
+    - **comparison-dimension-researcher**: Researches one comparison dimension
+      across a fixed set of options.
+    - **synthesis-reviewer**: Reviews collected findings or drafts for coverage,
+      contradictions, citations, and freshness.
 
     When to use this tool:
     - Complex tasks requiring multiple steps or tools
@@ -144,7 +182,8 @@ def task_tool(
 
     config = get_subagent_config(subagent_type)
     if config is None:
-        return f"Error: Unknown subagent type '{subagent_type}'. Available: general-purpose, bash"
+        available = ", ".join(get_subagent_names())
+        return f"Error: Unknown subagent type '{subagent_type}'. Available: {available}"
 
     # Build config overrides
     overrides: dict = {}
@@ -192,8 +231,13 @@ def task_tool(
     # Lazy import to avoid circular dependency
     from src.tools import get_available_tools
 
-    # Subagents should not have subagent tools enabled (prevent recursive nesting)
-    tools = get_available_tools(model_name=parent_model, subagent_enabled=False)
+    # Subagents inherit the parent custom agent's tool-group boundary, but never
+    # receive `task` to prevent recursive delegation.
+    tools = get_available_tools(
+        model_name=parent_model,
+        groups=_parent_tool_groups(runtime),
+        subagent_enabled=False,
+    )
 
     # Create executor
     executor = SubagentExecutor(

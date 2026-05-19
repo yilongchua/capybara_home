@@ -9,6 +9,7 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from types import SimpleNamespace
 from typing import Any
 
 from langchain.agents import create_agent
@@ -17,6 +18,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 
 from src.agents.thread_state import SandboxState, ThreadDataState, ThreadState
+from src.config.subagents_config import get_subagents_app_config
 from src.models import create_chat_model
 from src.subagents.config import SubagentConfig
 
@@ -67,12 +69,15 @@ class SubagentResult:
 _background_tasks: dict[str, SubagentResult] = {}
 _background_tasks_lock = threading.Lock()
 
+MAX_CONCURRENT_SUBAGENTS = max(1, int(get_subagents_app_config().max_concurrent_limit))
+
 # Thread pool for background task scheduling and orchestration
-_scheduler_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="subagent-scheduler-")
+_scheduler_pool = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_SUBAGENTS, thread_name_prefix="subagent-scheduler-")
 
 # Thread pool for actual subagent execution (with timeout support)
-# Larger pool to avoid blocking when scheduler submits execution tasks
-_execution_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="subagent-exec-")
+# Match the configured fan-out limit so executor capacity and middleware
+# scheduling make the same concurrency promise.
+_execution_pool = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_SUBAGENTS, thread_name_prefix="subagent-exec-")
 
 
 def _filter_tools(
@@ -103,6 +108,29 @@ def _filter_tools(
         filtered = [t for t in filtered if t.name not in disallowed_set]
 
     return filtered
+
+
+def _filter_tools_by_permission_policy(tools: list[BaseTool]) -> list[BaseTool]:
+    """Apply the parent permission policy to subagent tool availability.
+
+    Subagents cannot ask the user for permission, so tools that would be denied
+    or require confirmation in the parent are removed before the subagent runs.
+    """
+    from src.agents.middlewares.permission_middleware import PermissionMiddleware
+
+    middleware = PermissionMiddleware()
+    allowed_tools: list[BaseTool] = []
+    blocked: list[str] = []
+    for tool in tools:
+        request = SimpleNamespace(tool_call={"name": tool.name, "args": {}})
+        decision = middleware._resolve_decision(request)  # type: ignore[arg-type]
+        if decision not in {"allow", "deny", "ask"} or decision == "allow":
+            allowed_tools.append(tool)
+        else:
+            blocked.append(tool.name)
+    if blocked:
+        logger.info("Subagent permission policy removed tools: %s", ", ".join(sorted(blocked)))
+    return allowed_tools
 
 
 def _get_model_name(config: SubagentConfig, parent_model: str | None) -> str | None:
@@ -158,6 +186,7 @@ class SubagentExecutor:
             config.tools,
             config.disallowed_tools,
         )
+        self.tools = _filter_tools_by_permission_policy(self.tools)
 
         # Recursive delegation is never allowed: a subagent must not have the
         # `task` tool.  Catch misconfiguration early with a hard error.
@@ -178,12 +207,14 @@ class SubagentExecutor:
 
         # Subagents need minimal middlewares to ensure tools can access sandbox and thread_data
         # These middlewares will reuse the sandbox/thread_data from parent agent
+        from src.agents.middlewares.permission_middleware import PermissionMiddleware
         from src.agents.middlewares.thread_data_middleware import ThreadDataMiddleware
         from src.sandbox.middleware import SandboxMiddleware
 
         middlewares = [
             ThreadDataMiddleware(lazy_init=True),  # Compute thread paths
-            SandboxMiddleware(lazy_init=True),  # Reuse parent's sandbox (no re-acquisition)
+            SandboxMiddleware(lazy_init=True, release_on_exit=False),  # Borrow parent's sandbox; parent owns release.
+            PermissionMiddleware(),  # Enforce arg-sensitive permission rules inside delegated runs.
         ]
 
         return create_agent(
@@ -256,29 +287,30 @@ class SubagentExecutor:
             # Use stream instead of invoke to get real-time updates
             # This allows us to collect AI messages as they are generated
             final_state = None
-            async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
-                final_state = chunk
+            async with asyncio.timeout(self.config.timeout_seconds):
+                async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
+                    final_state = chunk
 
-                # Extract AI messages from the current state
-                messages = chunk.get("messages", [])
-                if messages:
-                    last_message = messages[-1]
-                    # Check if this is a new AI message
-                    if isinstance(last_message, AIMessage):
-                        # Convert message to dict for serialization
-                        message_dict = last_message.model_dump()
-                        # Only add if it's not already in the list (avoid duplicates)
-                        # Check by comparing message IDs if available, otherwise compare full dict
-                        message_id = message_dict.get("id")
-                        is_duplicate = False
-                        if message_id:
-                            is_duplicate = any(msg.get("id") == message_id for msg in result.ai_messages)
-                        else:
-                            is_duplicate = message_dict in result.ai_messages
+                    # Extract AI messages from the current state
+                    messages = chunk.get("messages", [])
+                    if messages:
+                        last_message = messages[-1]
+                        # Check if this is a new AI message
+                        if isinstance(last_message, AIMessage):
+                            # Convert message to dict for serialization
+                            message_dict = last_message.model_dump()
+                            # Only add if it's not already in the list (avoid duplicates)
+                            # Check by comparing message IDs if available, otherwise compare full dict
+                            message_id = message_dict.get("id")
+                            is_duplicate = False
+                            if message_id:
+                                is_duplicate = any(msg.get("id") == message_id for msg in result.ai_messages)
+                            else:
+                                is_duplicate = message_dict in result.ai_messages
 
-                        if not is_duplicate:
-                            result.ai_messages.append(message_dict)
-                            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} captured AI message #{len(result.ai_messages)}")
+                            if not is_duplicate:
+                                result.ai_messages.append(message_dict)
+                                logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} captured AI message #{len(result.ai_messages)}")
 
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} completed async execution")
 
@@ -325,6 +357,11 @@ class SubagentExecutor:
             result.status = SubagentStatus.COMPLETED
             result.completed_at = datetime.now()
 
+        except TimeoutError:
+            logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} async execution timed out")
+            result.status = SubagentStatus.TIMED_OUT
+            result.error = f"Execution timed out after {self.config.timeout_seconds} seconds"
+            result.completed_at = datetime.now()
         except Exception as e:
             logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} async execution failed")
             result.status = SubagentStatus.FAILED
@@ -436,9 +473,6 @@ class SubagentExecutor:
 
         _scheduler_pool.submit(run_task)
         return task_id
-
-
-MAX_CONCURRENT_SUBAGENTS = 3
 
 
 def get_background_task_result(task_id: str) -> SubagentResult | None:

@@ -7,7 +7,6 @@ from typing import Any, override
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
-from langgraph.graph import END
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
@@ -15,10 +14,6 @@ _ALLOWED_WHEN_DRAFT = {
     "ask_clarification",
     "write_todos",
     "recall",
-    "web_search",
-    "query_knowledge_vault",
-    "query_lightrag",
-    "present_file",
 }
 
 
@@ -53,7 +48,6 @@ class PlanExecutionGateMiddleware(AgentMiddleware[PlanExecutionGateState]):
                     )
                 ]
             },
-            goto=END,
         )
 
     def _maybe_block(self, request: ToolCallRequest) -> Command | None:

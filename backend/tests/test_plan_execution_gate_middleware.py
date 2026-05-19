@@ -26,16 +26,26 @@ def test_draft_plan_blocks_execution_tools():
     middleware = PlanExecutionGateMiddleware()
     result = middleware.wrap_tool_call(_request("write_file", plan={"status": "draft"}), _handler)
     assert isinstance(result, Command)
+    assert getattr(result, "goto", ()) == ()
     message = result.update["messages"][0]
     assert "[plan_gate]" in str(message.content)
 
 
 def test_draft_plan_allows_clarification_and_todo_updates():
     middleware = PlanExecutionGateMiddleware()
-    for tool_name in ("ask_clarification", "write_todos"):
+    for tool_name in ("ask_clarification", "write_todos", "recall"):
         result = middleware.wrap_tool_call(_request(tool_name, plan={"status": "draft"}), _handler)
         assert isinstance(result, ToolMessage)
         assert result.content == "ok"
+
+
+def test_draft_plan_blocks_research_and_presentation_tools():
+    middleware = PlanExecutionGateMiddleware()
+    for tool_name in ("web_search", "query_knowledge_vault", "query_lightrag", "present_files"):
+        result = middleware.wrap_tool_call(_request(tool_name, plan={"status": "draft"}), _handler)
+        assert isinstance(result, Command)
+        message = result.update["messages"][0]
+        assert "[plan_gate]" in str(message.content)
 
 
 def test_approved_plan_allows_execution():
@@ -55,5 +65,6 @@ def test_pending_clarification_blocks_non_clarification_tools():
         _handler,
     )
     assert isinstance(result, Command)
+    assert getattr(result, "goto", ()) == ()
     message = result.update["messages"][0]
     assert "What years should this cover?" in str(message.content)

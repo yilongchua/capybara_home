@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from src.agents.memory.vector_store import get_memory_vector_store
 from src.config.memory_config import get_memory_config
 from src.config.memory_versioning_config import get_memory_versioning_config
 from src.config.paths import get_paths
@@ -344,6 +345,11 @@ def redact_memory(
         scope=scope,
         workspace_id=workspace_id,
     )
+    scope_id = _normalize_scope_id(scope, workspace_id)
+    vector_store = get_memory_vector_store()
+    if removed_ids:
+        vector_store.delete_fact_ids(scope=scope, scope_id=scope_id, fact_ids=removed_ids)
+    vector_store.upsert_facts(scope=scope, scope_id=scope_id, facts=kept_facts)
     return {
         "ref": ref,
         "affected_fact_ids": removed_ids,

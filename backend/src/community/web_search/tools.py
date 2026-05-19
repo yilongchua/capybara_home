@@ -285,6 +285,7 @@ async def web_search_tool(query: str, max_results: int = 5) -> str:
         Calls are throttled through an internal async queue controlled by
         ``max_concurrent_requests`` and ``queue_wait_timeout_seconds``.
     """
+    started_at = perf_counter()
     try:
         enforce_query_guardrails(query, tool_name="web_search")
 
@@ -433,6 +434,7 @@ async def web_search_tool(query: str, max_results: int = 5) -> str:
                 "web_search_runtime": {
                     "max_concurrent_requests": int(cfg["max_concurrent_requests"]),
                     "queue_wait_ms": round(queue_wait_ms, 1),
+                    "elapsed_ms": round((perf_counter() - started_at) * 1000.0, 1),
                 },
             },
             indent=2,
@@ -442,4 +444,4 @@ async def web_search_tool(query: str, max_results: int = 5) -> str:
         raise
     except Exception as exc:
         logger.exception("web_search failed")
-        return json.dumps({"ok": False, "error": str(exc), "query": query}, ensure_ascii=False)
+        return json.dumps({"ok": False, "error": str(exc), "query": query, "web_search_runtime": {"elapsed_ms": round((perf_counter() - started_at) * 1000.0, 1)}}, ensure_ascii=False)

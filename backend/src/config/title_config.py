@@ -38,7 +38,7 @@ class TitleConfig(BaseModel):
     )
     await_generated_title_timeout_seconds: float = Field(
         default=180.0,
-        gt=0.0,
+        ge=0.0,
         le=3600.0,
         description="Maximum time to await the async title generation task at run end.",
     )

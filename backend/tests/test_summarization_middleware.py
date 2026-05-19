@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from src.agents.memory.summarization_hook import memory_flush_hook
 from src.agents.middlewares.summarization_middleware import (
     BeforeSummarizationHook,
     CapybaraSummarizationMiddleware,
@@ -133,6 +134,20 @@ class TestSkillRescue:
         )
         assert skill_in_preserved
 
+    def test_operational_messages_rescued_from_summarization(self):
+        mw = _make_mw()
+        planner = _human("Original request: compare options", name="planner_handoff")
+        old = _human("old context")
+        latest = AIMessage(content="latest")
+        msgs = [old, planner, latest]
+        for i, msg in enumerate(msgs):
+            msg.id = f"msg-{i}"
+
+        to_summarize, preserved = mw._partition_with_skill_rescue(msgs, cutoff_index=2)
+
+        assert planner in preserved
+        assert planner not in to_summarize
+
 
 # ---------------------------------------------------------------------------
 # Hook dispatch
@@ -232,3 +247,76 @@ def test_default_behavior_still_skips_when_threshold_not_met():
 
     result = mw.before_model(state, _runtime())
     assert result is None
+
+
+def test_compaction_event_records_trigger_counts_and_summary_quality(monkeypatch):
+    mw = _make_mw()
+    emitted = []
+    archived = []
+    monkeypatch.setattr("src.agents.middlewares.summarization_middleware.append_runtime_event", lambda runtime, payload: emitted.append(payload))
+    monkeypatch.setattr("src.agents.middlewares.summarization_middleware.append_compaction_entry", lambda thread_id, payload: archived.append((thread_id, payload)))
+
+    mw._last_trigger_type = "messages"
+    mw._last_trigger_threshold = 3
+    mw._last_trigger_observed = 4
+    mw._last_summary_quality = "fallback"
+    mw._last_summary_source = "deterministic_state"
+    mw._last_summary_error = "empty summary"
+
+    mw._record_compaction_event(
+        runtime=_runtime(thread_id="thread-compact"),
+        summary="[summary]",
+        compressed_count=3,
+        kept_count=1,
+    )
+
+    assert emitted == [
+        {
+            "source": "summarization_middleware",
+            "event": "compaction",
+            "thread_id": "thread-compact",
+            "messages_compressed": 3,
+            "messages_kept": 1,
+            "trigger": "messages",
+            "trigger_threshold": 3,
+            "trigger_observed": 4,
+            "summary_quality": "fallback",
+            "summary_source": "deterministic_state",
+            "summary_error": "empty summary",
+        }
+    ]
+    assert archived[0][0] == "thread-compact"
+    assert archived[0][1]["summary_text"] == "[summary]"
+
+
+def test_fraction_trigger_metadata_not_reported_without_proof():
+    mw = _make_mw()
+    mw._trigger_tuples = [("fraction", 0.8)]
+
+    trigger = mw._detect_trigger_type([_human("a")], total_tokens=10)
+
+    assert trigger == "threshold_unmet"
+
+
+def test_memory_flush_hook_queues_tool_heavy_segments(monkeypatch):
+    queued = {}
+    monkeypatch.setattr("src.agents.memory.summarization_hook.get_memory_config", lambda: SimpleNamespace(enabled=True))
+
+    class Queue:
+        def queue_immediate(self, **kwargs):
+            queued.update(kwargs)
+
+    monkeypatch.setattr("src.agents.memory.summarization_hook.get_memory_queue", lambda: Queue())
+    ai, tool = _ai_tool("report.md")
+    event = SummarizationEvent(
+        messages_to_summarize=(_human("analyse the report"), ai, tool),
+        preserved_messages=(),
+        thread_id="thread-tool-heavy",
+        agent_name=None,
+        runtime=_runtime("thread-tool-heavy"),
+    )
+
+    memory_flush_hook(event)
+
+    assert queued["thread_id"] == "thread-tool-heavy"
+    assert any(getattr(msg, "type", None) == "ai" and "Tool-heavy segment" in str(msg.content) for msg in queued["messages"])

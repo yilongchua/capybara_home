@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from src.agents.memory.store import get_memory_version, list_memory_versions, persist_memory_data, redact_memory
+from src.agents.memory.vector_store import MemoryVectorStore
 from src.config.memory_config import MemoryConfig, set_memory_config
 from src.config.memory_versioning_config import MemoryVersioningConfig, set_memory_versioning_config
 from src.config.paths import Paths
@@ -67,3 +68,21 @@ def test_redact_memory_creates_new_version_and_tracks_audit():
     assert version["operation"] == "redact"
     assert version["audit"]["reason"] == "cleanup"
     assert "fact-1" in version["audit"]["affected_fact_ids"]
+
+
+def test_redact_memory_removes_fact_from_vector_store(tmp_path: Path, monkeypatch):
+    vector_store = MemoryVectorStore(tmp_path / "memory.db")
+    monkeypatch.setattr("src.agents.memory.store.get_memory_vector_store", lambda: vector_store)
+    vector_store.upsert_facts(scope="global", scope_id="global", facts=_memory_payload("secret@example.com")["facts"])
+    first = persist_memory_data(_memory_payload("secret@example.com"), source_thread="thread-1")
+
+    redact_memory(
+        agent_name=None,
+        fact_ids=["fact-1"],
+        pattern=None,
+        reason="cleanup",
+        actor="tester",
+        expected_sha=first["sha"],
+    )
+
+    assert vector_store.query(query="secret@example.com", scopes=[("global", "global")], top_k=5) == []

@@ -446,13 +446,34 @@ class TestEnsureAgent:
         """_ensure_agent does not recreate if config key unchanged."""
         mock_agent = MagicMock()
         client._agent = mock_agent
-        client._agent_config_key = (None, True, False, False, True)
+        client._agent_config_key = (None, True, False, False, "t1", None, True)
 
         config = client._get_runnable_config("t1")
         client._ensure_agent(config)
 
         # Should still be the same mock — no recreation
         assert client._agent is mock_agent
+
+    def test_get_runnable_config_threads_current_turn_text(self, client):
+        config = client._get_runnable_config("t1", current_turn_text="Compare coffee methods")
+        cfg = config["configurable"]
+
+        assert cfg["current_turn_text"] == "Compare coffee methods"
+        assert cfg["original_user_request"] == "Compare coffee methods"
+
+    def test_ensure_agent_passes_current_turn_text_to_prompt(self, client):
+        config = client._get_runnable_config("t1", current_turn_text="Compare coffee methods")
+
+        with (
+            patch("src.client.create_chat_model"),
+            patch("src.client.create_agent", return_value=MagicMock()),
+            patch("src.client._build_middlewares", return_value=[]),
+            patch("src.client.apply_prompt_template", return_value="prompt") as mock_apply_prompt,
+            patch.object(client, "_get_tools", return_value=[]),
+        ):
+            client._ensure_agent(config)
+
+        assert mock_apply_prompt.call_args.kwargs["current_turn_text"] == "Compare coffee methods"
 
 
 # ---------------------------------------------------------------------------

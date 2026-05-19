@@ -79,6 +79,41 @@ def test_resets_no_progress_when_outputs_change(tmp_path: Path):
     assert third["progress_guard"]["no_progress_turns"] == 0
 
 
+def test_tool_only_turn_with_todo_graph_change_counts_as_activity(tmp_path: Path):
+    middleware = ProgressGuardMiddleware(
+        ProgressGuardConfig(
+            enabled=True,
+            terminate_on_stall=False,
+            no_progress_turn_threshold=50,
+            conversation_inactivity_turn_threshold=10,
+            cyclic_tool_result_threshold=10,
+        )
+    )
+    outputs_dir = tmp_path / "outputs"
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    state = {
+        "messages": [
+            HumanMessage(content="execute the plan"),
+            AIMessage(content=""),
+        ],
+        "thread_data": {"outputs_path": str(outputs_dir)},
+        "todo_graph": {"nodes": [{"id": "todo-1", "status": "pending"}]},
+    }
+    first = middleware.after_model(state, _runtime()) or {}
+    state["progress_guard"] = first.get("progress_guard")
+
+    state["messages"] = [
+        HumanMessage(content="execute the plan"),
+        AIMessage(content="", tool_calls=[{"name": "write_todos", "args": {}, "id": "tc-1"}]),
+        ToolMessage(content="updated todos", name="write_todos", tool_call_id="tc-1"),
+    ]
+    state["todo_graph"] = {"nodes": [{"id": "todo-1", "status": "completed"}]}
+    second = middleware.after_model(state, _runtime()) or {}
+
+    assert second["progress_guard"]["no_progress_turns"] == 0
+    assert second["progress_guard"]["inactivity_turns"] == 0
+
+
 def test_terminate_on_stall_sets_jump_to_end(tmp_path: Path):
     middleware = ProgressGuardMiddleware(
         ProgressGuardConfig(

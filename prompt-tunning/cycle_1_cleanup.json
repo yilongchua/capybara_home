@@ -1,0 +1,99 @@
+{
+  "cycle_id": 1,
+  "started_at": "2026-05-17T20:32:01.121921Z",
+  "gateway": {
+    "memory": {
+      "success": true,
+      "scope": "global",
+      "scope_id": "global",
+      "memory": {
+        "version": "2.0",
+        "scope": "global",
+        "scopeId": "global",
+        "lastUpdated": "2026-05-17T20:32:01.137881Z",
+        "user": {
+          "workContext": {
+            "summary": "",
+            "updatedAt": ""
+          },
+          "personalContext": {
+            "summary": "",
+            "updatedAt": ""
+          },
+          "topOfMind": {
+            "summary": "",
+            "updatedAt": ""
+          }
+        },
+        "history": {
+          "recentMonths": {
+            "summary": "",
+            "updatedAt": ""
+          },
+          "earlierContext": {
+            "summary": "",
+            "updatedAt": ""
+          },
+          "longTermBackground": {
+            "summary": "",
+            "updatedAt": ""
+          }
+        },
+        "facts": [],
+        "behaviorRules": []
+      }
+    },
+    "threads": {
+      "deleted_count": 20,
+      "files_deleted_count": 20,
+      "failed_thread_ids": [
+        "embedded_sync_minimal",
+        "embedded_sync_qwen",
+        "prompt_tunning_p01_c1_05c97dc6",
+        "t1",
+        "thread-1"
+      ]
+    }
+  },
+  "local": {
+    "memory": {
+      "version": "2.0",
+      "scope": "global",
+      "scopeId": "global",
+      "lastUpdated": "2026-05-17T20:32:01.633878Z",
+      "user": {
+        "workContext": {
+          "summary": "",
+          "updatedAt": ""
+        },
+        "personalContext": {
+          "summary": "",
+          "updatedAt": ""
+        },
+        "topOfMind": {
+          "summary": "",
+          "updatedAt": ""
+        }
+      },
+      "history": {
+        "recentMonths": {
+          "summary": "",
+          "updatedAt": ""
+        },
+        "earlierContext": {
+          "summary": "",
+          "updatedAt": ""
+        },
+        "longTermBackground": {
+          "summary": "",
+          "updatedAt": ""
+        }
+      },
+      "facts": [],
+      "behaviorRules": []
+    },
+    "threads_dir_removed": "/Users/ryan_chua/Desktop/capybara-home/backend/.capybara-home/threads",
+    "checkpointer_reset": true
+  },
+  "completed_at": "2026-05-17T20:32:01.643854Z"
+}

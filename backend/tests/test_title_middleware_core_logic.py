@@ -241,14 +241,12 @@ class TestTitleMiddlewareCoreLogic:
         assert "planner_handoff" not in user_msg
         assert "todo_reminder" not in user_msg
 
-    # ── P3 retry-on-timeout tests ─────────────────────────────────────────────
-
     def test_generate_title_returns_none_on_timeout(self, monkeypatch):
-        """_generate_title must return None on TimeoutError so the caller can retry."""
+        """_generate_title returns None on TimeoutError and keeps the fallback title."""
         _set_test_title_config(max_chars=60)
         middleware = TitleMiddleware()
         fake_model = MagicMock()
-        fake_model.ainvoke = AsyncMock(side_effect=asyncio.TimeoutError())
+        fake_model.ainvoke = AsyncMock(side_effect=TimeoutError())
         monkeypatch.setattr("src.agents.middlewares.title_middleware.create_chat_model", lambda **kwargs: fake_model)
 
         state = {
@@ -277,8 +275,8 @@ class TestTitleMiddlewareCoreLogic:
         result = asyncio.run(middleware._generate_title(state))
         assert isinstance(result, str) and result, "Non-timeout errors should still yield a fallback string"
 
-    def test_bg_task_retries_once_on_timeout(self, monkeypatch):
-        """_bg() must retry _generate_title once when the first call returns None."""
+    def test_bg_task_does_not_retry_on_timeout(self, monkeypatch):
+        """_bg() must not retry _generate_title when the first call times out."""
         _set_test_title_config(max_chars=60)
         middleware = TitleMiddleware()
         monkeypatch.setattr(middleware, "_should_generate_title", lambda s: True)
@@ -293,7 +291,6 @@ class TestTitleMiddlewareCoreLogic:
             return "Real Generated Title"
 
         monkeypatch.setattr(middleware, "_generate_title", _fake_generate)
-        monkeypatch.setattr("asyncio.sleep", AsyncMock())  # skip real sleep
         monkeypatch.setattr(
             "src.agents.middlewares.title_middleware.get_stream_writer",
             lambda: (lambda _: None),
@@ -314,9 +311,21 @@ class TestTitleMiddlewareCoreLogic:
             ]
         }
         asyncio.run(middleware.aafter_model(state, runtime=MagicMock()))
-        # Let the background task run
-        if middleware._title_bg_task:
-            asyncio.run(asyncio.shield(middleware._title_bg_task))
 
-        assert call_count == 2, "_generate_title should have been called twice (initial + retry)"
-        assert middleware._generated_title == "Real Generated Title"
+        assert call_count == 1, "_generate_title should not retry after timeout"
+        assert middleware._generated_title is None
+
+    def test_aafter_agent_does_not_wait_when_title_await_timeout_is_zero(self):
+        _set_test_title_config(await_generated_title_timeout_seconds=0)
+        middleware = TitleMiddleware()
+
+        async def _slow_task():
+            await asyncio.sleep(10)
+
+        async def _run():
+            middleware._title_bg_task = asyncio.create_task(_slow_task())
+            result = await middleware.aafter_agent({}, runtime=MagicMock())
+            assert result is None
+            assert middleware._title_bg_task is None
+
+        asyncio.run(_run())

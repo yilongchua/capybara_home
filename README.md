@@ -128,7 +128,9 @@ LLM-powered fact extraction across sessions. Stores user context, preferences, a
 
 - Configurable confidence threshold (default: 0.7)
 - Max 100 facts, debounced updates (30s)
-- Top 15 facts injected into system prompt per interaction
+- Query-relevant facts are injected into the system prompt; unrelated memory is suppressed when no sufficiently relevant facts are found
+- Runs pass the latest user turn as `current_turn_text`/`original_user_request` so relevance filtering works in UI, embedded-client, and prompt-eval paths
+- Redact/forget/clear operations also purge affected local vector-index entries
 
 ### MCP Integration
 
@@ -154,7 +156,10 @@ Receive tasks from messaging apps. Channels auto-start when configured.
 - **Automatic summarization** — context reduction at configurable token limits
 - **Adaptive polling** — workspace polling uses event-driven refresh with slower idle fallback intervals to reduce noisy background requests
 - **Plan mode** — DAG todo tracking + Planner/Generator/Evaluator loop (Pro mode defaults)
+- **Planner fast paths** — obvious direct-answer requests bypass planner LLM calls to reduce latency
+- **Web search circuit breaker** — repeated failed searches are blocked within a user run so the agent falls back instead of burning another timeout window
 - **Handoff artifacts** — planner/evaluator write `plan.md`, `sprint_contract.md`, `report.md` under thread workspace
+- **Report quality checks** — report-like Markdown artifacts are checked for structure while ordinary workspace notes are left alone
 - **Hooks + retries** — command hooks (`SessionStart`/`PreToolUse`/`PostToolUse`/`FileChanged`) and per-tool retry policy
 - **Trajectory replay** — JSONL trajectories can be replay-checked via eval fixtures
 - **Resumable runs** — resume paused/interrupted runs via Gateway API and embedded client helper
@@ -179,14 +184,14 @@ result = client.resume_run(thread_id="my-thread", run_id="run-123")
 
 ### Prompt Tuning Loop
 
-`prompt-tunning/test_prompt.py` runs 20 prompt-tuning prompts across 3 cycles in work mode with auto mode enabled. Each run writes metadata and copies the thread's `.prompts` files into `prompt-tunning/prompt_id_<n>/`.
+`prompt-tunning/test_prompt.py` runs 20 prompt-tuning prompts across 3 cycles in work mode with auto mode enabled. It defaults to the configured `qwen3.6-remote` model. Each run writes metadata and copies the thread's `.prompts` files into `prompt-tunning/prompt_id_<n>/`.
 
 ```bash
 cd prompt-tunning
 python test_prompt.py
 ```
 
-After each run completes, the script waits 20 seconds immediately before submitting the next prompt. After each cycle, it clears global memory and chat/thread state, matching the UI cleanup flow as closely as possible from automation.
+After each run completes, the script waits 60 seconds immediately before submitting the next prompt. After each cycle, it clears global memory and chat/thread state, matching the UI cleanup flow as closely as possible from automation.
 
 ## Project Structure
 
@@ -197,7 +202,7 @@ capybara-home/
       agents/          # LangGraph agent + middleware registry chain
       gateway/         # FastAPI REST API (16 routers)
       sandbox/         # Execution environment (local/docker/k8s)
-      subagents/       # Parallel task delegation
+      subagents/       # Parallel task delegation, including research-focused built-ins
       tools/           # Tool registry + built-ins
       mcp/             # MCP integration + OAuth
       models/          # LLM factory (thinking/vision support)

@@ -150,9 +150,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
     async def _generate_title(self, state: TitleMiddlewareState) -> str | None:
         """Call the LLM and return a normalized title.
 
-        Returns None on LLM timeout (caller should retry) or the fallback string on
-        other failures.  Keeping timeout-vs-other-failure distinct lets _bg() attempt
-        one retry without masking permanent errors.
+        Returns None on LLM timeout or the fallback string on other failures.
         """
         config = get_title_config()
         prompt, user_msg, _, max_chars = self._prepare_generation(state)
@@ -164,9 +162,9 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
             )
             raw = _extract_text(response.content)
             return self._normalize_title(raw, max_chars)
-        except (asyncio.TimeoutError, TimeoutError):
-            logger.debug("Title LLM timed out; will retry once")
-            return None  # signal to _bg() that a retry is worthwhile
+        except TimeoutError:
+            logger.debug("Title LLM timed out; keeping fallback title")
+            return None
         except Exception as exc:
             logger.debug("Title LLM call failed, using fallback: %s", exc)
             return self._fallback_title(user_msg, config.max_chars)
@@ -221,10 +219,6 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
 
         async def _bg() -> None:
             title = await self._generate_title(state)
-            if title is None:
-                # LLM timed out on first attempt — wait briefly and retry once.
-                await asyncio.sleep(3.0)
-                title = await self._generate_title(state)
             if not title:
                 return
             if is_dreamy and not title.startswith(dreamy_prefix):
@@ -259,13 +253,14 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         """
         config = get_title_config()
         if self._title_bg_task and not self._title_bg_task.done():
-            try:
-                await asyncio.wait_for(
-                    asyncio.shield(self._title_bg_task),
-                    timeout=config.await_generated_title_timeout_seconds,
-                )
-            except (TimeoutError, Exception):
-                pass
+            if config.await_generated_title_timeout_seconds > 0:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(self._title_bg_task),
+                        timeout=config.await_generated_title_timeout_seconds,
+                    )
+                except (TimeoutError, Exception):
+                    pass
 
         title = self._generated_title
         self._generated_title = None

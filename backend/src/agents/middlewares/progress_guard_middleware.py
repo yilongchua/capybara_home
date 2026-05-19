@@ -98,6 +98,7 @@ def _outputs_fingerprint(state: AgentState) -> dict:
     return {
         "artifacts": state.get("artifacts", []) or [],
         "todos": state.get("todos", []) or [],
+        "todo_graph": state.get("todo_graph", {}) or {},
         "outputs": fingerprint,
     }
 
@@ -183,16 +184,17 @@ class ProgressGuardMiddleware(AgentMiddleware[ProgressGuardState]):
             pg["user_message_sig"] = user_sig
 
         snapshot_hash = _stable_hash(_outputs_fingerprint(state))
+        snapshot_changed = snapshot_hash != pg.get("last_snapshot_hash")
         if retry_turn:
             no_progress_turns = int(pg.get("no_progress_turns", 0))
-        elif snapshot_hash == pg.get("last_snapshot_hash"):
-            no_progress_turns = int(pg.get("no_progress_turns", 0)) + 1
-        else:
+        elif snapshot_changed:
             no_progress_turns = 0
+        else:
+            no_progress_turns = int(pg.get("no_progress_turns", 0)) + 1
         pg["last_snapshot_hash"] = snapshot_hash
         pg["no_progress_turns"] = no_progress_turns
 
-        if _last_ai_visible_content(state):
+        if _last_ai_visible_content(state) or snapshot_changed:
             inactivity_turns = 0
         else:
             inactivity_turns = int(pg.get("inactivity_turns", 0)) + 1

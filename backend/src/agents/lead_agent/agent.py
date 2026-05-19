@@ -54,6 +54,7 @@ from src.agents.middlewares.tool_result_truncation_middleware import ToolResultT
 from src.agents.middlewares.trajectory_middleware import TrajectoryMiddleware
 from src.agents.middlewares.uploads_middleware import UploadsMiddleware
 from src.agents.middlewares.view_image_middleware import ViewImageMiddleware
+from src.agents.middlewares.web_search_circuit_breaker_middleware import WebSearchCircuitBreakerMiddleware
 from src.agents.middlewares.web_search_summary_middleware import WebSearchSummaryMiddleware
 from src.agents.middlewares.work_mode_middleware import _create_work_mode
 from src.agents.middlewares.write_file_artifact_middleware import WriteFileArtifactMiddleware
@@ -538,8 +539,9 @@ def _build_middleware_registry(
         # Bound LLM call duration. Sits between retry (so retried calls are
         # also bounded) and subagent_limit. See routing.timeouts in config.yaml.
         MiddlewareSpec("model_timeout", lambda: ModelTimeoutMiddleware(), after={"retry"}),
+        MiddlewareSpec("web_search_circuit_breaker", lambda: WebSearchCircuitBreakerMiddleware(), after={"model_timeout"}),
         # Cap tool-result size so context can't balloon round over round.
-        MiddlewareSpec("tool_result_truncation", lambda: ToolResultTruncationMiddleware(), after={"model_timeout"}),
+        MiddlewareSpec("tool_result_truncation", lambda: ToolResultTruncationMiddleware(), after={"web_search_circuit_breaker"}),
         MiddlewareSpec("subagent_limit", bind(_create_subagent_limit), after={"retry", "model_timeout", "tool_result_truncation"}),
         MiddlewareSpec("evaluator", bind(_create_evaluator), after={"subagent_limit"}),
         MiddlewareSpec("todo_failure_retry", bind(_create_todo_failure_retry), after={"evaluator"}),
@@ -715,6 +717,8 @@ def make_lead_agent(config: RunnableConfig):
     from src.tools.builtins import setup_agent
 
     params = _extract_runtime_params(config)
+    runtime_cfg = config.get("configurable") or {}
+    current_turn_text = str(runtime_cfg.get("current_turn_text") or runtime_cfg.get("original_user_request") or runtime_cfg.get("user_prompt") or "")
     dreamy_mode = bool((config.get("configurable") or {}).get("dreamy_mode", False))
 
     app_config = get_app_config()
@@ -764,6 +768,7 @@ def make_lead_agent(config: RunnableConfig):
             available_skills=set(["bootstrap"]),
             plan_mode=params.mode == "plan",
             background_followup=params.background_followup,
+            current_turn_text=current_turn_text,
         )
         return create_agent(
             model=chat_model,
@@ -795,6 +800,7 @@ def make_lead_agent(config: RunnableConfig):
             dreamy_mode=dreamy_mode,
             plan_mode=params.mode == "plan",
             background_followup=params.background_followup,
+            current_turn_text=current_turn_text,
         ),
         state_schema=ThreadState,
     )

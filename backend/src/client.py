@@ -182,6 +182,10 @@ class CapybaraClient:
             "subagent_enabled": overrides.get("subagent_enabled", self._subagent_enabled),
             "auto_mode": overrides.get("auto_mode", self._auto_mode),
         }
+        current_turn_text = str(overrides.get("current_turn_text") or overrides.get("original_user_request") or overrides.get("user_prompt") or "")
+        if current_turn_text:
+            configurable["current_turn_text"] = current_turn_text
+            configurable["original_user_request"] = current_turn_text
         mode = str(overrides.get("mode") or ("plan" if configurable["is_plan_mode"] else "work"))
         configurable["mode"] = mode
         configurable["plan_behavior"] = overrides.get("plan_behavior") or ("plan_foreground" if mode == "plan" else "work_interactive")
@@ -203,6 +207,8 @@ class CapybaraClient:
             cfg.get("thinking_enabled"),
             cfg.get("is_plan_mode"),
             cfg.get("subagent_enabled"),
+            cfg.get("thread_id"),
+            cfg.get("current_turn_text"),
             get_harness_config().enabled,
         )
 
@@ -223,6 +229,7 @@ class CapybaraClient:
             "system_prompt": apply_prompt_template(
                 subagent_enabled=subagent_enabled,
                 max_concurrent_subagents=max_concurrent_subagents,
+                current_turn_text=str(cfg.get("current_turn_text") or cfg.get("original_user_request") or cfg.get("user_prompt") or ""),
             ),
             "state_schema": ThreadState,
         }
@@ -320,7 +327,9 @@ class CapybaraClient:
         if thread_id is None:
             thread_id = str(uuid.uuid4())
 
-        config = self._get_runnable_config(thread_id, **kwargs)
+        config_overrides = dict(kwargs)
+        config_overrides.setdefault("current_turn_text", message)
+        config = self._get_runnable_config(thread_id, **config_overrides)
         self._ensure_agent(config)
 
         state: dict[str, Any] = {"messages": [HumanMessage(content=message)]}
@@ -335,6 +344,8 @@ class CapybaraClient:
             "subagent_enabled": cfg.get("subagent_enabled", False),
             "plan_behavior": cfg.get("plan_behavior", "work_interactive"),
             "auto_mode": cfg.get("auto_mode", False),
+            "current_turn_text": cfg.get("current_turn_text"),
+            "original_user_request": cfg.get("original_user_request"),
         }
 
         seen_ids: set[str] = set()
@@ -407,7 +418,9 @@ class CapybaraClient:
         if thread_id is None:
             thread_id = str(uuid.uuid4())
 
-        config = self._get_runnable_config(thread_id, **kwargs)
+        config_overrides = dict(kwargs)
+        config_overrides.setdefault("current_turn_text", message)
+        config = self._get_runnable_config(thread_id, **config_overrides)
         self._ensure_agent(config)
 
         state: dict[str, Any] = {"messages": [HumanMessage(content=message)]}
@@ -422,6 +435,8 @@ class CapybaraClient:
             "subagent_enabled": cfg.get("subagent_enabled", False),
             "plan_behavior": cfg.get("plan_behavior", "work_interactive"),
             "auto_mode": cfg.get("auto_mode", False),
+            "current_turn_text": cfg.get("current_turn_text"),
+            "original_user_request": cfg.get("original_user_request"),
         }
 
         seen_ids: set[str] = set()

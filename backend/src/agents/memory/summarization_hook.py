@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from langchain_core.messages import AIMessage
+
 from src.agents.memory.queue import get_memory_queue
 from src.agents.middlewares.memory_middleware import filter_messages_for_memory
 from src.agents.middlewares.runtime_events import append_runtime_event
@@ -36,6 +38,20 @@ def memory_flush_hook(event) -> None:
 
     user_msgs = [m for m in filtered if getattr(m, "type", None) == "human"]
     ai_msgs = [m for m in filtered if getattr(m, "type", None) == "ai"]
+    if user_msgs and not ai_msgs:
+        tool_summaries = []
+        for msg in event.messages_to_summarize:
+            if getattr(msg, "type", None) != "tool":
+                continue
+            tool_name = getattr(msg, "name", None) or "tool"
+            content = str(getattr(msg, "content", "") or "").strip().replace("\n", " ")
+            if content:
+                tool_summaries.append(f"{tool_name}: {content[:240]}")
+            if len(tool_summaries) >= 8:
+                break
+        if tool_summaries:
+            filtered.append(AIMessage(content="Tool-heavy segment before compaction:\n" + "\n".join(f"- {item}" for item in tool_summaries)))
+            ai_msgs = [filtered[-1]]
     if not user_msgs or not ai_msgs:
         return
 

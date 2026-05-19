@@ -31,16 +31,19 @@ class SandboxMiddleware(AgentMiddleware[SandboxMiddlewareState]):
 
     state_schema = SandboxMiddlewareState
 
-    def __init__(self, lazy_init: bool = True):
+    def __init__(self, lazy_init: bool = True, *, release_on_exit: bool = True):
         """Initialize sandbox middleware.
 
         Args:
             lazy_init: If True, defer sandbox acquisition until first tool call.
                       If False, acquire sandbox eagerly in before_agent().
                       Default is True for optimal performance.
+            release_on_exit: If False, keep any sandbox in state borrowed from
+                      a parent run alive when this agent exits.
         """
         super().__init__()
         self._lazy_init = lazy_init
+        self._release_on_exit = release_on_exit
 
     def _acquire_sandbox(self, thread_id: str) -> str:
         provider = get_sandbox_provider()
@@ -64,6 +67,9 @@ class SandboxMiddleware(AgentMiddleware[SandboxMiddlewareState]):
 
     @override
     def after_agent(self, state: SandboxMiddlewareState, runtime: Runtime) -> dict | None:
+        if not self._release_on_exit:
+            return super().after_agent(state, runtime)
+
         sandbox = state.get("sandbox")
         if sandbox is not None:
             sandbox_id = sandbox["sandbox_id"]

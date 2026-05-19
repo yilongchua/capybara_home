@@ -259,7 +259,8 @@ class TrajectoryMiddleware(AgentMiddleware[TrajectoryMiddlewareState]):
         state = request.state or {}
         runtime = request.runtime
         tool_name = request.tool_call.get("name")
-        self._write_event(state, runtime, "tool_call_start", {"tool": tool_name, "tool_call_id": request.tool_call.get("id")})
+        started_at = time.time()
+        self._write_event(state, runtime, "tool_call_start", {"tool": tool_name, "tool_call_id": request.tool_call.get("id"), "tool_started_at": started_at})
         result: ToolMessage | Command | None = None
         completed_at: float | None = None
         try:
@@ -272,7 +273,7 @@ class TrajectoryMiddleware(AgentMiddleware[TrajectoryMiddlewareState]):
                 state,
                 runtime,
                 "tool_call_end",
-                {"tool": tool_name, "result_type": result_type, "tool_completed_at": completed_at},
+                {"tool": tool_name, "result_type": result_type, "tool_completed_at": completed_at, "duration_ms": round((completed_at - started_at) * 1000, 1) if completed_at else None},
             )
 
     @override
@@ -280,7 +281,8 @@ class TrajectoryMiddleware(AgentMiddleware[TrajectoryMiddlewareState]):
         state = request.state or {}
         runtime = request.runtime
         tool_name = request.tool_call.get("name")
-        self._write_event(state, runtime, "tool_call_start", {"tool": tool_name, "tool_call_id": request.tool_call.get("id")})
+        started_at = time.time()
+        self._write_event(state, runtime, "tool_call_start", {"tool": tool_name, "tool_call_id": request.tool_call.get("id"), "tool_started_at": started_at})
         # try/finally guarantees `tool_call_end` is recorded for every started
         # call. Was missing for write_todos in run-c0425b71bd.
         result: ToolMessage | Command | None = None
@@ -317,5 +319,6 @@ class TrajectoryMiddleware(AgentMiddleware[TrajectoryMiddlewareState]):
                     "timed_out": timed_out,
                     "error": str(error)[:400] if error is not None else None,
                     "tool_completed_at": completed_at,
+                    "duration_ms": round((completed_at - started_at) * 1000, 1) if completed_at else None,
                 },
             )

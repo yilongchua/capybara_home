@@ -87,10 +87,49 @@ def _pending_clarification_answered(messages: list[Any]) -> bool:
     for message in messages[last_ask_idx + 1 :]:
         if _message_type(message) != "human":
             continue
+        if _is_synthetic_human_message(message):
+            continue
         text = _extract_text(getattr(message, "content", ""))
         if text.strip():
             return True
     return False
+
+
+_SYNTHETIC_HUMAN_NAMES = {
+    "planner_handoff",
+    "planner_clarification_required",
+    "system_reminder",
+    "evaluator_feedback",
+    "task_deferred",
+}
+
+_SYNTHETIC_REQUEST_PATTERNS = (
+    "generate a detailed structured plan for the previous user request",
+    "work mode detected this request is too complex for direct execution",
+    "what was the content of the previous user request",
+    "what is the original user request",
+)
+
+
+def _is_synthetic_human_message(message: Any) -> bool:
+    if _message_type(message) != "human":
+        return False
+    name = _message_name(message).strip()
+    if name in _SYNTHETIC_HUMAN_NAMES:
+        return True
+    text = _extract_text(getattr(message, "content", "")).strip().lower()
+    return any(pattern in text for pattern in _SYNTHETIC_REQUEST_PATTERNS)
+
+
+def _original_user_prompt(messages: list[Any]) -> str:
+    """Return the latest real user request, ignoring middleware handoff messages."""
+    for message in reversed(messages):
+        if _message_type(message) != "human" or _is_synthetic_human_message(message):
+            continue
+        text = _extract_text(getattr(message, "content", "")).strip()
+        if text:
+            return text
+    return ""
 
 
 def _utc_now_iso() -> str:
@@ -313,6 +352,68 @@ _COMPLEX_KEYWORDS = (
     "proposal",
 )
 
+_DIRECT_ANSWER_MARKERS = (
+    "checklist",
+    "routine",
+    "learning plan",
+    "beginner",
+    "compare",
+    "pros",
+    "cons",
+    "explain",
+    "guide",
+    "summary",
+    "summarize",
+    "summarise",
+)
+
+_DIRECT_ANSWER_DOMAINS = (
+    "coffee",
+    "espresso",
+    "aeropress",
+    "moka",
+    "pour-over",
+    "standing desk",
+    "emergency kit",
+    "sleep",
+    "phone scrolling",
+    "weight loss",
+    "whole foods",
+    "intermittent fasting",
+    "calorie counting",
+    "learning plan",
+    "machine learning",
+    "creatine",
+    "investing",
+    "index funds",
+    "bonds",
+    "beginner",
+)
+
+_DIRECT_ANSWER_BLOCKERS = (
+    "codebase",
+    "repository",
+    "repo",
+    "implement",
+    "refactor",
+    "migrate",
+    "architecture",
+    "audit",
+    "security",
+    "legal",
+    "contract",
+    "multiple documents",
+    "all files",
+    "write files",
+    "save as",
+    "deep dive",
+    "serious research",
+    "current state",
+    "right now",
+    "latest",
+    "real-time",
+)
+
 _WORD_RE = re.compile(r"\b\w+\b")
 
 
@@ -336,6 +437,23 @@ def _classify_complexity(user_prompt: str) -> str:
     if len(text) > 300 or "\n" in text:
         return "complex"
     return "moderate"
+
+
+def _looks_like_direct_answer_request(user_prompt: str) -> bool:
+    text = " ".join(user_prompt.lower().split())
+    if len(text) > 600:
+        return False
+    if any(blocker in text for blocker in _DIRECT_ANSWER_BLOCKERS):
+        return False
+    has_direct_marker = any(marker in text for marker in _DIRECT_ANSWER_MARKERS)
+    has_direct_domain = any(domain in text for domain in _DIRECT_ANSWER_DOMAINS)
+    if "compare" in text and has_direct_domain:
+        return True
+    if ("checklist" in text or "routine" in text or "learning plan" in text) and has_direct_marker:
+        return True
+    if has_direct_marker and has_direct_domain:
+        return True
+    return False
 
 
 # Legacy alias used by agent.py harness check
@@ -539,12 +657,24 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
             return None
 
         messages = state.get("messages", []) or []
-        latest_user = next((msg for msg in reversed(messages) if getattr(msg, "type", None) == "human"), None)
-        if latest_user is None:
-            return None
-        user_prompt = _extract_text(getattr(latest_user, "content", ""))
+        user_prompt = _original_user_prompt(messages)
+        if not user_prompt.strip():
+            latest_user = next((msg for msg in reversed(messages) if getattr(msg, "type", None) == "human"), None)
+            if latest_user is None:
+                return None
+            user_prompt = _extract_text(getattr(latest_user, "content", ""))
         if not user_prompt.strip():
             return None
+
+        # Classify before emitting planning_started so skipped fast paths do not
+        # show a planning spinner or pay an LLM planner call.
+        tier = _classify_complexity(user_prompt)
+        if tier == "trivial":
+            append_runtime_event(runtime, {"source": "planner_middleware", "decision": "skipped_trivial", "prompt_chars": len(user_prompt)})
+            return {"complexity_tier": "trivial"}
+        if _looks_like_direct_answer_request(user_prompt):
+            append_runtime_event(runtime, {"source": "planner_middleware", "decision": "skipped_direct_answer", "prompt_chars": len(user_prompt), "complexity_tier": tier})
+            return {"complexity_tier": "moderate"}
 
         # Emit planning_started immediately — fires within ~100ms of request arrival
         try:
@@ -552,12 +682,6 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
             writer({"type": "planning_started", "source": "planner_middleware"})
         except Exception:
             logger.exception("Failed to emit planning_started SSE")
-
-        # Classify complexity and store in state
-        tier = _classify_complexity(user_prompt)
-        if tier == "trivial":
-            append_runtime_event(runtime, {"source": "planner_middleware", "decision": "skipped_trivial", "prompt_chars": len(user_prompt)})
-            return {"complexity_tier": "trivial"}
 
         # Invoke planner LLM
         try:
@@ -671,6 +795,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                 f"<planner_handoff>\n"
                 f"Title: {plan_output.title}\n"
                 f"Plan ID: {plan_id}\n"
+                f"Original request: {user_prompt}\n"
                 f"Domain: {plan_output.domain}\n"
                 f"Summary: {plan_output.summary}\n"
                 f"Planned todos: {len(nodes)}\n"

@@ -156,6 +156,14 @@ class MemoryVectorStore:
                 [scope, sid, *ids],
             )
 
+    def delete_scope(self, *, scope: str, scope_id: str | None) -> None:
+        sid = _normalize_scope_id(scope_id)
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM memory_facts WHERE scope = ? AND scope_id = ?",
+                [scope, sid],
+            )
+
     def query(
         self,
         *,

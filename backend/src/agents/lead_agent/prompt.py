@@ -16,142 +16,36 @@ def _build_subagent_section(max_concurrent: int) -> str:
     """
     n = max_concurrent
     return f"""<subagent_system>
-**🚀 SUBAGENT MODE ACTIVE - DECOMPOSE, DELEGATE, SYNTHESIZE**
+Subagent mode is available for parallel work. Use it only when the request naturally splits into 2+ independent sub-tasks.
 
-You are running with subagent capabilities enabled. Your role is to be a **task orchestrator**:
-1. **DECOMPOSE**: Break complex tasks into parallel sub-tasks
-2. **DELEGATE**: Launch multiple subagents simultaneously using parallel `task` calls
-3. **SYNTHESIZE**: Collect and integrate results into a coherent answer
+Hard limit: at most {n} `task` calls in one response. If you identify more than {n} sub-tasks, launch only the most foundational batch now and continue with the next batch after results return.
 
-**CORE PRINCIPLE: Complex tasks should be decomposed and distributed across multiple subagents for parallel execution.**
+Available subagents:
+- `general-purpose`: web research, code exploration, file analysis, multi-source investigation.
+- `bash`: command execution such as git, builds, tests, deployments.
+- `source-researcher`: one narrow live-source/RSS/direct-source research objective with structured source status.
+- `docs-explorer`: read/search `/mnt/user-data/workspace/.docs` mirrored document corpora and return file-grounded evidence.
+- `comparison-dimension-researcher`: analyze one comparison dimension across a fixed set of options.
+- `synthesis-reviewer`: review collected findings or a draft for coverage, contradictions, citations, and freshness.
 
-**⛔ HARD CONCURRENCY LIMIT: MAXIMUM {n} `task` CALLS PER RESPONSE. THIS IS NOT OPTIONAL.**
-- Each response, you may include **at most {n}** `task` tool calls. Any excess calls are **silently discarded** by the system — you will lose that work.
-- **Before launching subagents, you MUST count your sub-tasks in your thinking:**
-  - If count ≤ {n}: Launch all in this response.
-  - If count > {n}: **Pick the {n} most important/foundational sub-tasks for this turn.** Save the rest for the next turn.
-- **Multi-batch execution** (for >{n} sub-tasks):
-  - Turn 1: Launch sub-tasks 1-{n} in parallel → wait for results
-  - Turn 2: Launch next batch in parallel → wait for results
-  - ... continue until all sub-tasks are complete
-  - Final turn: Synthesize ALL results into a coherent answer
-- **Example thinking pattern**: "I identified 6 sub-tasks. Since the limit is {n} per turn, I will launch the first {n} now, and the rest in the next turn."
+Use subagents when:
+- The task has independent research or analysis dimensions.
+- Different files, systems, sources, or perspectives can be investigated in parallel.
+- A complex answer needs multiple evidence-gathering streams before synthesis.
 
-**Available Subagents:**
-- **general-purpose**: For ANY non-trivial task - web research, code exploration, file operations, analysis, etc.
-- **bash**: For command execution (git, build, test, deploy operations)
+Do not use subagents when:
+- The task is a simple direct answer, single command, one-file read/edit, or clarification request.
+- Steps are tightly sequential and each depends on the prior result.
+- You would launch a single task just to wrap work you can do directly.
 
-**Your Orchestration Strategy:**
+Task quality bar:
+- One objective per subagent.
+- Keep each prompt to 3-5 concrete checks or deliverables.
+- Split any mega-brief with 6+ bullets or words like "comprehensive" / "end-to-end".
+- Ask each subagent for a concise result format you can synthesize quickly.
+- Do not re-dispatch the same objective to the same subagent if a prior result already exists; use the partial result or ask a narrower follow-up.
 
-✅ **DECOMPOSE + PARALLEL EXECUTION (Preferred Approach):**
-
-For complex queries, break them down into focused sub-tasks and execute in parallel batches (max {n} per turn):
-
-**Task decomposition quality bar (MUST FOLLOW):**
-- Each subagent task must have exactly one clear objective.
-- Keep each subagent prompt scoped to 3-5 concrete checks/deliverables, not a broad mega-brief.
-- If a sub-task description contains words like "comprehensive", "end-to-end", or 6+ bullets, split it before dispatching.
-- Prefer narrower tasks with explicit output format over a single overloaded task.
-- If uncertain, do a short triage pass first, then launch targeted follow-up tasks in the next batch.
-
-**Example 1: "Why is Tencent's stock price declining?" (3 sub-tasks → 1 batch)**
-→ Turn 1: Launch 3 subagents in parallel:
-- Subagent 1: Recent financial reports, earnings data, and revenue trends
-- Subagent 2: Negative news, controversies, and regulatory issues
-- Subagent 3: Industry trends, competitor performance, and market sentiment
-→ Turn 2: Synthesize results
-
-**Example 2: "Compare 5 cloud providers" (5 sub-tasks → multi-batch)**
-→ Turn 1: Launch {n} subagents in parallel (first batch)
-→ Turn 2: Launch remaining subagents in parallel
-→ Final turn: Synthesize ALL results into comprehensive comparison
-
-**Example 3: "Refactor the authentication system"**
-→ Turn 1: Launch 3 subagents in parallel:
-- Subagent 1: Analyze current auth implementation and technical debt
-- Subagent 2: Research best practices and security patterns
-- Subagent 3: Review related tests, documentation, and vulnerabilities
-→ Turn 2: Synthesize results
-
-✅ **USE Parallel Subagents (max {n} per turn) when:**
-- **Complex research questions**: Requires multiple information sources or perspectives
-- **Multi-aspect analysis**: Task has several independent dimensions to explore
-- **Large codebases**: Need to analyze different parts simultaneously
-- **Comprehensive investigations**: Questions requiring thorough coverage from multiple angles
-
-❌ **DO NOT use subagents (execute directly) when:**
-- **Task cannot be decomposed**: If you can't break it into 2+ meaningful parallel sub-tasks, execute directly
-- **Ultra-simple actions**: Read one file, quick edits, single commands
-- **Need immediate clarification**: Must ask user before proceeding
-- **Meta conversation**: Questions about conversation history
-- **Sequential dependencies**: Each step depends on previous results (do steps yourself sequentially)
-
-**CRITICAL WORKFLOW** (STRICTLY follow this before EVERY action):
-1. **COUNT**: In your thinking, list all sub-tasks and count them explicitly: "I have N sub-tasks"
-2. **PLAN BATCHES**: If N > {n}, explicitly plan which sub-tasks go in which batch:
-   - "Batch 1 (this turn): first {n} sub-tasks"
-   - "Batch 2 (next turn): next batch of sub-tasks"
-3. **EXECUTE**: Launch ONLY the current batch (max {n} `task` calls). Do NOT launch sub-tasks from future batches.
-4. **REPEAT**: After results return, launch the next batch. Continue until all batches complete.
-5. **SYNTHESIZE**: After ALL batches are done, synthesize all results.
-6. **Cannot decompose** → Execute directly using available tools (bash, read_file, web_search, etc.)
-
-**⛔ VIOLATION: Launching more than {n} `task` calls in a single response is a HARD ERROR. The system WILL discard excess calls and you WILL lose work. Always batch.**
-
-**Remember: Subagents are for parallel decomposition, not for wrapping single tasks.**
-
-**How It Works:**
-- The task tool runs subagents asynchronously in the background
-- The backend automatically polls for completion (you don't need to poll)
-- The tool call will block until the subagent completes its work
-- Once complete, the result is returned to you directly
-
-**Usage Example 1 - Single Batch (≤{n} sub-tasks):**
-
-```python
-# User asks: "Why is Tencent's stock price declining?"
-# Thinking: 3 sub-tasks → fits in 1 batch
-
-# Turn 1: Launch 3 subagents in parallel
-task(description="Tencent financial data", prompt="...", subagent_type="general-purpose")
-task(description="Tencent news & regulation", prompt="...", subagent_type="general-purpose")
-task(description="Industry & market trends", prompt="...", subagent_type="general-purpose")
-# All 3 run in parallel → synthesize results
-```
-
-**Usage Example 2 - Multiple Batches (>{n} sub-tasks):**
-
-```python
-# User asks: "Compare AWS, Azure, GCP, Alibaba Cloud, and Oracle Cloud"
-# Thinking: 5 sub-tasks → need multiple batches (max {n} per batch)
-
-# Turn 1: Launch first batch of {n}
-task(description="AWS analysis", prompt="...", subagent_type="general-purpose")
-task(description="Azure analysis", prompt="...", subagent_type="general-purpose")
-task(description="GCP analysis", prompt="...", subagent_type="general-purpose")
-
-# Turn 2: Launch remaining batch (after first batch completes)
-task(description="Alibaba Cloud analysis", prompt="...", subagent_type="general-purpose")
-task(description="Oracle Cloud analysis", prompt="...", subagent_type="general-purpose")
-
-# Turn 3: Synthesize ALL results from both batches
-```
-
-**Counter-Example - Direct Execution (NO subagents):**
-
-```python
-# User asks: "Run the tests"
-# Thinking: Cannot decompose into parallel sub-tasks
-# → Execute directly
-
-bash("npm test")  # Direct execution, not task()
-```
-
-**CRITICAL**:
-- **Max {n} `task` calls per turn** - the system enforces this, excess calls are discarded
-- Only use `task` when you can launch 2+ subagents in parallel
-- Single task = No value from subagents = Execute directly
-- For >{n} sub-tasks, use sequential batches of {n} across multiple turns
+Batching example: for "Compare 5 cloud providers", launch {n} provider analyses first, wait for results, then launch the remaining providers, then synthesize all results in the final answer.
 </subagent_system>"""
 
 
@@ -218,11 +112,12 @@ After `ask_clarification` is called, execution stops and waits for the user's re
 - Do not rely on `/mnt/user-data/mounted/...` for primary analysis when `.docs` mirror exists
 - Never use host absolute paths (for example `/System/Volumes/Data/.../threads/<thread_id>/...`); thread ids are runtime-specific and already mapped into `/mnt/user-data/...`
 - All temporary work happens in `/mnt/user-data/workspace`
-- Final deliverables should be written in `/mnt/user-data/workspace` and presented using `present_file` tool
+- Final deliverables should be written in `/mnt/user-data/workspace` and presented using `present_files` tool
 
 **Multi-File Research Output:**
 - For complex research tasks, prefer producing multiple well-named output files rather than one monolithic document
 - Example structure: `report.md` (executive summary), `sources.md` (annotated references), `analysis.md` (detailed analysis)
+- Report-like markdown artifacts must include a `## Executive Summary` section before detailed analysis
 - Use `present_files` to surface all output files so the user can navigate between them
 - Each file should be independently readable with a clear title and scope
 </working_directory>
@@ -325,11 +220,12 @@ WORKING_DIRECTORY_SECTION = """<working_directory existed="true">
 - Do not rely on `/mnt/user-data/mounted/...` for primary analysis when `.docs` mirror exists
 - Never use host absolute paths (for example `/System/Volumes/Data/.../threads/<thread_id>/...`); thread ids are runtime-specific and already mapped into `/mnt/user-data/...`
 - All temporary work happens in `/mnt/user-data/workspace`
-- Final deliverables should be written in `/mnt/user-data/workspace` and presented using `present_file` tool
+- Final deliverables should be written in `/mnt/user-data/workspace` and presented using `present_files` tool
 
 **Multi-File Research Output:**
 - For complex research tasks, prefer producing multiple well-named output files rather than one monolithic document
 - Example structure: `report.md` (executive summary), `sources.md` (annotated references), `analysis.md` (detailed analysis)
+- Report-like markdown artifacts must include a `## Executive Summary` section before detailed analysis
 - Use `present_files` to surface all output files so the user can navigate between them
 - Each file should be independently readable with a clear title and scope
 </working_directory>"""
@@ -376,7 +272,7 @@ CRITICAL_REMINDERS_SECTION_TEMPLATE = """<critical_reminders>
 </critical_reminders>"""
 
 
-def _get_memory_context(agent_name: str | None = None) -> str:
+def _get_memory_context(agent_name: str | None = None, *, current_turn_text: str = "") -> str:
     """Get memory context for injection into system prompt.
 
     Args:
@@ -408,11 +304,16 @@ def _get_memory_context(agent_name: str | None = None) -> str:
                 workspace_id=workspace_id,
             )
 
-        # We only have prompt-time access to thread-level metadata here; the
-        # current user turn text can be threaded in later by middleware if needed.
+        current_turn_text = current_turn_text.strip() or str(
+            configurable.get("current_turn_text")
+            or configurable.get("original_user_request")
+            or configurable.get("user_prompt")
+            or ""
+        ).strip()
         memory_content = format_memory_for_injection(
             memory_data,
             max_tokens=config.max_injection_tokens,
+            current_turn_text=current_turn_text,
             workspace_memory_data=workspace_memory_data,
             workspace_id=workspace_id,
         )
@@ -523,21 +424,8 @@ def _build_prompt(
     n = max_concurrent_subagents
     subagent_section = _build_subagent_section(n) if subagent_enabled else ""
 
-    subagent_reminder = (
-        "- **Orchestrator Mode**: You are a task orchestrator - decompose complex tasks into parallel sub-tasks. "
-        f"**HARD LIMIT: max {n} `task` calls per response.** "
-        f"If >{n} sub-tasks, split into sequential batches of ≤{n}. Synthesize after ALL batches complete.\n"
-        if subagent_enabled
-        else ""
-    )
-
-    subagent_thinking = (
-        "- **DECOMPOSITION CHECK: Can this task be broken into 2+ parallel sub-tasks? If YES, COUNT them. "
-        f"If count > {n}, you MUST plan batches of ≤{n} and only launch the FIRST batch now. "
-        f"NEVER launch more than {n} `task` calls in one response.**\n"
-        if subagent_enabled
-        else ""
-    )
+    subagent_reminder = ""
+    subagent_thinking = ""
 
     skills_section = get_skills_prompt_section(available_skills)
 
@@ -677,6 +565,7 @@ def apply_prompt_template(
     dreamy_mode: bool = False,
     plan_mode: bool = False,
     background_followup: bool = False,
+    current_turn_text: str = "",
 ) -> str:
     from src.agents.lead_agent.prompt_cache import get_cached_prompt
     from src.config import get_app_config
@@ -691,7 +580,7 @@ def apply_prompt_template(
         prompt_componentized=get_prompt_config().componentized,
         progressive_skills=app_config.skills.progressive_disclosure,
     )
-    prompt = _inject_memory_context(base_prompt, _get_memory_context(agent_name))
+    prompt = _inject_memory_context(base_prompt, _get_memory_context(agent_name, current_turn_text=current_turn_text))
     if dreamy_mode:
         return prompt + "\n\n" + DREAMY_MODE_SECTION
     if plan_mode and background_followup:

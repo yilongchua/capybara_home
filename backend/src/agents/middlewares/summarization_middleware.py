@@ -34,6 +34,21 @@ from src.agents.middlewares.runtime_events import append_runtime_event
 
 logger = logging.getLogger(__name__)
 
+_OPERATIONAL_MESSAGE_NAMES = {
+    "planner_handoff",
+    "planner_clarification_required",
+    "work_mode_instruction",
+    "work_mode_plan_rerun",
+    "evaluator_feedback",
+    "progress_guard_warning",
+    "task_deferred",
+    "todo_failure_recovery",
+    "todo_reminder",
+    "todo_incomplete_reminder",
+    "permission_ask",
+    "steering_reminder",
+}
+
 
 # ---------------------------------------------------------------------------
 # Hook protocol
@@ -103,6 +118,7 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         preserve_recent_skill_count: int = 5,
         preserve_recent_skill_tokens: int = 25_000,
         preserve_user_anchor_count: int = 1,
+        preserve_recent_operational_count: int = 8,
         **kwargs,
     ) -> None:
         # Capture trigger tuples before super().__init__ may raise a ValueError
@@ -123,6 +139,7 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         self._preserve_recent_skill_count = max(0, preserve_recent_skill_count)
         self._preserve_recent_skill_tokens = max(0, preserve_recent_skill_tokens)
         self._preserve_user_anchor_count = max(0, preserve_user_anchor_count)
+        self._preserve_recent_operational_count = max(0, preserve_recent_operational_count)
         self._last_trigger_type: str = "manual"
         # Threshold / observed values for the most recent trigger detection,
         # captured so the compaction trajectory event can carry "why now":
@@ -390,12 +407,18 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
             rescued, remaining = [], to_summarize
 
         try:
+            operational, remaining = self._rescue_operational_messages(remaining)
+        except Exception:
+            logger.exception("Operational-message rescue during summarization failed; using default remaining set")
+            operational = []
+
+        try:
             anchors, remaining = self._rescue_user_anchor_messages(remaining)
         except Exception:
             logger.exception("User-anchor rescue during summarization failed; using default remaining set")
             anchors = []
 
-        rescue_bundle = [*anchors, *rescued]
+        rescue_bundle = [*anchors, *operational, *rescued]
         if not rescue_bundle:
             return to_summarize, preserved
 
@@ -429,6 +452,33 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         anchors = [messages[i] for i in anchor_indices]
         remaining = [msg for i, msg in enumerate(messages) if i not in anchor_set]
         return anchors, remaining
+
+    def _rescue_operational_messages(
+        self,
+        messages: list[AnyMessage],
+    ) -> tuple[list[AnyMessage], list[AnyMessage]]:
+        """Keep recent synthetic control messages needed to recover execution."""
+        if self._preserve_recent_operational_count <= 0 or not messages:
+            return [], messages
+
+        selected: list[int] = []
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
+            if not isinstance(msg, HumanMessage):
+                continue
+            name = str(getattr(msg, "name", "") or "")
+            if name not in _OPERATIONAL_MESSAGE_NAMES and not name.startswith(("plan-file-sync-", "watchdog-")):
+                continue
+            selected.append(i)
+            if len(selected) >= self._preserve_recent_operational_count:
+                break
+
+        if not selected:
+            return [], messages
+        selected_set = set(selected)
+        rescued = [messages[i] for i in sorted(selected)]
+        remaining = [msg for i, msg in enumerate(messages) if i not in selected_set]
+        return rescued, remaining
 
     def _rescue_skill_messages(
         self,
@@ -507,9 +557,10 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
                 self._last_trigger_observed = len(messages)
                 return "messages"
             if kind == "fraction":
-                self._last_trigger_threshold = threshold
-                self._last_trigger_observed = total_tokens
-                return "fraction"
+                # The base middleware can evaluate fraction triggers with model
+                # profile context; this extension only records metadata when it
+                # can prove a trigger fired. Avoid false "fraction" labels.
+                continue
         # All triggers configured but none crossed — caller still chose to
         # compact (e.g. forced via _should_summarize override). Distinct from
         # "manual" because triggers WERE configured and just didn't fire.

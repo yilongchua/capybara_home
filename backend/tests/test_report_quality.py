@@ -50,3 +50,39 @@ Detailed paragraph about expected future developments and assumptions.
     result = check_report_quality("/mnt/user-data/workspace/report.md", content)
     assert result.ok
     assert result.reasons == []
+
+
+def test_report_quality_does_not_require_executive_summary_for_ordinary_markdown() -> None:
+    content = """
+# Notes
+
+## Findings
+| Item | Value |
+|------|-------|
+| A | 1 |
+| A | 1 |
+""".strip()
+    result = check_report_quality("/mnt/user-data/workspace/notes.md", content)
+    assert result.ok
+    assert result.reasons == []
+
+
+def test_report_quality_requires_executive_summary_for_report_artifact() -> None:
+    content = """
+# Report
+
+## 1. Market
+Detailed paragraph about the market conditions and current trends that remains sufficiently long for the heuristic to consider it significant.
+
+## 2. Technology
+Detailed paragraph about technical developments and model ecosystems that remains sufficiently long for heuristic quality checks.
+
+## 3. Risks
+Detailed paragraph about risks and constraints in deployment, governance, and operations that remains sufficiently long.
+
+## 4. Outlook
+Detailed paragraph about expected future developments and assumptions.
+""".strip()
+    result = check_report_quality("/mnt/user-data/workspace/market-report.md", content)
+    assert not result.ok
+    assert "missing_required_sections:executive_summary" in result.reasons

@@ -121,28 +121,18 @@ Middlewares execute in strict order in `src/agents/lead_agent/agent.py`:
 1. **ThreadDataMiddleware** - Creates per-thread directories (`backend/.capybara-home/threads/{thread_id}/user-data/{workspace,uploads,outputs}`)
 2. **UploadsMiddleware** - Tracks and injects newly uploaded files into conversation
 3. **SandboxMiddleware** - Acquires sandbox, stores `sandbox_id` in state
-4. **AutoresearchMiddleware** - Handles `autoresearch` command routing for control-plane jobs
-5. **DanglingToolCallMiddleware** - Injects placeholder ToolMessages for AIMessage tool_calls that lack responses (e.g., due to user interruption)
-6. **SearchPrivacyMiddleware** - Rewrites web-search query payloads when privacy masking is enabled
-7. **PermissionMiddleware** - Enforces declarative `permissions.allow/deny/ask` policy for tool calls
-8. **ToolDisclosureMiddleware** - Optional phase-gated tool allow-list enforcement (`planner`/`generator`/`evaluator`)
-9. **HooksMiddleware** - Command-only lifecycle hooks (`SessionStart`, `PreToolUse`, `PostToolUse`, `FileChanged`) when configured
-10. **SummarizationMiddleware** - Context reduction when approaching token limits (optional, if enabled)
-11. **SkillDisclosureMiddleware** - Injects active skill bodies progressively based on explicit/matcher activation
-12. **PlannerMiddleware** - Pro-mode planning stage; writes plan + optional sprint contract and seeds todo graph
-13. **TodoDagMiddleware/TodoListMiddleware** - DAG-aware todo tracking by default (legacy flat mode fallback)
-14. **TitleMiddleware** - Auto-generates thread title after first complete exchange
-15. **MemoryMiddleware** - Queues conversations for async memory update (filters to user + final AI responses)
-16. **ViewImageMiddleware** - Injects base64 image data before LLM call (conditional on vision support)
-17. **RetryPolicyMiddleware** - Per-tool retry policy with idempotent retry tagging for ProgressGuard
-18. **SubagentLimitMiddleware** - Endpoint-aware `task` scheduling with deferred queue for excess primary-targeted calls
-19. **EvaluatorMiddleware** - Terminal verification stage with deterministic pre-checks and optional LLM verdict loop
-20. **ScratchpadTaskMemoryMiddleware** - Maintains bounded scratchpad/task memory and writes `.handoffs/scratchpad.md`
-21. **ResumeStateMiddleware** - Maintains resumable-run continuity markers in `resume_meta`
-22. **ProgressGuardMiddleware** - Warn-first loop/stall detector; optional termination path via `jump_to: end`
-23. **TrajectoryMiddleware** - Writes JSONL per-run event trajectory under thread logs
-24. **MetricsMiddleware** - Collects in-process runtime counters (stage/tool/endpoint labels)
-25. **ClarificationMiddleware** - Intercepts `ask_clarification` tool calls, interrupts via `Command(goto=END)` (must be last)
+4. **AutoresearchMiddleware** / **WriteFileArtifactMiddleware** / **DanglingToolCallMiddleware** - Early routing, artifact promotion, and interrupted-tool repair
+5. **WorkModeMiddleware** / **SearchPrivacyMiddleware** / **PlanExecutionGateMiddleware** - Work-mode execution, privacy masking, and recoverable plan approval gating
+6. **PermissionMiddleware** / **ToolDisclosureMiddleware** / **HooksMiddleware** - Declarative permission, phase-gated tool disclosure, and command hooks
+7. **SummarizationMiddleware** / **SkillDisclosureMiddleware** - Context compaction with operational-message preservation, then active skill injection
+8. **PlannerMiddleware** / **PlanEvaluatorMiddleware** / **TodoDagMiddleware/TodoListMiddleware** - Planning, plan checks, and todo graph tracking
+9. **TitleMiddleware** / **QuestionGenerationMiddleware** / **MemoryMiddleware** - Title generation, suggested questions, and async memory updates
+10. **ViewImageMiddleware** / **RetryPolicyMiddleware** / **ModelTimeoutMiddleware** - Vision injection, retries, and bounded model/tool calls
+11. **WebSearchCircuitBreakerMiddleware** / **ToolResultTruncationMiddleware** / **SubagentLimitMiddleware** - Search retry controls, tool-output caps, and endpoint-aware `task` scheduling
+12. **EvaluatorMiddleware** / **TodoFailureRetryMiddleware** / **ScratchpadTaskMemoryMiddleware** / **PlanFileSyncMiddleware** - Final verification, todo repair, handoff scratchpad, and plan-file sync
+13. **ResumeStateMiddleware** / **ProgressGuardMiddleware** / **PlanFollowupMiddleware** / **LoopDetectionMiddleware** - Resume continuity, stall detection, follow-up planning, and repetitive-call detection
+14. **TrajectoryMiddleware** / **ExecutionTraceMiddleware** / **ActivityTimelineMiddleware** / **MetricsMiddleware** - Runtime trace, activity, and metrics capture
+15. **ClarificationMiddleware** - Intercepts `ask_clarification` tool calls, interrupts via `Command(goto=END)` (must be last)
 
 ### Configuration System
 
@@ -210,9 +200,9 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 
 ### Subagent System (`src/subagents/`)
 
-**Built-in Agents**: `general-purpose` (all tools except `task`) and `bash` (command specialist)
-**Execution**: Dual thread pool - `_scheduler_pool` (3 workers) + `_execution_pool` (3 workers)
-**Concurrency**: `MAX_CONCURRENT_SUBAGENTS = 3`, endpoint-aware queueing in `SubagentLimitMiddleware` (defers excess primary-targeted `task` calls), 15-minute timeout
+**Built-in Agents**: `general-purpose` (all tools except `task`), `bash` (command specialist), and research-focused public subagents: `source-researcher`, `docs-explorer`, `comparison-dimension-researcher`, `synthesis-reviewer`
+**Execution**: Dual thread pool - `_scheduler_pool` + `_execution_pool`, sized from `subagents.max_concurrent_limit`
+**Concurrency**: endpoint-aware queueing in `SubagentLimitMiddleware` (research helpers route to helper/triage endpoint, excess primary-targeted `task` calls defer), cooperative per-subagent timeout
 **Flow**: `task()` tool → `SubagentExecutor` → background thread → poll 5s → SSE events → result
 **Events**: `task_started`, `task_running`, `task_completed`/`task_failed`/`task_timed_out`
 
@@ -300,11 +290,12 @@ Bridges external messaging platforms (Slack, Telegram) to the Capybara Home agen
 - **Facts**: Discrete facts with `id`, `content`, `category` (preference/knowledge/context/behavior/goal), `confidence` (0-1), `createdAt`, `source`
 
 **Workflow**:
-1. `MemoryMiddleware` filters messages (user inputs + final AI responses) and queues conversation
+1. `MemoryMiddleware` filters messages (user inputs + final AI responses) and queues conversation; summarization flush also captures tool-heavy segments before compaction
 2. Queue debounces (30s default), batches updates, deduplicates per-thread
 3. Background thread invokes LLM to extract context updates and facts
-4. Applies updates atomically (temp file + rename) with cache invalidation
-5. Next interaction injects top 15 facts + context into `<memory>` tags in system prompt
+4. Applies updates atomically (temp file + rename) with cache invalidation and vector-index upserts/deletes
+5. Prompt injection requires the latest user turn (`current_turn_text` / `original_user_request`) so vector and lexical relevance filtering can suppress unrelated facts
+5. Next interaction injects query-relevant facts into `<memory>` tags in the system prompt. When current-turn text is available, unrelated top-confidence facts and broad user/history context are suppressed unless a sufficiently relevant fact is found; active behavior rules still apply.
 
 **Configuration** (`config.yaml` → `memory`):
 - `enabled` / `injection_enabled` - Master switches
@@ -313,6 +304,7 @@ Bridges external messaging platforms (Slack, Telegram) to the Capybara Home agen
 - `model_name` - LLM for updates (null = default model)
 - `max_facts` / `fact_confidence_threshold` - Fact storage limits (100 / 0.7)
 - `max_injection_tokens` - Token limit for prompt injection (2000)
+- `injection_relevance_threshold` - Minimum retrieval score for facts injected against the current user turn (default 0.25)
 
 ### Reflection System (`src/reflection/`)
 

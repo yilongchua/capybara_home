@@ -46,6 +46,28 @@ def test_componentized_and_legacy_prompt_both_render(monkeypatch):
     assert "<critical_reminders>" in legacy
 
 
+def test_subagent_section_is_compact_and_has_single_limit_statement():
+    section = prompt_module._build_subagent_section(3)
+
+    assert len(section) < 2500
+    assert section.count("at most 3 `task` calls") == 1
+    assert "Usage Example 2" not in section
+    assert "Counter-Example" not in section
+
+
+def test_subagent_duplicate_reminders_are_removed(monkeypatch):
+    monkeypatch.setattr(prompt_module, "_get_memory_context", lambda agent_name=None, current_turn_text="": "")
+    monkeypatch.setattr(prompt_module, "get_agent_soul", lambda _: "")
+    monkeypatch.setattr(prompt_module, "get_skills_prompt_section", lambda _: "")
+    set_prompt_config(PromptConfig(componentized=True))
+
+    rendered = prompt_module._build_prompt(True, 3, None, None)
+
+    assert "DECOMPOSITION CHECK" not in rendered
+    assert "Orchestrator Mode" not in rendered
+    assert rendered.count("at most 3 `task` calls") == 1
+
+
 def test_skills_prompt_section_uses_progressive_instructions(monkeypatch):
     set_app_config(_make_app_config(progressive_disclosure=True))
     monkeypatch.setattr(

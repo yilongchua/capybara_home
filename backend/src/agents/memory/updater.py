@@ -40,6 +40,10 @@ def _scope_cache_key(agent_name: str | None, scope: str, workspace_id: str | Non
     return f"{agent_name or '_global'}::{_normalize_scope(scope)}::{workspace_id or '_'}"
 
 
+def _vector_scope_id(scope: str, workspace_id: str | None) -> str:
+    return workspace_id or "default-workspace" if _normalize_scope(scope) == MEMORY_SCOPE_WORKSPACE else "global"
+
+
 def _get_memory_file_path(
     agent_name: str | None = None,
     *,
@@ -251,6 +255,11 @@ class MemoryUpdater:
             workspace_id = thread_id
         try:
             current_memory = get_memory_data(agent_name, scope=normalized_scope, workspace_id=workspace_id)
+            previous_fact_ids = {
+                str(fact.get("id"))
+                for fact in (current_memory.get("facts") or [])
+                if isinstance(fact, dict) and str(fact.get("id") or "").strip()
+            }
             conversation_text = format_conversation_for_update(messages)
             if not conversation_text.strip():
                 return False
@@ -275,10 +284,25 @@ class MemoryUpdater:
                 workspace_id=workspace_id,
             )
             if ok:
-                get_memory_vector_store().upsert_facts(
+                updated_facts = list(updated_memory.get("facts") or [])
+                updated_fact_ids = {
+                    str(fact.get("id"))
+                    for fact in updated_facts
+                    if isinstance(fact, dict) and str(fact.get("id") or "").strip()
+                }
+                vector_store = get_memory_vector_store()
+                stale_fact_ids = sorted(previous_fact_ids - updated_fact_ids)
+                vector_scope_id = _vector_scope_id(normalized_scope, workspace_id)
+                if stale_fact_ids:
+                    vector_store.delete_fact_ids(
+                        scope=normalized_scope,
+                        scope_id=vector_scope_id,
+                        fact_ids=stale_fact_ids,
+                    )
+                vector_store.upsert_facts(
                     scope=normalized_scope,
-                    scope_id=workspace_id if normalized_scope == MEMORY_SCOPE_WORKSPACE else "global",
-                    facts=list(updated_memory.get("facts") or []),
+                    scope_id=vector_scope_id,
+                    facts=updated_facts,
                 )
             return ok
         except json.JSONDecodeError as e:
@@ -491,14 +515,17 @@ def forget_thread_facts(thread_id: str, *, scope: str = MEMORY_SCOPE_WORKSPACE, 
     memory = get_memory_data(scope=normalized_scope, workspace_id=workspace_id)
     facts = list(memory.get("facts") or [])
     kept = [f for f in facts if str(f.get("source")) != thread_id]
+    removed_ids = [str(f.get("id")) for f in facts if str(f.get("source")) == thread_id and str(f.get("id"))]
     removed = len(facts) - len(kept)
     if removed <= 0:
         return 0
     memory["facts"] = kept
     _save_memory_to_file(memory, source_thread=thread_id, scope=normalized_scope, workspace_id=workspace_id)
+    scope_id = _vector_scope_id(normalized_scope, workspace_id)
+    get_memory_vector_store().delete_fact_ids(scope=normalized_scope, scope_id=scope_id, fact_ids=removed_ids)
     get_memory_vector_store().upsert_facts(
         scope=normalized_scope,
-        scope_id=workspace_id if normalized_scope == MEMORY_SCOPE_WORKSPACE else "global",
+        scope_id=scope_id,
         facts=kept,
     )
     return removed
@@ -514,10 +541,9 @@ def clear_memory(
     scope_id = workspace_id if normalized_scope == MEMORY_SCOPE_WORKSPACE else "global"
     empty = _create_empty_memory(normalized_scope, scope_id=scope_id)
     _save_memory_to_file(empty, source_thread=source, scope=normalized_scope, workspace_id=workspace_id)
-    get_memory_vector_store().upsert_facts(
+    get_memory_vector_store().delete_scope(
         scope=normalized_scope,
-        scope_id=workspace_id if normalized_scope == MEMORY_SCOPE_WORKSPACE else "global",
-        facts=[],
+        scope_id=_vector_scope_id(normalized_scope, workspace_id),
     )
     return empty
 

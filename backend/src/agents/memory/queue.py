@@ -37,6 +37,7 @@ class MemoryUpdateQueue:
         self._lock = threading.Lock()
         self._timer: threading.Timer | None = None
         self._processing = False
+        self._scope_locks: dict[tuple[str, str, str], threading.Lock] = {}
 
     def add(self, thread_id: str, messages: list[Any], agent_name: str | None = None, workspace_id: str | None = None) -> None:
         """Add a conversation to the update queue.
@@ -88,9 +89,6 @@ class MemoryUpdateQueue:
 
     def _process_queue(self) -> None:
         """Process all queued conversation contexts."""
-        # Import here to avoid circular dependency
-        from src.agents.memory.updater import MemoryUpdater
-
         with self._lock:
             if self._processing:
                 # Already processing, reschedule
@@ -108,24 +106,10 @@ class MemoryUpdateQueue:
         print(f"Processing {len(contexts_to_process)} queued memory updates")
 
         try:
-            updater = MemoryUpdater()
-
             for context in contexts_to_process:
                 try:
                     print(f"Updating memory for thread {context.thread_id}")
-                    success_global = updater.update_memory(
-                        messages=context.messages,
-                        thread_id=context.thread_id,
-                        agent_name=context.agent_name,
-                        scope="global",
-                    )
-                    success_workspace = updater.update_memory(
-                        messages=context.messages,
-                        thread_id=context.thread_id,
-                        agent_name=context.agent_name,
-                        scope="workspace",
-                        workspace_id=context.workspace_id or context.thread_id,
-                    )
+                    success_global, success_workspace = self._update_context_memory(context)
                     if success_global or success_workspace:
                         print(f"Memory updated successfully for thread {context.thread_id}")
                     else:
@@ -140,6 +124,41 @@ class MemoryUpdateQueue:
         finally:
             with self._lock:
                 self._processing = False
+
+    def _scope_lock(self, *, agent_name: str | None, scope: str, workspace_id: str | None) -> threading.Lock:
+        key = (agent_name or "_global", scope, workspace_id or "_")
+        with self._lock:
+            lock = self._scope_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._scope_locks[key] = lock
+            return lock
+
+    def _update_context_memory(self, context: ConversationContext) -> tuple[bool, bool]:
+        # Import here to avoid circular dependency.
+        from src.agents.memory.updater import MemoryUpdater
+
+        updater = MemoryUpdater()
+        global_lock = self._scope_lock(agent_name=context.agent_name, scope="global", workspace_id=None)
+        workspace_id = context.workspace_id or context.thread_id
+        workspace_lock = self._scope_lock(agent_name=context.agent_name, scope="workspace", workspace_id=workspace_id)
+
+        with global_lock:
+            success_global = updater.update_memory(
+                messages=context.messages,
+                thread_id=context.thread_id,
+                agent_name=context.agent_name,
+                scope="global",
+            )
+        with workspace_lock:
+            success_workspace = updater.update_memory(
+                messages=context.messages,
+                thread_id=context.thread_id,
+                agent_name=context.agent_name,
+                scope="workspace",
+                workspace_id=workspace_id,
+            )
+        return success_global, success_workspace
 
     def _cancel_pending(self, thread_id: str) -> None:
         self._queue = [c for c in self._queue if c.thread_id != thread_id]
@@ -166,25 +185,10 @@ class MemoryUpdateQueue:
             self._cancel_pending(thread_id)
 
         def _run() -> None:
-            from src.agents.memory.updater import MemoryUpdater
-
-            updater = MemoryUpdater()
             last_error: Exception | None = None
             for attempt in range(1, 4):
                 try:
-                    updater.update_memory(
-                        messages=context.messages,
-                        thread_id=context.thread_id,
-                        agent_name=context.agent_name,
-                        scope="global",
-                    )
-                    updater.update_memory(
-                        messages=context.messages,
-                        thread_id=context.thread_id,
-                        agent_name=context.agent_name,
-                        scope="workspace",
-                        workspace_id=context.workspace_id or context.thread_id,
-                    )
+                    self._update_context_memory(context)
                     return
                 except Exception as exc:
                     last_error = exc

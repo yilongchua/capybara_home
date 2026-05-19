@@ -15,6 +15,14 @@ from src.subagents.executor import MAX_CONCURRENT_SUBAGENTS
 
 logger = logging.getLogger(__name__)
 
+_HELPER_SUBAGENT_TYPES = {
+    "bash",
+    "source-researcher",
+    "docs-explorer",
+    "comparison-dimension-researcher",
+    "synthesis-reviewer",
+}
+
 
 def _clamp_subagent_limit(value: int) -> int:
     """Clamp subagent limit to the configured ``[min, max]`` range.
@@ -58,7 +66,7 @@ class SubagentLimitMiddleware(AgentMiddleware[AgentState]):
         if tool_call.get("name") != "task":
             return "primary"
         subagent_type = str((tool_call.get("args") or {}).get("subagent_type") or "general-purpose")
-        stage = "subagent_triage" if subagent_type == "bash" else "subagent_code"
+        stage = "subagent_triage" if subagent_type in _HELPER_SUBAGENT_TYPES else "subagent_code"
         if self._router is None:
             return "primary"
         return self._router.endpoint_label(stage, requested_model=self._requested_model)

@@ -64,6 +64,23 @@ def test_total_concurrency_cap_enforced():
     assert len(update["deferred_task_calls"]) == 1
 
 
+def test_research_subagents_route_to_helper_endpoint():
+    calls = []
+
+    class Router:
+        def endpoint_label(self, stage, requested_model=None):
+            calls.append((stage, requested_model))
+            return "helper"
+
+    middleware = SubagentLimitMiddleware(max_concurrent=3, router=Router(), requested_model="model-a", max_primary_per_turn=1)
+    endpoint = middleware._target_endpoint(
+        {"name": "task", "id": "t1", "args": {"description": "research", "subagent_type": "source-researcher"}}
+    )
+
+    assert endpoint == "helper"
+    assert calls == [("subagent_triage", "model-a")]
+
+
 def test_deferred_tasks_drain_fifo_priority():
     middleware = SubagentLimitMiddleware(max_concurrent=2, max_primary_per_turn=2)
     middleware._target_endpoint = MethodType(lambda self, tc: "primary", middleware)  # type: ignore[method-assign]

@@ -110,6 +110,9 @@ Important Rules:
 - Remove facts that are contradicted by new information
 - When updating topOfMind, integrate new focus areas while removing completed/abandoned ones
   Keep 3-5 concurrent focus themes that are still active and relevant
+- Do NOT keep completed one-off requests in topOfMind (finished trip plans,
+  product comparisons, temporary research summaries, checklist requests). Move
+  only durable context to history, and remove stale completed items from active focus.
 - For history sections, integrate new information chronologically into appropriate time period
 - Preserve technical accuracy - keep exact names of technologies, companies, projects
 - Focus on information useful for future interactions and personalization
@@ -197,6 +200,56 @@ def _merge_memory_scopes(global_memory: dict[str, Any], workspace_memory: dict[s
     return merged
 
 
+_INJECTION_TOKEN_RE = re.compile(r"[a-zA-Z0-9_]{2,}")
+_INJECTION_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "for",
+    "from",
+    "help",
+    "home",
+    "how",
+    "is",
+    "me",
+    "my",
+    "of",
+    "or",
+    "the",
+    "to",
+    "versus",
+    "vs",
+    "with",
+}
+
+
+def _lexical_relevance(query: str, content: str) -> float:
+    query_tokens = {token.lower() for token in _INJECTION_TOKEN_RE.findall(query or "") if token.lower() not in _INJECTION_STOPWORDS}
+    if not query_tokens:
+        return 0.0
+    content_tokens = {token.lower() for token in _INJECTION_TOKEN_RE.findall(content or "") if token.lower() not in _INJECTION_STOPWORDS}
+    if not content_tokens:
+        return 0.0
+    return len(query_tokens & content_tokens) / max(1, len(query_tokens))
+
+
+def _is_relevant_injection_fact(fact: dict[str, Any], *, current_turn_text: str, threshold: float) -> bool:
+    content = str(fact.get("content") or "")
+    score = float(fact.get("score", 0.0) or 0.0)
+    lexical = _lexical_relevance(current_turn_text, content)
+    query_lower = current_turn_text.lower()
+    content_lower = content.lower()
+    location_sensitive_query = any(token in query_lower for token in ("my city", "where i live", "location", "rent", "housing", "relocat", "move from", "move to"))
+    location_like_fact = any(token in content_lower for token in ("city", "location", "relocat", "singapore", "london", "dubai", "sydney", "tasmania", "hobart", "based in", "lives in"))
+    # The vector-store score blends lexical match with confidence/recency. Require
+    # a direct lexical signal too so high-confidence but unrelated facts do not
+    # leak into generic direct-answer turns. Location-sensitive requests get a
+    # narrow exception because the user may ask "my city" while the fact contains
+    # only the actual place name.
+    return score >= threshold and (lexical >= 0.12 or (location_sensitive_query and location_like_fact))
+
+
 def format_memory_for_injection(
     memory_data: dict[str, Any],
     max_tokens: int = 2000,
@@ -218,11 +271,42 @@ def format_memory_for_injection(
         return ""
 
     merged_memory = _merge_memory_scopes(memory_data or {}, workspace_memory_data)
+    cfg = get_memory_config()
+    has_relevance_query = bool(current_turn_text.strip())
+    facts_for_injection: list[dict[str, Any]] = []
+    if has_relevance_query:
+        scopes = [
+            (MEMORY_SCOPE_WORKSPACE, workspace_id),
+            (MEMORY_SCOPE_GLOBAL, "global"),
+        ]
+        try:
+            facts_for_injection = get_memory_vector_store().query(
+                query=current_turn_text,
+                scopes=scopes,
+                top_k=max(1, cfg.recall_top_k * 2),
+            )
+            facts_for_injection = [
+                fact
+                for fact in facts_for_injection
+                if _is_relevant_injection_fact(
+                    fact,
+                    current_turn_text=current_turn_text,
+                    threshold=cfg.injection_relevance_threshold,
+                )
+            ]
+        except Exception:
+            facts_for_injection = []
+    if not has_relevance_query:
+        facts_for_injection = list(merged_memory.get("facts") or [])
+        facts_for_injection.sort(key=lambda f: float(f.get("confidence", 0.0)), reverse=True)
+        facts_for_injection = facts_for_injection[:10]
+
     sections = []
+    include_broad_context = not has_relevance_query
 
     # Format user context
     user_data = merged_memory.get("user", {})
-    if user_data:
+    if user_data and include_broad_context:
         user_sections = []
 
         work_ctx = user_data.get("workContext", {})
@@ -242,7 +326,7 @@ def format_memory_for_injection(
 
     # Format history
     history_data = merged_memory.get("history", {})
-    if history_data:
+    if history_data and include_broad_context:
         history_sections = []
 
         recent = history_data.get("recentMonths", {})
@@ -256,7 +340,6 @@ def format_memory_for_injection(
         if history_sections:
             sections.append("History:\n" + "\n".join(f"- {s}" for s in history_sections))
 
-    cfg = get_memory_config()
     scoped_rules = [
         rule
         for rule in (merged_memory.get("behaviorRules") or [])
@@ -266,24 +349,6 @@ def format_memory_for_injection(
         lines = [f"- {str(rule.get('instruction')).strip()}" for rule in scoped_rules[:10]]
         sections.append("Behavior Rules:\n" + "\n".join(lines))
 
-    facts_for_injection: list[dict[str, Any]] = []
-    if current_turn_text.strip():
-        scopes = [
-            (MEMORY_SCOPE_WORKSPACE, workspace_id),
-            (MEMORY_SCOPE_GLOBAL, "global"),
-        ]
-        try:
-            facts_for_injection = get_memory_vector_store().query(
-                query=current_turn_text,
-                scopes=scopes,
-                top_k=max(1, cfg.recall_top_k * 2),
-            )
-        except Exception:
-            facts_for_injection = []
-    if not facts_for_injection:
-        facts_for_injection = list(merged_memory.get("facts") or [])
-        facts_for_injection.sort(key=lambda f: float(f.get("confidence", 0.0)), reverse=True)
-        facts_for_injection = facts_for_injection[:10]
     if facts_for_injection:
         lines = []
         for fact in facts_for_injection[:15]:

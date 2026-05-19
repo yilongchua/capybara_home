@@ -13,7 +13,9 @@ from langgraph.types import Command
 from src.agents.checkpointer.extended_sqlite_saver import ExtendedAsyncSqliteSaver
 from src.agents.middlewares.summarization_middleware import CapybaraSummarizationMiddleware
 from src.agents.middlewares.write_file_artifact_middleware import WriteFileArtifactMiddleware
+from src.agents.report_quality import QualityCheckResult
 from src.community.web_search import tools as web_search_tools
+from src.config.quality_gate_config import QualityGateConfig
 from src.models import factory as factory_module
 
 
@@ -35,13 +37,14 @@ class _FakeChatModel(BaseChatModel):
         raise NotImplementedError
 
 
-def _tool_call_request(path: str, *, tool_name: str = "write_file"):
+def _tool_call_request(path: str, *, tool_name: str = "write_file", args: dict | None = None, state: dict | None = None):
     return SimpleNamespace(
         tool_call={
             "name": tool_name,
             "id": "tc-1",
-            "args": {"path": path},
-        }
+            "args": {"path": path, **(args or {})},
+        },
+        state=state or {},
     )
 
 
@@ -73,6 +76,113 @@ def test_write_file_artifact_middleware_skips_non_ok_or_non_outputs_path():
 
     assert isinstance(non_ok_result, ToolMessage)
     assert isinstance(external_result, ToolMessage)
+
+
+def test_write_file_artifact_middleware_marks_quality_skipped_when_no_check_ran(monkeypatch):
+    monkeypatch.setattr(
+        "src.agents.middlewares.write_file_artifact_middleware.get_quality_gate_config",
+        lambda: QualityGateConfig(enabled=True),
+    )
+    middleware = WriteFileArtifactMiddleware()
+    request = _tool_call_request("/mnt/user-data/workspace/report.md")
+
+    async def handler(_request):
+        return ToolMessage(content="OK", tool_call_id="tc-1", name="write_file")
+
+    result = asyncio.run(middleware.awrap_tool_call(request, handler))
+
+    assert isinstance(result, Command)
+    assert result.update["quality_gate"]["status"] == "skipped"
+
+
+def test_write_file_artifact_middleware_checks_append_final_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "src.agents.middlewares.write_file_artifact_middleware.get_quality_gate_config",
+        lambda: QualityGateConfig(enabled=True, block_on_failure=False),
+    )
+    checked = {}
+
+    def fake_check(path, content):
+        checked["path"] = path
+        checked["content"] = content
+        return QualityCheckResult(ok=True, reasons=[])
+
+    monkeypatch.setattr("src.agents.middlewares.write_file_artifact_middleware.check_report_quality", fake_check)
+    report = tmp_path / "report.md"
+    report.write_text("existing\nappended", encoding="utf-8")
+    middleware = WriteFileArtifactMiddleware()
+    request = _tool_call_request(
+        "/mnt/user-data/workspace/report.md",
+        args={"content": "appended", "append": True},
+        state={"thread_data": {"workspace_path": str(tmp_path)}},
+    )
+
+    async def handler(_request):
+        return ToolMessage(content="OK", tool_call_id="tc-1", name="write_file")
+
+    result = asyncio.run(middleware.awrap_tool_call(request, handler))
+
+    assert isinstance(result, Command)
+    assert checked["content"] == "existing\nappended"
+    assert result.update["quality_gate"]["status"] == "passed"
+
+
+def test_write_file_artifact_middleware_checks_str_replace_final_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "src.agents.middlewares.write_file_artifact_middleware.get_quality_gate_config",
+        lambda: QualityGateConfig(enabled=True, block_on_failure=False),
+    )
+    checked = {}
+
+    def fake_check(path, content):
+        checked["path"] = path
+        checked["content"] = content
+        return QualityCheckResult(ok=True, reasons=[])
+
+    monkeypatch.setattr("src.agents.middlewares.write_file_artifact_middleware.check_report_quality", fake_check)
+    report = tmp_path / "report.md"
+    report.write_text("replaced final content", encoding="utf-8")
+    middleware = WriteFileArtifactMiddleware()
+    request = _tool_call_request(
+        "/mnt/user-data/workspace/report.md",
+        tool_name="str_replace",
+        args={"old_str": "old", "new_str": "replaced"},
+        state={"thread_data": {"workspace_path": str(tmp_path)}},
+    )
+
+    async def handler(_request):
+        return ToolMessage(content="OK", tool_call_id="tc-1", name="str_replace")
+
+    result = asyncio.run(middleware.awrap_tool_call(request, handler))
+
+    assert isinstance(result, Command)
+    assert checked["content"] == "replaced final content"
+    assert result.update["quality_gate"]["status"] == "passed"
+
+
+def test_write_file_artifact_middleware_tracks_repair_passes_per_path(monkeypatch):
+    monkeypatch.setattr(
+        "src.agents.middlewares.write_file_artifact_middleware.get_quality_gate_config",
+        lambda: QualityGateConfig(enabled=True, block_on_failure=True, max_repair_passes=3),
+    )
+    monkeypatch.setattr(
+        "src.agents.middlewares.write_file_artifact_middleware.check_report_quality",
+        lambda _path, _content: QualityCheckResult(ok=False, reasons=["duplicate rows"]),
+    )
+    middleware = WriteFileArtifactMiddleware()
+    request = _tool_call_request(
+        "/mnt/user-data/workspace/report-b.md",
+        args={"content": "bad report"},
+        state={"quality_gate": {"repair_passes_by_path": {"/mnt/user-data/workspace/report-a.md": 2}}},
+    )
+
+    result, is_blocking = middleware._quality_gate_precheck(request)
+
+    assert is_blocking is True
+    assert isinstance(result, Command)
+    assert result.update["quality_gate"]["repair_passes"] == 1
+    assert result.update["quality_gate"]["repair_passes_by_path"]["/mnt/user-data/workspace/report-a.md"] == 2
+    assert result.update["quality_gate"]["repair_passes_by_path"]["/mnt/user-data/workspace/report-b.md"] == 1
 
 
 def test_model_factory_strips_endpoints_kwarg_before_model_ctor(monkeypatch):

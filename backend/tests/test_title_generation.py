@@ -24,11 +24,13 @@ class TestTitleConfig:
             max_words=10,
             max_chars=100,
             model_name="gpt-4",
+            await_generated_title_timeout_seconds=0,
         )
         assert config.enabled is False
         assert config.max_words == 10
         assert config.max_chars == 100
         assert config.model_name == "gpt-4"
+        assert config.await_generated_title_timeout_seconds == 0
 
     def test_config_validation(self):
         """Test configuration validation."""

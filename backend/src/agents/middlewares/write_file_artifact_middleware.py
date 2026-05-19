@@ -12,6 +12,8 @@ list on page refresh because thread.values.artifacts is never populated.
 from __future__ import annotations
 
 from fnmatch import fnmatch
+from pathlib import Path
+from types import SimpleNamespace
 from typing import override
 
 from langchain.agents import AgentState
@@ -44,6 +46,25 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
             normalized_path = _WORKSPACE_PREFIX + raw_path[len(_LEGACY_OUTPUTS_PREFIX) :]
         return normalized_path, args.get("content") if isinstance(args.get("content"), str) else None
 
+    def _read_workspace_file(self, request: ToolCallRequest, path: str) -> str | None:
+        if not path.startswith(_WORKSPACE_PREFIX):
+            return None
+        state = request.state or {}
+        thread_data = state.get("thread_data") if isinstance(state, dict) else None
+        workspace_path = thread_data.get("workspace_path") if isinstance(thread_data, dict) else None
+        if not isinstance(workspace_path, str) or not workspace_path:
+            return None
+        relative = path[len(_WORKSPACE_PREFIX) :].lstrip("/")
+        host_path = (Path(workspace_path) / relative).resolve()
+        workspace_root = Path(workspace_path).resolve()
+        try:
+            host_path.relative_to(workspace_root)
+            if not host_path.is_file():
+                return None
+            return host_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError, ValueError):
+            return None
+
     def _is_blocking_failure(self, path: str) -> bool:
         cfg = get_quality_gate_config()
         if cfg.block_on_failure:
@@ -64,6 +85,9 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
         path, content = self._extract_path_and_content(request)
         if not path.startswith(_WORKSPACE_PREFIX):
             return None, False
+        args = request.tool_call.get("args") or {}
+        if isinstance(args, dict) and bool(args.get("append")):
+            return None, False
         if content is None:
             return None, False
 
@@ -81,8 +105,12 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
 
         state = request.state or {}
         qg_state = (state.get("quality_gate") or {}) if isinstance(state, dict) else {}
-        current_passes = int(qg_state.get("repair_passes") or 0) if isinstance(qg_state, dict) else 0
+        repair_by_path = qg_state.get("repair_passes_by_path") if isinstance(qg_state, dict) else None
+        if not isinstance(repair_by_path, dict):
+            repair_by_path = {}
+        current_passes = int(repair_by_path.get(path) or 0)
         next_passes = current_passes + 1
+        next_repair_by_path = {**repair_by_path, path: next_passes}
         is_blocking = self._is_blocking_failure(path)
 
         append_runtime_event(
@@ -124,6 +152,7 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
                         "status": "failed",
                         "fail_reasons": check.reasons,
                         "repair_passes": next_passes,
+                        "repair_passes_by_path": next_repair_by_path,
                         "checked_path": path,
                     },
                 }
@@ -146,6 +175,7 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
                     "status": "failed",
                     "fail_reasons": check.reasons,
                     "repair_passes": next_passes,
+                    "repair_passes_by_path": next_repair_by_path,
                     "checked_path": path,
                 }
             }
@@ -185,10 +215,33 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
             quality_update = precheck.update.get("quality_gate") or {}
             precheck_messages = list(precheck.update.get("messages") or [])
 
+        if not quality_update and get_quality_gate_config().enabled:
+            should_postcheck = tool_name == "str_replace" or (tool_name == "write_file" and bool(args.get("append")) if isinstance(args, dict) else False)
+            if should_postcheck:
+                final_content = self._read_workspace_file(request, path)
+                if final_content is not None:
+                    postcheck_request = SimpleNamespace(
+                        tool_call={
+                            **request.tool_call,
+                            "args": {
+                                **args,
+                                "path": path,
+                                "content": final_content,
+                                "append": False,
+                            },
+                        },
+                        state=request.state,
+                        runtime=getattr(request, "runtime", None),
+                    )
+                    postcheck, _ = self._quality_gate_precheck(postcheck_request)  # type: ignore[arg-type]
+                    if isinstance(postcheck, Command) and postcheck.update:
+                        quality_update = postcheck.update.get("quality_gate") or {}
+                        precheck_messages.extend(postcheck.update.get("messages") or [])
+
         return Command(
             update={
                 "artifacts": [path],
-                "quality_gate": quality_update or {"status": "passed", "fail_reasons": [], "checked_path": path},
+                "quality_gate": quality_update or {"status": "skipped", "fail_reasons": [], "checked_path": path},
                 "messages": [*precheck_messages, result],
             }
         )

@@ -65,6 +65,7 @@ def _make_result(
 
 def test_task_tool_returns_error_for_unknown_subagent(monkeypatch):
     monkeypatch.setattr(task_tool_module, "get_subagent_config", lambda _: None)
+    monkeypatch.setattr(task_tool_module, "get_subagent_names", lambda: ["general-purpose", "source-researcher"])
 
     result = task_tool_module.task_tool.func(
         runtime=None,
@@ -75,6 +76,65 @@ def test_task_tool_returns_error_for_unknown_subagent(monkeypatch):
     )
 
     assert result.startswith("Error: Unknown subagent type")
+    assert "source-researcher" in result
+
+
+@pytest.mark.parametrize(
+    "subagent_type",
+    [
+        "source-researcher",
+        "docs-explorer",
+        "comparison-dimension-researcher",
+        "synthesis-reviewer",
+    ],
+)
+def test_task_tool_accepts_registered_research_subagents(monkeypatch, subagent_type):
+    config = SubagentConfig(
+        name=subagent_type,
+        description=f"{subagent_type} helper",
+        system_prompt="Research subagent prompt",
+        max_turns=5,
+        timeout_seconds=10,
+    )
+    runtime = _make_runtime()
+    events = []
+    captured = {}
+
+    class DummyExecutor:
+        def __init__(self, **kwargs):
+            captured["executor_kwargs"] = kwargs
+
+        def execute_async(self, prompt, task_id=None):
+            captured["prompt"] = prompt
+            return task_id or "generated-task-id"
+
+    monkeypatch.setattr(task_tool_module, "SubagentStatus", FakeSubagentStatus)
+    monkeypatch.setattr(task_tool_module, "SubagentExecutor", DummyExecutor)
+    monkeypatch.setattr(task_tool_module, "get_subagent_config", lambda name: config if name == subagent_type else None)
+    monkeypatch.setattr(task_tool_module, "get_skills_prompt_section", lambda: "")
+    monkeypatch.setattr(
+        task_tool_module,
+        "get_background_task_result",
+        lambda _: _make_result(FakeSubagentStatus.COMPLETED, result="research complete"),
+    )
+    monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: events.append)
+    monkeypatch.setattr(task_tool_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr("src.tools.get_available_tools", lambda **kwargs: [])
+
+    output = task_tool_module.task_tool.func(
+        runtime=runtime,
+        description="research task",
+        prompt="research one dimension",
+        subagent_type=subagent_type,
+        tool_call_id="tc-research",
+    )
+
+    assert output == "Task Succeeded. Result: research complete"
+    assert captured["prompt"] == "research one dimension"
+    assert captured["executor_kwargs"]["config"].name == subagent_type
+    non_trace_events = [e for e in events if e.get("type") != "trace_event.v1"]
+    assert non_trace_events[0]["type"] == "task_started"
+    assert non_trace_events[0]["description"] == "research task"
 
 
 def test_task_tool_emits_running_and_completed_events(monkeypatch):
@@ -134,7 +194,7 @@ def test_task_tool_emits_running_and_completed_events(monkeypatch):
     assert captured["executor_kwargs"]["config"].max_turns == 7
     assert "Skills Appendix" in captured["executor_kwargs"]["config"].system_prompt
 
-    get_available_tools.assert_called_once_with(model_name="ark-model", subagent_enabled=False)
+    get_available_tools.assert_called_once_with(model_name="ark-model", groups=None, subagent_enabled=False)
 
     event_types = [e["type"] for e in events if e.get("type") != "trace_event.v1"]
     assert event_types == ["task_started", "task_running", "task_running", "task_completed"]
@@ -148,6 +208,50 @@ def test_task_tool_emits_running_and_completed_events(monkeypatch):
     ]
     assert all(isinstance(e.get("trace_event"), dict) for e in runtime_events)
     assert all(e.get("trace_already_streamed") is True for e in runtime_events)
+
+
+def test_task_tool_forwards_parent_agent_tool_groups(monkeypatch):
+    config = _make_subagent_config()
+    runtime = _make_runtime()
+    runtime.config["metadata"]["agent_name"] = "restricted"
+    get_available_tools = MagicMock(return_value=[])
+    captured = {}
+
+    class DummyExecutor:
+        def __init__(self, **kwargs):
+            captured["executor_kwargs"] = kwargs
+
+        def execute_async(self, prompt, task_id=None):
+            return task_id or "generated-task-id"
+
+    monkeypatch.setattr(task_tool_module, "SubagentStatus", FakeSubagentStatus)
+    monkeypatch.setattr(task_tool_module, "SubagentExecutor", DummyExecutor)
+    monkeypatch.setattr(task_tool_module, "get_subagent_config", lambda _: config)
+    monkeypatch.setattr(task_tool_module, "get_skills_prompt_section", lambda: "")
+    monkeypatch.setattr(
+        task_tool_module,
+        "get_background_task_result",
+        lambda _: _make_result(FakeSubagentStatus.COMPLETED, result="done"),
+    )
+    monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: lambda _: None)
+    monkeypatch.setattr(task_tool_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr("src.tools.get_available_tools", get_available_tools)
+    monkeypatch.setattr(
+        "src.config.agents_config.load_agent_config",
+        lambda name: SimpleNamespace(name=name, tool_groups=["file:read"]),
+    )
+
+    output = task_tool_module.task_tool.func(
+        runtime=runtime,
+        description="restricted task",
+        prompt="read only",
+        subagent_type="general-purpose",
+        tool_call_id="tc-restricted",
+    )
+
+    assert output == "Task Succeeded. Result: done"
+    get_available_tools.assert_called_once_with(model_name="ark-model", groups=["file:read"], subagent_enabled=False)
+    assert captured["executor_kwargs"]["thread_id"] == "thread-1"
 
 
 def test_task_tool_returns_failed_message(monkeypatch):

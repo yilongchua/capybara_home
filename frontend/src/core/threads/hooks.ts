@@ -1185,6 +1185,8 @@ export function useThreadStream({
               plan_behavior: (options?.mode ?? context.mode) === "plan" ? "plan_foreground" : "work_interactive",
               auto_mode: context.auto_mode ?? false,
               thread_id: threadId,
+              current_turn_text: text,
+              original_user_request: text,
             },
           },
         );
