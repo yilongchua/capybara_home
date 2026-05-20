@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Plan Mode to Work Mode Canvas</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f1e8;
+      --panel: rgba(255, 252, 245, 0.92);
+      --panel-border: rgba(76, 61, 45, 0.16);
+      --text: #34281d;
+      --muted: #786554;
+      --accent: #b56b39;
+      --accent-strong: #8e4c24;
+      --shadow: 0 18px 40px rgba(78, 57, 35, 0.14);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(228, 195, 155, 0.35), transparent 28%),
+        radial-gradient(circle at bottom right, rgba(180, 119, 68, 0.18), transparent 30%),
+        linear-gradient(135deg, #f7f3eb 0%, #ede3d1 45%, #f8f4ee 100%);
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      height: 100vh;
+    }
+
+    .sidebar {
+      padding: 24px 22px;
+      border-right: 1px solid var(--panel-border);
+      background: var(--panel);
+      backdrop-filter: blur(16px);
+      box-shadow: var(--shadow);
+      z-index: 2;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent-strong);
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 28px;
+      line-height: 1.05;
+    }
+
+    .lede {
+      margin: 0 0 22px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    button {
+      border: 1px solid rgba(142, 76, 36, 0.2);
+      background: #fffaf1;
+      color: var(--text);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 140ms ease, background 140ms ease, border-color 140ms ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      background: #fff4df;
+      border-color: rgba(142, 76, 36, 0.34);
+    }
+
+    .tips,
+    .legend {
+      border: 1px solid var(--panel-border);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.72);
+      padding: 16px;
+      margin-top: 14px;
+    }
+
+    .tips h2,
+    .legend h2 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--accent-strong);
+    }
+
+    .tips p,
+    .legend p {
+      margin: 0 0 8px;
+      font-size: 14px;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+
+    .canvas-area {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .canvas-header {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      z-index: 3;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: rgba(255, 252, 245, 0.86);
+      border: 1px solid var(--panel-border);
+      backdrop-filter: blur(14px);
+      box-shadow: var(--shadow);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .viewport {
+      position: absolute;
+      inset: 0;
+      cursor: grab;
+      overflow: hidden;
+    }
+
+    .viewport.dragging {
+      cursor: grabbing;
+    }
+
+    .stage {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform-origin: center center;
+      will-change: transform;
+      box-shadow: 0 28px 80px rgba(53, 38, 25, 0.18);
+      border-radius: 20px;
+      overflow: hidden;
+      background: white;
+    }
+
+    .stage img {
+      display: block;
+      user-select: none;
+      -webkit-user-drag: none;
+      max-width: none;
+      width: 1800px;
+      height: auto;
+      pointer-events: none;
+    }
+
+    .footer-note {
+      position: absolute;
+      left: 20px;
+      bottom: 18px;
+      z-index: 3;
+      padding: 10px 14px;
+      border-radius: 16px;
+      background: rgba(255, 252, 245, 0.84);
+      border: 1px solid var(--panel-border);
+      color: var(--muted);
+      font-size: 13px;
+      backdrop-filter: blur(12px);
+    }
+
+    @media (max-width: 1000px) {
+      body {
+        overflow: auto;
+      }
+
+      .shell {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto minmax(70vh, 1fr);
+        height: auto;
+        min-height: 100vh;
+      }
+
+      .sidebar {
+        border-right: none;
+        border-bottom: 1px solid var(--panel-border);
+      }
+
+      .canvas-area {
+        min-height: 72vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <p class="eyebrow">Interactive Flow</p>
+      <h1>Plan Mode to Work Mode</h1>
+      <p class="lede">
+        This canvas gives you a lighter way to inspect the full lead-agent flow without opening a massive static image.
+      </p>
+
+      <div class="controls">
+        <button id="zoomIn" type="button">Zoom In</button>
+        <button id="zoomOut" type="button">Zoom Out</button>
+        <button id="reset" type="button">Reset</button>
+      </div>
+
+      <section class="tips">
+        <h2>Navigation</h2>
+        <p>Drag anywhere on the canvas to pan.</p>
+        <p>Use your trackpad or mouse wheel to zoom in and out.</p>
+        <p>Double-click the canvas to quickly zoom toward the center.</p>
+      </section>
+
+      <section class="legend">
+        <h2>Reading Order</h2>
+        <p>The flow starts in the upper-left with the user request, moves through plan mode, then hands off into a fresh work-mode run.</p>
+        <p>Subagent execution is broken out as its own lane so the delegation path is easier to follow.</p>
+      </section>
+    </aside>
+
+    <main class="canvas-area">
+      <div class="canvas-header">
+        <span id="zoomLabel">100%</span>
+      </div>
+      <div class="viewport" id="viewport">
+        <div class="stage" id="stage">
+          <img
+            id="diagram"
+            src="./plan-mode-work-mode-flow.svg"
+            alt="Plan mode to work mode flow diagram"
+          />
+        </div>
+      </div>
+      <div class="footer-note">
+        Source files: <code>plan-mode-work-mode-flow.mmd</code>, <code>.svg</code>, <code>.png</code>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const viewport = document.getElementById("viewport");
+    const stage = document.getElementById("stage");
+    const zoomLabel = document.getElementById("zoomLabel");
+    const zoomIn = document.getElementById("zoomIn");
+    const zoomOut = document.getElementById("zoomOut");
+    const reset = document.getElementById("reset");
+
+    const state = {
+      scale: 0.58,
+      x: 0,
+      y: 0,
+      dragging: false,
+      startX: 0,
+      startY: 0,
+      originX: 0,
+      originY: 0,
+    };
+
+    function clampScale(value) {
+      return Math.min(2.4, Math.max(0.25, value));
+    }
+
+    function render() {
+      stage.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
+      zoomLabel.textContent = `${Math.round(state.scale * 100)}%`;
+    }
+
+    function setScale(nextScale) {
+      state.scale = clampScale(nextScale);
+      render();
+    }
+
+    function resetView() {
+      state.scale = 0.58;
+      state.x = 0;
+      state.y = 0;
+      render();
+    }
+
+    viewport.addEventListener("mousedown", (event) => {
+      state.dragging = true;
+      state.startX = event.clientX;
+      state.startY = event.clientY;
+      state.originX = state.x;
+      state.originY = state.y;
+      viewport.classList.add("dragging");
+    });
+
+    window.addEventListener("mousemove", (event) => {
+      if (!state.dragging) return;
+      state.x = state.originX + (event.clientX - state.startX);
+      state.y = state.originY + (event.clientY - state.startY);
+      render();
+    });
+
+    window.addEventListener("mouseup", () => {
+      state.dragging = false;
+      viewport.classList.remove("dragging");
+    });
+
+    viewport.addEventListener(
+      "wheel",
+      (event) => {
+        event.preventDefault();
+        const factor = event.deltaY < 0 ? 1.1 : 0.9;
+        setScale(state.scale * factor);
+      },
+      { passive: false }
+    );
+
+    viewport.addEventListener("dblclick", () => {
+      setScale(state.scale * 1.2);
+    });
+
+    zoomIn.addEventListener("click", () => setScale(state.scale * 1.15));
+    zoomOut.addEventListener("click", () => setScale(state.scale / 1.15));
+    reset.addEventListener("click", resetView);
+
+    render();
+  </script>
+</body>
+</html>
