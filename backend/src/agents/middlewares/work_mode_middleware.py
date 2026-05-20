@@ -171,7 +171,7 @@ def _run_plan_mode_rerun(
     let the Work Mode run reach its checkpoint before starting a new run on the
     same thread (LangGraph serialises runs per thread via the checkpoint lock).
     """
-    from src.agents.middlewares.daemon_agent_invoke import invoke_agent_async
+    from src.agents.middlewares.daemon_agent_invoke import invoke_client_agent_async
     from src.client import CapybaraClient
 
     time.sleep(2.0)
@@ -194,9 +194,8 @@ def _run_plan_mode_rerun(
                 "is_plan_mode": True,
             }
         )
-        client._ensure_agent(config)  # noqa: SLF001
-        invoke_agent_async(
-            client._agent,  # noqa: SLF001
+        invoke_client_agent_async(
+            client,
             {"messages": [HumanMessage(name="work_mode_plan_rerun", content=system_message)]},
             config=config,
             context={

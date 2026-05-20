@@ -108,7 +108,7 @@ def _run_work_mode_handoff(
 ) -> None:
     from langgraph_sdk import get_client
 
-    from src.agents.middlewares.daemon_agent_invoke import invoke_agent_async
+    from src.agents.middlewares.daemon_agent_invoke import invoke_client_agent_async
     from src.agents.middlewares.plan_execution import (
         format_clarification_context_for_work,
         mark_handoff_failed,
@@ -158,15 +158,14 @@ def _run_work_mode_handoff(
                 "plan_behavior": "work_interactive",
             }
         )
-        client._ensure_agent(config)  # noqa: SLF001
         clarification_block = ""
         if isinstance(values, dict):
             plan = values.get("plan")
             if isinstance(plan, dict):
                 clarification_block = format_clarification_context_for_work(plan)
         handoff_messages = _handoff_context_message(original_user_request, clarification_block)
-        invoke_agent_async(
-            client._agent,  # noqa: SLF001
+        invoke_client_agent_async(
+            client,
             {"messages": handoff_messages},
             config=config,
             context={

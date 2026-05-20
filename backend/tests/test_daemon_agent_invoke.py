@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from src.agents.middlewares.daemon_agent_invoke import invoke_agent_async
+from src.agents.middlewares.daemon_agent_invoke import invoke_agent_async, invoke_client_agent_async
 from src.agents.middlewares.pro_followup_middleware import _run_background_followup
 from src.agents.middlewares.work_run_handoff import _run_work_mode_handoff
 
@@ -75,3 +75,55 @@ def test_run_background_followup_uses_async_invoke(monkeypatch):
 
     mock_agent.invoke.assert_not_called()
     mock_agent.ainvoke.assert_awaited_once()
+
+
+def test_invoke_client_agent_async_retries_with_async_checkpointer(monkeypatch):
+    sync_agent = MagicMock()
+    sync_agent.ainvoke = AsyncMock(side_effect=NotImplementedError("The SqliteSaver does not support async methods."))
+
+    async_agent = MagicMock()
+    async_agent.ainvoke = AsyncMock(return_value={"messages": ["ok"]})
+
+    class _FakeAsyncCheckpointerCtx:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ANN001
+            return False
+
+    class _FakeClient:
+        def __init__(self):
+            self._checkpointer = "sync-checkpointer"
+            self._agent = sync_agent
+            self._agent_config_key = "original-key"
+            self.ensure_calls = 0
+
+        def reset_agent(self):
+            self._agent = None
+            self._agent_config_key = None
+
+        def _ensure_agent(self, _config):
+            self.ensure_calls += 1
+            if self._checkpointer == "sync-checkpointer":
+                self._agent = sync_agent
+                self._agent_config_key = "sync-key"
+            else:
+                self._agent = async_agent
+                self._agent_config_key = "async-key"
+
+    client = _FakeClient()
+    monkeypatch.setattr("src.agents.checkpointer.async_provider.make_checkpointer", lambda: _FakeAsyncCheckpointerCtx())
+
+    result = invoke_client_agent_async(
+        client,
+        {"messages": []},
+        config={"configurable": {"thread_id": "t1"}},
+        context={"thread_id": "t1"},
+    )
+
+    assert result == {"messages": ["ok"]}
+    sync_agent.ainvoke.assert_awaited_once()
+    async_agent.ainvoke.assert_awaited_once()
+    assert client._checkpointer == "sync-checkpointer"
+    assert client._agent is sync_agent
+    assert client._agent_config_key == "sync-key"

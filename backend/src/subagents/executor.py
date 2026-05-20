@@ -23,6 +23,7 @@ from src.models import create_chat_model
 from src.subagents.config import SubagentConfig
 
 logger = logging.getLogger(__name__)
+MIN_SUBAGENT_RECURSION_LIMIT = 25
 
 
 class SubagentStatus(Enum):
@@ -274,15 +275,19 @@ class SubagentExecutor:
             state = self._build_initial_state(task)
 
             # Build config with thread_id for sandbox access and recursion limit
+            effective_recursion_limit = max(MIN_SUBAGENT_RECURSION_LIMIT, int(self.config.max_turns))
             run_config: RunnableConfig = {
-                "recursion_limit": self.config.max_turns,
+                "recursion_limit": effective_recursion_limit,
             }
             context = {}
             if self.thread_id:
                 run_config["configurable"] = {"thread_id": self.thread_id}
                 context["thread_id"] = self.thread_id
 
-            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} starting async execution with max_turns={self.config.max_turns}")
+            logger.info(
+                f"[trace={self.trace_id}] Subagent {self.config.name} starting async execution "
+                f"with max_turns={self.config.max_turns}, recursion_limit={effective_recursion_limit}"
+            )
 
             # Use stream instead of invoke to get real-time updates
             # This allows us to collect AI messages as they are generated
