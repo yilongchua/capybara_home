@@ -30,6 +30,43 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _message_type(message: Any) -> str:
+    raw = getattr(message, "type", None)
+    if isinstance(raw, str):
+        return raw
+    if isinstance(message, dict):
+        val = message.get("type")
+        if isinstance(val, str):
+            return val
+    return ""
+
+
+def _message_name(message: Any) -> str:
+    raw = getattr(message, "name", None)
+    if isinstance(raw, str):
+        return raw
+    if isinstance(message, dict):
+        val = message.get("name")
+        if isinstance(val, str):
+            return val
+    return ""
+
+
+def _has_successful_research_tool_use(messages: list[Any]) -> bool:
+    for message in messages:
+        if _message_type(message) != "tool":
+            continue
+        name = _message_name(message)
+        if name not in {"web_search", "task"}:
+            continue
+        body = _extract_text(getattr(message, "content", ""))
+        if not body or "[plan_gate]" in body:
+            continue
+        if len(body.strip()) > 80:
+            return True
+    return False
+
+
 def _extract_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -98,12 +135,42 @@ class EvaluatorMiddleware(AgentMiddleware[EvaluatorState]):
                     "and list the intended status updates in plain text."
                 )
         plan = state.get("plan") or {}
+        plan_status = str(plan.get("status") or "draft").strip().lower()
+        messages = state.get("messages", []) or []
+        latest_ai = _extract_text(getattr(messages[-1], "content", "")) if messages else ""
+
+        if plan_status == "draft" and len(latest_ai.strip()) > 400:
+            failures.append(
+                "Plan is still draft but a substantive final answer was produced. "
+                "Stop and wait for Execute Plan approval, then run research tools before answering."
+            )
+
+        domain = str(plan.get("domain") or "").strip().lower()
+        if domain == "research" and plan_status in {"approved", "executing", "completed"}:
+            if not _has_successful_research_tool_use(messages):
+                failures.append(
+                    "Research plan requires evidence from successful `web_search` or `task` tool results. "
+                    "Run research tools after plan approval before producing the final synthesis."
+                )
+
         plan_path = plan.get("plan_path")
         thread_data = state.get("thread_data") or {}
         if self._handoffs_config.enabled and plan_path:
             resolved_plan_path = replace_virtual_path(str(plan_path), thread_data)
             if not Path(resolved_plan_path).exists():
                 failures.append("Planner handoff artifact plan.md is missing.")
+
+        if domain == "research" and isinstance(nodes, list):
+            synthesis_todos = [
+                str(node.get("id") or "")
+                for node in nodes
+                if node.get("status") == "completed"
+                and any(token in str(node.get("content") or "").lower() for token in ("synth", "report", "write", "deliver"))
+            ]
+            if synthesis_todos and not _has_successful_research_tool_use(messages):
+                failures.append(
+                    "Synthesis/report todos are marked complete without ingested research tool output."
+                )
         return failures
 
     def _evaluate_llm(self, state: EvaluatorState) -> tuple[bool, str]:

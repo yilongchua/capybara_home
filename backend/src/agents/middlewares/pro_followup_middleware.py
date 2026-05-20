@@ -72,7 +72,8 @@ def _run_background_followup(
         model_name=requested_model_name,
         thinking_enabled=True,
         subagent_enabled=True,
-        plan_mode=False,
+        plan_mode=True,
+        auto_mode=True,
     )
     config = client._get_runnable_config(  # noqa: SLF001
         thread_id,
@@ -82,8 +83,9 @@ def _run_background_followup(
     )
     config["configurable"].update(
         {
-            "mode": "plan",
+            "mode": "work",
             "background_followup": True,
+            "execute_approved_plan": True,
             "plan_behavior": "plan_background_deepen",
         }
     )
@@ -94,8 +96,9 @@ def _run_background_followup(
             config=config,
             context={
                 "thread_id": thread_id,
-                "mode": "plan",
+                "mode": "work",
                 "background_followup": True,
+                "execute_approved_plan": True,
                 "plan_behavior": "plan_background_deepen",
                 "model_name": requested_model_name,
             },
@@ -170,6 +173,14 @@ class PlanFollowupMiddleware(AgentMiddleware[PlanFollowupState]):
         if bool(runtime_context.get("background_followup")):
             return None
         if not self._has_plan_context(state):
+            return None
+        plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
+        plan_status = str(plan.get("status") or "").strip().lower()
+        if plan_status == "draft":
+            return None
+        if str(plan.get("evaluation_status") or "").strip().lower() in {"failed", "max_attempts_reached"}:
+            return None
+        if str(plan.get("latest_evaluator_verdict") or "").strip().upper() == "FAIL":
             return None
         if not self._is_terminal_answer(state):
             return None

@@ -1,7 +1,7 @@
 import type { AIMessage, Checkpoint, Message } from "@langchain/langgraph-sdk";
 import type { ThreadsClient } from "@langchain/langgraph-sdk/client";
 import { useStream } from "@langchain/langgraph-sdk/react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -26,9 +26,16 @@ import type { UploadedFileInfo } from "../uploads";
 import { uploadFiles } from "../uploads";
 import {
   publishWorkspaceRefresh,
+  publishWorkspaceRefreshDebounced,
   type WorkspaceRefreshDomain,
   useWorkspaceRefreshQuery,
 } from "../workspace-refresh";
+
+import {
+  getCachedThreadMessages,
+  invalidateCachedThreadMessages,
+  setCachedThreadMessages,
+} from "./thread-message-cache";
 
 import {
   deleteAllThreads as deleteAllThreadsWithCleanup,
@@ -54,6 +61,7 @@ export type PlanCreatedEvent = {
   type: "plan_created";
   plan_id?: string;
   status?: string;
+  auto_approved?: boolean;
   title: string;
   summary: string;
   domain: string;
@@ -188,18 +196,58 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
+const WORKSPACE_REFRESH_TOOLS = new Set([
+  "present_files",
+  "write_file",
+  "str_replace",
+  "comfyui_generate",
+  "bash",
+  "task",
+]);
+
+function toolEndShouldRefreshWorkspace(toolName: string): boolean {
+  return WORKSPACE_REFRESH_TOOLS.has(toolName);
+}
+
+function patchThreadInSearchList(
+  queryClient: QueryClient,
+  threadId: string,
+  patch: Partial<AgentThreadState> & { updated_at?: string },
+) {
+  void queryClient.setQueriesData(
+    { queryKey: ["threads", "search"], exact: false },
+    (oldData: AgentThread[] | undefined) =>
+      oldData?.map((entry) =>
+        entry.thread_id === threadId
+          ? {
+              ...entry,
+              updated_at: patch.updated_at ?? entry.updated_at,
+              values: {
+                ...entry.values,
+                ...patch,
+              },
+            }
+          : entry,
+      ),
+  );
+}
+
 function publishThreadRefresh(
   threadId: string,
   extraDomains: WorkspaceRefreshDomain[] = [],
+  options?: { immediate?: boolean },
 ) {
-  publishWorkspaceRefresh(
-    [
-      "threads",
-      `thread:${threadId}`,
-      ...extraDomains,
-    ] as const,
-    { source: "thread-stream" },
-  );
+  const domains = [
+    "threads",
+    `thread:${threadId}`,
+    ...extraDomains,
+  ] as WorkspaceRefreshDomain[];
+  const meta = { source: "thread-stream" };
+  if (options?.immediate) {
+    publishWorkspaceRefresh(domains, meta);
+    return;
+  }
+  publishWorkspaceRefreshDebounced(domains, meta);
 }
 
 function extractSteeringError(raw: string): { detail: string; status?: string } {
@@ -453,6 +501,7 @@ export function useThreadStream({
   const currentRunIdRef = useRef<string | null>(null);
   const pendingTraceEventsRef = useRef<ExecutionTraceEvent[]>([]);
   const flushTimerRef = useRef<number | null>(null);
+  const latestMessagesRef = useRef<Message[]>([]);
   const fetchStateHistory = true;
   const thinkingSignalEmittedRef = useRef(false);
 
@@ -585,7 +634,6 @@ export function useThreadStream({
               : t,
           ),
       );
-      publishThreadRefresh(event.thread_id);
     },
     [queryClient],
   );
@@ -911,7 +959,7 @@ export function useThreadStream({
     onCreated(meta) {
       handleStreamStart(meta.thread_id);
       setOnStreamThreadId(meta.thread_id);
-      publishThreadRefresh(meta.thread_id);
+      publishThreadRefresh(meta.thread_id, [], { immediate: true });
     },
     onLangChainEvent(event) {
       if (event.event === "on_tool_end") {
@@ -919,7 +967,11 @@ export function useThreadStream({
           name: event.name,
           data: event.data,
         });
-        if (threadIdRef.current) {
+        if (
+          threadIdRef.current &&
+          typeof event.name === "string" &&
+          toolEndShouldRefreshWorkspace(event.name)
+        ) {
           publishThreadRefresh(threadIdRef.current);
         }
       }
@@ -971,9 +1023,6 @@ export function useThreadStream({
               });
             },
           );
-          if (threadIdRef.current) {
-            publishThreadRefresh(threadIdRef.current);
-          }
         }
       }
     },
@@ -985,10 +1034,22 @@ export function useThreadStream({
       }
     },
     onFinish(state) {
-      listeners.current.onFinish?.(state.values);
-      void queryClient.invalidateQueries({ queryKey: ["threads", "search"] });
-      if (threadIdRef.current) {
-        publishThreadRefresh(threadIdRef.current);
+      const stateValues = state.values as AgentThreadState;
+      listeners.current.onFinish?.(stateValues);
+      const finishedThreadId = threadIdRef.current;
+      const finalMessages =
+        Array.isArray(stateValues?.messages) && stateValues.messages.length > 0
+          ? stateValues.messages
+          : latestMessagesRef.current;
+      if (finishedThreadId && finalMessages.length > 0) {
+        setCachedThreadMessages(queryClient, finishedThreadId, finalMessages);
+      }
+      if (finishedThreadId) {
+        patchThreadInSearchList(queryClient, finishedThreadId, {
+          ...(state.values?.title ? { title: state.values.title } : {}),
+          updated_at: new Date().toISOString(),
+        });
+        publishThreadRefresh(finishedThreadId);
       }
       processQueueRef.current();
     },
@@ -1007,6 +1068,10 @@ export function useThreadStream({
       pendingTraceEventsRef.current = [];
     };
   }, []);
+
+  useEffect(() => {
+    latestMessagesRef.current = thread.messages;
+  }, [thread.messages]);
 
   // Clear optimistic when server messages arrive (count increases)
   useEffect(() => {
@@ -1141,6 +1206,7 @@ export function useThreadStream({
           status: "uploaded" as const,
         }));
 
+        invalidateCachedThreadMessages(queryClient, threadId);
         clearActivityLiveEvents();
         dispatchThinking({ type: "reset" });
         thinkingSignalEmittedRef.current = false;
@@ -1196,7 +1262,9 @@ export function useThreadStream({
             options.forkSourceBranch,
           );
         }
-        void queryClient.invalidateQueries({ queryKey: ["threads", "search"] });
+        patchThreadInSearchList(queryClient, threadId, {
+          updated_at: new Date().toISOString(),
+        });
         publishThreadRefresh(
           threadId,
           uploadedFileInfo.length > 0 ? [`uploads:${threadId}`] : [],
@@ -1489,14 +1557,30 @@ export function useThreadStream({
     }
   }, [thread]);
 
+  const cachedThreadId = onStreamThreadId ?? threadIdRef.current ?? undefined;
+  const cachedSnapshot =
+    cachedThreadId != null
+      ? getCachedThreadMessages(queryClient, cachedThreadId)
+      : undefined;
+  const resolvedMessages =
+    thread.messages.length > 0
+      ? thread.messages
+      : (cachedSnapshot?.messages ?? thread.messages);
+  const threadForDisplay =
+    thread.messages.length > 0
+      ? thread
+      : cachedSnapshot
+        ? ({ ...thread, messages: resolvedMessages } as typeof thread)
+        : thread;
+
   // Merge thread with optimistic messages for display
   const mergedThread =
     optimisticMessages.length > 0
       ? ({
-          ...thread,
-          messages: [...thread.messages, ...optimisticMessages],
+          ...threadForDisplay,
+          messages: [...threadForDisplay.messages, ...optimisticMessages],
         } as typeof thread)
-      : thread;
+      : threadForDisplay;
 
   return [
     mergedThread,
@@ -1595,6 +1679,8 @@ export function useThreads(
     refreshDomains: ["threads"],
     invalidateQueryKey: ["threads", "search"],
     invalidateExact: false,
+    refetchInterval: false,
+    staleTime: 60_000,
   });
 }
 

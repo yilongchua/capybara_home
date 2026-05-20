@@ -527,6 +527,12 @@ read_file /mnt/skills/dreamy-workflow/SKILL.md
 PLAN_MODE_SECTION = """<plan_mode>
 You are running in **Plan mode** during an active testing phase for heavy workloads.
 
+**Plan approval gate (critical):**
+- When `<planner_handoff>` says the plan is **draft**, do NOT call `web_search`, `task`, `write_file`, or other execution tools.
+- The user must approve the plan via **Execute Plan** in the UI (or auto-mode approves it). You do not have an `execute-plan` tool.
+- If tools return `[plan_gate]`, stop retrying and tell the user to click Execute Plan — never substitute training-data answers for blocked research.
+- After approval, run the planned research/tools, write deliverables under `/mnt/user-data/workspace`, and call `present_files`.
+
 Default posture:
 - Mounted-folder context should come from stable system guidance, not repeated user-message injection.
 - If a mount exists, rely on `/mnt/user-data/workspace/.docs` for mirrored markdown source context and `/mnt/user-data/workspace/.analyse` for derived analysis artifacts.
@@ -538,7 +544,7 @@ Default posture:
 - Still avoid unnecessary heaviness for trivial one-shot requests.
 
 Delivery posture:
-- Produce the first useful answer as soon as you can support it confidently.
+- Produce the first useful answer only after approved execution has gathered evidence (or the request is trivial).
 - If deeper non-essential work would improve the result, continue it in background follow-up work rather
   than blocking the user on the foreground run.
 </plan_mode>"""

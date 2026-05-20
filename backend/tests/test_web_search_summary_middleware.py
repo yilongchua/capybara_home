@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from langchain_core.messages import ToolMessage
@@ -87,17 +88,35 @@ def test_summarizes_long_web_search_results(monkeypatch):
 
     monkeypatch.setattr("src.agents.middlewares.web_search_summary_middleware.create_chat_model", lambda **kwargs: _Model())
     middleware = _make_middleware()
-    request = _make_request("web_search", LONG_CONTENT, query="test query")
-    result_msg = _make_tool_message("web_search", LONG_CONTENT)
+    long_json = json.dumps(
+        {
+            "ok": True,
+            "query": "test query",
+            "results": [
+                {
+                    "title": "Example",
+                    "url": "https://example.com",
+                    "snippet": "snippet",
+                    "extracted_content": LONG_CONTENT,
+                }
+            ],
+        }
+    )
+    request = _make_request("web_search", long_json, query="test query")
+    result_msg = _make_tool_message("web_search", long_json)
 
     def handler(req):  # noqa: ARG001
         return result_msg
 
     result = middleware.wrap_tool_call(request, handler)
     assert isinstance(result, ToolMessage)
-    assert "Summarized" in result.content
-    assert len(result.content) < len(LONG_CONTENT)
-    assert "[Summarized by web_search_summary_middleware" in result.content
+    payload = json.loads(str(result.content))
+    assert payload.get("summarized") is True
+    assert "Summarized" in payload.get("summary", "")
+    assert len(str(result.content)) < len(long_json)
+    assert payload.get("results") == [
+        {"title": "Example", "url": "https://example.com", "snippet": "snippet"}
+    ]
 
 
 def test_keeps_original_on_summary_timeout(monkeypatch):

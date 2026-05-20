@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.agents.middlewares.handoff_sync import sync_handoff_files_from_state
+from src.agents.middlewares.handoff_sync import _current_status_line, sync_handoff_files_from_state
 
 
 def _make_thread_data(tmp_path: Path) -> dict:
@@ -45,6 +45,17 @@ def _base_state(tmp_path: Path) -> dict:
         "artifacts": ["/mnt/user-data/workspace/report.md"],
     }
     return state
+
+
+class TestPlanStatusLine:
+    def test_draft_all_todos_done_does_not_claim_execution_complete(self) -> None:
+        nodes = [
+            {"id": "todo-1", "content": "Research", "status": "completed", "depends_on": []},
+            {"id": "todo-2", "content": "Report", "status": "completed", "depends_on": ["todo-1"]},
+        ]
+        line = _current_status_line(nodes, {"status": "draft"}, [])
+        assert "draft" in line
+        assert "not approved" in line.lower() or "Execute Plan" in line
 
 
 class TestVirtualPathTranslation:

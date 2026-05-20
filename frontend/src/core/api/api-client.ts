@@ -31,7 +31,7 @@ type HistoryCacheEntry = {
   inflight?: Promise<unknown>;
 };
 
-const HISTORY_CACHE_TTL_MS = 8_000;
+const HISTORY_CACHE_TTL_MS = 60_000;
 const _threadHistoryCache = new Map<string, HistoryCacheEntry>();
 
 function stableStringify(value: unknown): string {

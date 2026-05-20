@@ -5,6 +5,11 @@ import {
   Conversation,
   ConversationContent,
 } from "@/components/ai-elements/conversation";
+import {
+  Reasoning,
+  ReasoningContent,
+  ReasoningTrigger,
+} from "@/components/ai-elements/reasoning";
 import { asActivityTimelineState, mergeActivityEvents, useActivityContext } from "@/core/activity";
 import type { LiveGenerationNotice } from "@/core/generation/hooks";
 import { useI18n } from "@/core/i18n/hooks";
@@ -16,6 +21,7 @@ import {
   hasContent,
   hasPresentFiles,
   hasReasoning,
+  hasReasoningInCurrentTurn,
 } from "@/core/messages/utils";
 import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
 import type { Subtask } from "@/core/tasks";
@@ -171,6 +177,13 @@ export function MessageList({
   const { setTasks } = useSubtaskContext();
   const { liveEvents: liveActivityEvents } = useActivityContext();
   const messages = thread.messages;
+  const persistedReasoningInCurrentTurn = useMemo(
+    () => hasReasoningInCurrentTurn(messages),
+    [messages],
+  );
+  const showLiveThinking =
+    Boolean(thread.isLoading && liveThinkingContent?.trim()) &&
+    !persistedReasoningInCurrentTurn;
   const messageIndexById = useMemo(() => {
     const map = new Map<string, number>();
     messages.forEach((message, index) => {
@@ -504,17 +517,11 @@ export function MessageList({
             )}
           </div>
         )}
-        {thread.isLoading && liveThinkingContent?.trim() && (
-          <div className="rounded-lg border p-3">
-            <div className="text-muted-foreground mb-1 text-xs font-medium">
-              Thinking
-            </div>
-            <MarkdownContent
-              content={liveThinkingContent}
-              isLoading={true}
-              rehypePlugins={rehypePlugins}
-            />
-          </div>
+        {showLiveThinking && liveThinkingContent && (
+          <Reasoning isStreaming className="rounded-lg border px-3 py-1">
+            <ReasoningTrigger />
+            <ReasoningContent>{liveThinkingContent}</ReasoningContent>
+          </Reasoning>
         )}
         {liveNotices.map((notice) => (
           <MarkdownContent

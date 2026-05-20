@@ -136,6 +136,24 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _runtime_context(runtime: Runtime) -> dict[str, Any]:
+    context = getattr(runtime, "context", None)
+    if isinstance(context, dict):
+        return context
+    return {}
+
+
+def _plan_behavior(runtime: Runtime) -> str:
+    return str(_runtime_context(runtime).get("plan_behavior") or "").strip().lower()
+
+
+def _auto_mode_enabled(runtime: Runtime, state: PlannerState) -> bool:
+    ctx = _runtime_context(runtime)
+    if bool(ctx.get("auto_mode")):
+        return True
+    return bool(state.get("auto_mode"))
+
+
 # ---------------------------------------------------------------------------
 # Structured planner output
 # ---------------------------------------------------------------------------
@@ -722,7 +740,9 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         plan_path: str | None = None
         latest_alias_path: str | None = None
         plan_id = f"plan-{uuid4().hex[:10]}"
-        plan_status = "draft"
+        auto_mode = _auto_mode_enabled(runtime, state)
+        plan_status = "approved" if auto_mode and not clarification_pending else "draft"
+        approved_at = _utc_now_iso() if plan_status == "approved" else None
         created_at_dt = datetime.now(UTC)
         created_at = created_at_dt.isoformat()
 
@@ -765,20 +785,21 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         if self._research_fanout and plan_output.domain == "research" and len(ready_ids) >= self._research_fanout_min_todos:
             fanout_ids = [tid for tid in ready_ids if not any(tid == n.get("id") and n.get("depends_on") for n in nodes)]
 
-        append_runtime_event(
-            runtime,
-            {
-                "source": "planner_middleware",
-                "decision": "plan_created",
-                "todo_count": len(nodes),
-                "domain": plan_output.domain,
-                "has_deps": any(n.get("depends_on") for n in nodes),
-                "has_clarifications": clarification_pending,
-                "model": planner_model,
-                "fanout_candidates": fanout_ids,
-                "fanout_candidates_count": len(fanout_ids),
-            },
-        )
+        plan_created_event: dict[str, Any] = {
+            "source": "planner_middleware",
+            "decision": "plan_created",
+            "todo_count": len(nodes),
+            "domain": plan_output.domain,
+            "has_deps": any(n.get("depends_on") for n in nodes),
+            "has_clarifications": clarification_pending,
+            "model": planner_model,
+            "fanout_candidates": fanout_ids,
+            "fanout_candidates_count": len(fanout_ids),
+            "plan_status": plan_status,
+        }
+        if plan_status == "approved":
+            plan_created_event["decision"] = "plan_auto_approved"
+        append_runtime_event(runtime, plan_created_event)
 
         fanout_block = ""
         if fanout_ids:
@@ -801,8 +822,13 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                 f"Planned todos: {len(nodes)}\n"
                 f"Ready to start: {ready_ids}\n"
                 f"Clarification required: {'yes' if clarification_pending else 'no'}\n"
-                "Plan status: draft (execution is gated until explicit execute action).\n"
-                f"{fanout_block}</planner_handoff>"
+                f"Plan status: {plan_status}"
+                + (
+                    " (auto-approved; you may use execution tools now).\n"
+                    if plan_status == "approved"
+                    else " (draft — do NOT call web_search, task, or write_file until the user approves via Execute Plan).\n"
+                )
+                + f"{fanout_block}</planner_handoff>"
             ),
         )
 
@@ -831,6 +857,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                 "domain": plan_output.domain,
                 "plan_id": plan_id,
                 "status": plan_status,
+                "auto_approved": plan_status == "approved",
                 "todo_count": len(nodes),
                 "first_todos": [n.get("content", "") for n in nodes[:5]],
                 "plan_path": plan_path,
@@ -852,8 +879,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
             },
         ][-40:]
 
-        return {
-            "plan": {
+        plan_dict: dict[str, Any] = {
                 "plan_id": plan_id,
                 "status": plan_status,
                 "title": plan_output.title,
@@ -884,7 +910,15 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                 "clarification_pending": clarification_pending,
                 "clarification_question": primary_clarification.question if primary_clarification else None,
                 "created_at": created_at,
-            },
+            }
+        if approved_at:
+            plan_dict["approved_at"] = approved_at
+            plan_dict["awaiting_execution_approval"] = False
+        elif plan_status == "draft":
+            plan_dict["awaiting_execution_approval"] = True
+
+        payload: dict[str, Any] = {
+            "plan": plan_dict,
             "plan_history": plan_history,
             "todo_graph": {"nodes": nodes, "ready_ids": ready_ids, "updated_at": _utc_now_iso()},
             "todos": _legacy_todos(nodes),
@@ -895,6 +929,20 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
             "messages": [message for message in [planner_handoff, clarification_prompt_message] if message is not None],
         }
 
+        pause_after_plan = (
+            plan_status == "draft"
+            and not clarification_pending
+            and _plan_behavior(runtime) == "plan_foreground"
+        )
+        if pause_after_plan:
+            payload["jump_to"] = "end"
+        return payload
+
     @override
     async def abefore_model(self, state: PlannerState, runtime: Runtime) -> dict | None:
         return self.before_model(state, runtime)
+
+
+# End the planning turn before the lead model runs while the plan is still draft.
+PlannerMiddleware.before_model.__can_jump_to__ = ["end"]  # type: ignore[attr-defined]
+PlannerMiddleware.abefore_model.__can_jump_to__ = ["end"]  # type: ignore[attr-defined]

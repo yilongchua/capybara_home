@@ -77,11 +77,14 @@ class PlanExecutionGateMiddleware(AgentMiddleware[PlanExecutionGateState]):
         if tool_name in _ALLOWED_WHEN_DRAFT or _is_read_only_tool(tool_name):
             return None
 
+        plan_id = str(plan.get("plan_id") or "").strip()
+        plan_hint = f" Plan ID: {plan_id}." if plan_id else ""
         return self._build_block_command(
             request,
             (
                 "[plan_gate] Plan is still draft. Execution tools are blocked until explicit plan approval "
-                "via the execute-plan action."
+                f"via the Execute Plan action in the UI (or enable auto-mode).{plan_hint} "
+                "Do not substitute training-data answers for blocked research tools."
             ),
         )
 

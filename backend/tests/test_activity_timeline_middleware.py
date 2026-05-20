@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from langchain_core.messages import ToolMessage
+from langgraph.prebuilt.tool_node import ToolCallRequest
+from langgraph.types import Command
+
 from src.agents.middlewares.activity_timeline_middleware import ActivityTimelineMiddleware
 from src.agents.middlewares.runtime_events import append_runtime_event
 
@@ -98,3 +102,38 @@ def test_after_model_emits_thinking_and_response_events(monkeypatch) -> None:
     assert "model_response" in kinds
     lines = [event.get("line") for event in events]
     assert "Capybara is thinking..." in lines
+
+
+def test_tool_wrap_persists_plan_gate_activity(monkeypatch) -> None:
+    runtime = _runtime()
+    middleware = ActivityTimelineMiddleware()
+    request = ToolCallRequest(
+        tool_call={"name": "web_search", "args": {"query": "iran news"}, "id": "call-1", "type": "tool_call"},
+        tool=None,
+        runtime=runtime,
+        state={},
+    )
+
+    def _blocked_handler(_req: ToolCallRequest) -> Command:
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content="[plan_gate] Plan is still draft.",
+                        tool_call_id="call-1",
+                    )
+                ]
+            }
+        )
+
+    streamed: list[dict] = []
+    import src.agents.middlewares.activity_timeline_middleware as module
+
+    monkeypatch.setattr(module, "stream_activity_event", lambda event: streamed.append(event))
+
+    result = middleware.wrap_tool_call(request, _blocked_handler)
+    assert isinstance(result, Command)
+    update = result.update or {}
+    events = update.get("activity_timeline", {}).get("events", [])
+    assert len(events) >= 1
+    assert any(event.get("kind") == "plan_gate_blocked" for event in events)

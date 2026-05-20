@@ -236,14 +236,37 @@ def _collect_execution_notes(state: dict[str, Any]) -> list[str]:
     return notes
 
 
+def _normalize_plan_status(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    if value in {"draft", "approved", "executing", "completed"}:
+        return value
+    return "draft"
+
+
 def _current_status_line(nodes: list[dict[str, Any]], plan: dict[str, Any], file_changes: list[str]) -> str:
     total = len(nodes)
     completed = sum(1 for node in nodes if str(node.get("status") or "") == "completed")
-    status = str(plan.get("status") or "draft")
+    status = _normalize_plan_status(plan.get("status"))
     if total == 0:
         return f"Plan status: `{status}`."
-    if completed >= total:
+    if status == "draft":
+        if completed >= total:
+            return (
+                f"Plan status: `{status}`. All {completed}/{total} todos are marked done in the graph, "
+                "but execution was not approved — use Execute Plan before treating work as complete."
+            )
+        if completed > 0:
+            return (
+                f"Plan status: `{status}`. {completed}/{total} todos marked done, but the plan is still draft "
+                "(execution tools remain blocked until approval)."
+            )
+        return f"Plan status: `{status}`. Waiting for Execute Plan approval before running execution tools."
+    if status in {"approved", "executing"} and completed >= total:
+        return f"Plan status: `{status}`. In progress: {completed}/{total} todos marked complete."
+    if status == "completed" and completed >= total:
         return f"Plan status: `{status}`. Execution complete with {completed}/{total} todos done."
+    if completed >= total:
+        return f"Plan status: `{status}`. All {completed}/{total} todos marked complete."
     if completed > 0:
         return f"Plan status: `{status}`. Progress: {completed}/{total} todos complete and {len(file_changes)} tracked file change(s)."
     return f"Plan status: `{status}`. Execution has not completed any todos yet."
@@ -342,7 +365,7 @@ def render_plan_md(
         f'plan_id: "{(plan_id or "").strip()}"\n'
         f'domain: "{domain}"\n'
         f'title: "{frontmatter_title}"\n'
-        f'status: "{(status or "draft").strip()}"\n'
+        f'status: "{_normalize_plan_status(status)}"\n'
         f'created_at: "{(created_at or "unknown").strip()}"\n'
         f'last_synced_at: "{last_synced}"\n'
         f"total_todos: {total}\n"

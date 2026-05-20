@@ -428,14 +428,22 @@ function ChatPageContent({
   }, [mountStatusNoticeId, mountedFolder, mountedFolderFiles, mountedNoticeId, pendingMountPath, renameThread, thread.values.title, threadId]);
 
   useEffect(() => {
-    if (planCreatedEvent && settings.context.auto_mode === true) {
-      const eventKey = planEventKey(planCreatedEvent);
-      if (eventKey && suppressedAutoExecutePlanKeyRef.current === eventKey) {
-        return;
-      }
-      handleExecutePlan();
+    if (!planCreatedEvent || settings.context.auto_mode !== true) {
+      return;
     }
-  }, [planCreatedEvent, settings.context.auto_mode, handleExecutePlan, planEventKey]);
+    if (planCreatedEvent.auto_approved || planCreatedEvent.status === "approved") {
+      return;
+    }
+    const eventKey = planEventKey(planCreatedEvent);
+    if (eventKey && suppressedAutoExecutePlanKeyRef.current === eventKey) {
+      return;
+    }
+    if (thread.isLoading) {
+      setPendingExecutePlan(true);
+      return;
+    }
+    void handleExecutePlan();
+  }, [planCreatedEvent, settings.context.auto_mode, handleExecutePlan, planEventKey, thread.isLoading]);
 
   useEffect(() => {
     if (settings.context.mode !== "plan") {

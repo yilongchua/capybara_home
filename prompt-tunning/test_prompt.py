@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Run prompt-tuning cycles with minimal human intervention.
 
+All runs use plan mode, matching the LangGraph ``context`` the browser sends on
+``thread.submit`` (see ``frontend/src/core/threads/hooks.ts``) and the embedded
+``CapybaraClient`` stream context (see ``backend/src/client.py``).
+
 Usage:
     cd prompt-tunning
     python test_prompt.py
@@ -61,66 +65,109 @@ from src.config.paths import get_paths  # noqa: E402
 
 PROMPTS: list[dict[str, str]] = [
     {
-        "text": "I'm thinking of taking a 12 day trip to Greece with my partner in September. Can you make a realistic itinerary with places to stay, travel time between islands, and a rough budget?",
+        "text": "My partner and I are doing Greece for exactly 12 days in mid-September — Athens plus maybe 2 islands, nothing crazy. Can you map out day by day with where to sleep, realistic ferry times, and a rough total budget in EUR? Please name actual areas or hotels you'd actually book, not just 'stay in Plaka'.",
     },
     {
-        "text": "What is actually happening with the Iran war right now? Give me a clear current-state analysis, the main actors, what changed recently, and what could happen next.",
+        "text": "I keep ending up around town after work and craving bubble tea but I never know where to go. What are some good bubble tea spots in Singapore? I don't need a huge ranked list — just somewhere you'd genuinely stop if you were already in the area.",
     },
     {
-        "text": "Can you research crystals that people use for karma protection, spiritual protection, and bad energy? I want beginner-friendly explanations, not just a list of names.",
+        "text": "Can you look into crystals people use for karma protection and warding off bad energy? I'm pretty new to this — explain what each one is supposed to do and how people actually use them, not just throw names at me.",
     },
     {
-        "text": "I want to buy a standing desk for a small apartment. Compare a few good options, explain what specs matter, and tell me what you would choose under $400.",
+        "text": "Anniversary next Friday — want Japanese for date night in Singapore, somewhere that feels nice but not stiff. Budget around $80–120 per person, preferably not too loud. Give me 2–3 specific places and one dish you'd order at each.",
     },
     {
-        "text": "Help me plan a 30 day routine to get better sleep and reduce phone scrolling at night. Include practical steps, what to track, and how to adjust if I miss days.",
+        "text": "My sleep's been rubbish and I scroll on my phone way too late. I don't want a military schedule — just something sensible for about a month that I can actually stick to when work gets messy.",
     },
     {
-        "text": "I'm confused about whether renting or buying is smarter in my city. Walk me through the numbers I need, the non-financial tradeoffs, and a simple decision framework.",
+        "text": "Renting vs buying in Singapore — I'm on an HDB waitlist but also looking at resale. Walk me through what numbers actually matter, what people regret, and a simple way to decide without pretending we can predict the market.",
     },
     {
-        "text": "Can you compare intermittent fasting, calorie counting, and just eating more whole foods for weight loss? I want the pros, cons, risks, and who each approach fits.",
+        "text": "Trying to lose a bit of weight and torn between intermittent fasting, counting calories, or just eating cleaner. Pros, cons, who each works for — keep it practical, I'm not looking for a lecture.",
     },
     {
-        "text": "Plan a weekend in Tokyo for someone who likes food, bookstores, quiet neighborhoods, and one nice cocktail bar. Keep it realistic and avoid overpacked tourist routes.",
+        "text": "First time in Tokyo for a long weekend. I like food, small bookshops, quieter neighbourhoods, and maybe one good cocktail bar — not the hit-every-famous-spot-in-48-hours thing. Sketch something that feels doable.",
     },
     {
-        "text": "Do a balanced deep dive on whether AI will replace junior software engineers. Include the strongest arguments on both sides, recent evidence, and what juniors should do now.",
+        "text": "Honest question: is AI actually going to wipe out junior dev jobs or is that overblown? I want both sides with real recent examples (hiring, tools, startups), and what you'd tell a junior engineer to focus on this year.",
     },
     {
-        "text": "I'm starting a small home coffee setup. Compare espresso, pour-over, AeroPress, and moka pot for taste, cost, learning curve, and daily convenience.",
+        "text": "Setting up coffee at home in a tiny kitchen. Espresso machine vs pour-over vs AeroPress vs moka pot — taste, cost, how annoying they are day to day. If you had to pick one for a beginner, what and why?",
     },
     {
-        "text": "Research the current state of the Ukraine war and explain it like a geopolitical brief: front lines, military capacity, diplomacy, sanctions, and realistic scenarios for the next 6 months.",
+        "text": "I've had soba in Singapore a few times and I'm going to Japan next month. How different is 'real' soba there vs what we get here? Compare a few specific places in SG vs what you'd expect in Tokyo — broth, noodle texture, the whole vibe.",
     },
     {
-        "text": "I want to build an emergency kit for a family of four in an apartment. Make a prioritized checklist, explain quantities, and separate must-haves from nice-to-haves.",
+        "text": "Want a proper emergency kit for a family of four in a high-rise apartment in Singapore. Prioritised list with quantities, and be clear what's essential vs nice-to-have — we don't have a storeroom, so space matters.",
     },
     {
-        "text": "Give me a serious research summary on creatine: benefits, dosing, safety, myths, who should avoid it, and what the evidence actually says.",
+        "text": "Thinking about creatine — I'm 70kg, lift 3x a week, otherwise healthy. Benefits, how much to take, safety, common myths, and who should skip it. Cite what the evidence actually says, not bro-science.",
     },
     {
-        "text": "Help me choose between Bali, Chiang Mai, Lisbon, and Mexico City for 2 months of remote work. Compare cost, internet, safety, community, weather, and visa basics.",
+        "text": "Might do two months remote somewhere — Bali, Chiang Mai, Lisbon, or Mexico City. I care about decent internet and not feeling isolated, but I'm fuzzy on the rest. Help me get a feel for each without a giant comparison table.",
     },
     {
-        "text": "Analyse the electric vehicle market right now. Cover major brands, battery trends, charging issues, government incentives, and whether buying used makes sense.",
+        "text": "Shopping for an EV in 2026, probably used (under 5 years). Which brands are solid, what's going on with batteries and charging in SG, incentives, and whether used is a trap right now.",
     },
     {
-        "text": "Do a deep research report on crystals for protection, grounding, luck, love, and karma cleansing. Include traditional uses, cultural context, safety notes, and how to evaluate claims critically.",
+        "text": "Doing a deeper read on crystals — protection, grounding, luck, love, karma cleansing. Traditional use, cultural context, how to be skeptical without being dismissive, and anything safety-related people miss.",
     },
     {
-        "text": "I need to understand the current Israel-Palestine conflict without propaganda. Summarize the recent timeline, humanitarian situation, political constraints, and where sources disagree.",
+        "text": "Where's good for Burmese food in Singapore? I'm usually around Joo Chiat / Geylang side. Must-try dishes and a couple of specific shops — skip the generic 'try mohinga' with no names.",
     },
     {
-        "text": "Create a 6 month learning plan for becoming employable in machine learning engineering. Assume I know Python but not much math. Include projects, milestones, and how to prove skill.",
+        "text": "Six months to get employable as an ML engineer. I know Python, math is rusty at best. Week-by-week-ish plan with projects I'd actually put on a CV and how to show I can ship, not just finish courses.",
     },
     {
-        "text": "Compare the best approaches to investing $10,000 as a beginner in 2026. Explain index funds, bonds, cash, crypto, risk tolerance, taxes, and what not to do.",
+        "text": "I've got about $10k sitting around and I've never really invested. Index funds, bonds, cash, crypto — what's worth understanding in 2026? Explain it like you're talking to a friend, not a finance textbook.",
     },
     {
-        "text": "Act like a research assistant for someone deciding whether to move from Singapore to London, Dubai, or Sydney. Compare taxes, career opportunity, rent, healthcare, lifestyle, climate, and long-term tradeoffs.",
+        "text": "My 6-year-old wants to learn to cycle but he's scared of falling and we only have a small condo corridor — no space for training wheels indoors. What's a sane step-by-step way to teach him outside? Gear, timing, how long it usually takes — be realistic, not 'he'll get it in a day'.",
     },
 ]
+
+# Mirrors frontend thread.submit context when mode === "plan":
+#   frontend/src/core/threads/hooks.ts (context block on submit)
+# Embedded client derives the same fields via CapybaraClient._get_runnable_config.
+RUN_MODE = "plan"
+RUN_PLAN_BEHAVIOR = "plan_foreground"
+
+
+def langgraph_run_context(
+    *,
+    thread_id: str,
+    prompt_text: str,
+    model_name: str,
+    auto_mode: bool = True,
+) -> dict[str, Any]:
+    """Build the LangGraph run ``context`` dict (server + embedded stream)."""
+    return {
+        "thread_id": thread_id,
+        "thinking_enabled": True,
+        "is_plan_mode": True,
+        "mode": RUN_MODE,
+        "subagent_enabled": True,
+        "plan_behavior": RUN_PLAN_BEHAVIOR,
+        "auto_mode": auto_mode,
+        "model_name": model_name,
+        "current_turn_text": prompt_text,
+        "original_user_request": prompt_text,
+    }
+
+
+def run_config_snapshot(*, model_name: str, auto_mode: bool = True) -> dict[str, Any]:
+    """Serializable config recorded in per-run metadata for auditing."""
+    return {
+        "mode": RUN_MODE,
+        "is_plan_mode": True,
+        "plan_behavior": RUN_PLAN_BEHAVIOR,
+        "thinking_enabled": True,
+        "subagent_enabled": True,
+        "auto_mode": auto_mode,
+        "model_name": model_name,
+        "recursion_limit": 1000,
+        "langgraph_alignment": "frontend/src/core/threads/hooks.ts#thread.submit.context",
+    }
 
 
 def utc_now() -> str:
@@ -251,6 +298,7 @@ async def run_prompt_server(
     thread = await client.threads.create()
     thread_id = str(thread["thread_id"])
 
+    run_config = run_config_snapshot(model_name=model_name)
     metadata: dict[str, Any] = {
         "cycle_id": cycle_id,
         "prompt_id": prompt_id,
@@ -260,10 +308,8 @@ async def run_prompt_server(
         "runtime": "server",
         "langgraph_url": langgraph_url,
         "assistant_id": assistant_id,
-        "model_name": model_name,
-        "mode": "work",
-        "auto_mode": True,
         "prompt_log_purpose": purpose,
+        "run_config": run_config,
         "started_at": utc_now(),
         "status": "running",
     }
@@ -274,19 +320,12 @@ async def run_prompt_server(
             thread_id,
             assistant_id,
             input={"messages": [{"role": "human", "content": prompt["text"]}]},
-            config={"recursion_limit": 1000},
-            context={
-                "thread_id": thread_id,
-                "thinking_enabled": True,
-                "is_plan_mode": False,
-                "mode": "work",
-                "subagent_enabled": True,
-                "plan_behavior": "work_interactive",
-                "auto_mode": True,
-                "model_name": model_name,
-                "current_turn_text": prompt["text"],
-                "original_user_request": prompt["text"],
-            },
+            config={"recursion_limit": run_config["recursion_limit"]},
+            context=langgraph_run_context(
+                thread_id=thread_id,
+                prompt_text=prompt["text"],
+                model_name=model_name,
+            ),
         )
         metadata["status"] = "completed"
         metadata["response_preview"] = extract_response_text(result)[:2000]
@@ -310,6 +349,7 @@ def run_prompt_embedded(client: CapybaraClient, *, cycle_id: int, prompt_id: int
     metadata_path = prompt_dir / f"cycle_{cycle_id}_metadata.json"
     os.environ["CAPYBARA_PROMPT_LOG_PURPOSE"] = purpose
 
+    run_config = run_config_snapshot(model_name=model_name)
     metadata: dict[str, Any] = {
         "cycle_id": cycle_id,
         "prompt_id": prompt_id,
@@ -317,10 +357,8 @@ def run_prompt_embedded(client: CapybaraClient, *, cycle_id: int, prompt_id: int
         "chat_url": None,
         "initial_prompt": prompt["text"],
         "runtime": "embedded",
-        "model_name": model_name,
-        "mode": "work",
-        "auto_mode": True,
         "prompt_log_purpose": purpose,
+        "run_config": run_config,
         "started_at": utc_now(),
         "status": "running",
     }
@@ -331,11 +369,11 @@ def run_prompt_embedded(client: CapybaraClient, *, cycle_id: int, prompt_id: int
             prompt["text"],
             thread_id=thread_id,
             auto_mode=True,
-            mode="work",
-            plan_mode=False,
+            mode=RUN_MODE,
+            plan_mode=True,
             subagent_enabled=True,
             model_name=model_name,
-            recursion_limit=1000,
+            recursion_limit=run_config["recursion_limit"],
         ))
         metadata["status"] = "completed"
         metadata["response_preview"] = response[:2000]
@@ -376,7 +414,7 @@ def main() -> int:
             model_name=args.model_name,
             thinking_enabled=True,
             subagent_enabled=True,
-            plan_mode=False,
+            plan_mode=True,
             auto_mode=True,
         )
 

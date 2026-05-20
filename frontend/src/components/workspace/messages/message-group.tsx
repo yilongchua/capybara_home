@@ -37,7 +37,10 @@ import { useDirectory } from "../artifacts";
 import { FlipDisplay } from "../flip-display";
 import { Tooltip } from "../tooltip";
 
+import { normalizeWebSearchPayload } from "@/core/tools/web-search";
+
 import { MarkdownContent } from "./markdown-content";
+import { WebSearchSources } from "./web-search-sources";
 
 export function MessageGroup({
   className,
@@ -244,18 +247,17 @@ function ToolCall({
     if (typeof args.query === "string") {
       label = t.toolCalls.searchOnWebFor(args.query);
     }
+    const webPayload = normalizeWebSearchPayload(result);
     return (
       <ChainOfThoughtStep key={id} label={label} icon={SearchIcon}>
-        {Array.isArray(result) && (
-          <ChainOfThoughtSearchResults>
-            {result.map((item) => (
-              <ChainOfThoughtSearchResult key={item.url}>
-                <a href={item.url} target="_blank" rel="noreferrer">
-                  {item.title}
-                </a>
-              </ChainOfThoughtSearchResult>
-            ))}
-          </ChainOfThoughtSearchResults>
+        {webPayload && webPayload.results.length > 0 && (
+          <WebSearchSources
+            results={webPayload.results}
+            executedQuery={webPayload.executedQuery}
+          />
+        )}
+        {webPayload && webPayload.results.length === 0 && webPayload.summary && (
+          <p className="text-muted-foreground mt-1 text-xs">{webPayload.summary}</p>
         )}
       </ChainOfThoughtStep>
     );

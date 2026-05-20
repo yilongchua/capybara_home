@@ -17,6 +17,7 @@ fallback for embedded / non-async callers.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 from typing import Any, override
@@ -47,6 +48,45 @@ Raw results:
 """
 
 _SUMMARY_SUFFIX = "\n\n[Summarized by web_search_summary_middleware — original: {orig_chars} chars]"
+
+
+def _compact_results_from_content(content: str) -> list[dict[str, str]]:
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    raw_results = parsed.get("results")
+    if not isinstance(raw_results, list):
+        return []
+    compact: list[dict[str, str]] = []
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        compact.append(
+            {
+                "title": str(item.get("title") or url).strip(),
+                "url": url,
+                "snippet": str(item.get("snippet") or "").strip()[:500],
+            }
+        )
+    return compact
+
+
+def _build_summarized_tool_content(*, query: str, summary: str, orig_chars: int, compact_results: list[dict[str, str]]) -> str:
+    payload: dict[str, Any] = {
+        "ok": True,
+        "query": query,
+        "summary": summary,
+        "results": compact_results,
+        "summarized": True,
+        "original_chars": orig_chars,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def _run_with_timeout(fn, timeout: float) -> Any:
@@ -143,7 +183,14 @@ class WebSearchSummaryMiddleware(AgentMiddleware[AgentState]):
             return None
 
         suffix = _SUMMARY_SUFFIX.replace("{orig_chars}", str(orig_chars))
-        result = summary + suffix
+        summary_text = summary + suffix
+        compact_results = _compact_results_from_content(content)
+        result = _build_summarized_tool_content(
+            query=query,
+            summary=summary_text,
+            orig_chars=orig_chars,
+            compact_results=compact_results,
+        )
         self._record_summarized(runtime, tool_name, orig_chars, result, model_name)
         return result
 
@@ -178,7 +225,14 @@ class WebSearchSummaryMiddleware(AgentMiddleware[AgentState]):
             return None
 
         suffix = _SUMMARY_SUFFIX.replace("{orig_chars}", str(orig_chars))
-        result = summary + suffix
+        summary_text = summary + suffix
+        compact_results = _compact_results_from_content(content)
+        result = _build_summarized_tool_content(
+            query=query,
+            summary=summary_text,
+            orig_chars=orig_chars,
+            compact_results=compact_results,
+        )
         self._record_summarized(runtime, tool_name, orig_chars, result, model_name)
         return result
 

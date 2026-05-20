@@ -69,6 +69,28 @@ def test_write_todos_patches_by_id_and_preserves_untouched_nodes():
     assert by_id["todo-4"]["status"] == "pending"
 
 
+def test_write_todos_blocks_completed_while_plan_draft():
+    runtime = _runtime(
+        {
+            "plan": {
+                "title": "Plan Title",
+                "summary": "Plan Summary",
+                "status": "draft",
+            },
+            "todo_graph": {
+                "nodes": [{"id": "a", "content": "Research", "status": "pending", "depends_on": []}],
+            },
+        }
+    )
+    result = write_todos_tool.func(
+        runtime=runtime,
+        todos=[{"id": "a", "content": "Research", "status": "completed"}],
+        tool_call_id="tc-draft",
+    )
+    message = result.update["messages"][0]
+    assert "[plan_gate]" in message.content
+
+
 def test_write_todos_syncs_plan(tmp_path):
     plan_path = tmp_path / ".runtime" / "plan.md"
     runtime = _runtime(

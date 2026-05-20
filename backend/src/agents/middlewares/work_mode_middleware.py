@@ -434,6 +434,7 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
                 "Stage A: produce a compact outline plus section-level claims list before drafting full content.\n"
                 "Stage B: expand into the final report from the outline and essential evidence only.\n"
                 "Add confidence tags (high/medium/low) for key claims with weak support.\n"
+                "Write the final report to /mnt/user-data/workspace/ (e.g. report.md) and call `present_files` so the user receives it.\n"
                 "Before final write_file, self-check for duplicate table rows, repeated long paragraphs, heading numbering consistency, and required sections.\n"
             )
         instruction = HumanMessage(

@@ -103,6 +103,18 @@ def _recall_tool_input(runtime: Runtime, task_id: str | None) -> str | None:
     return _as_str(value)
 
 
+def _tool_output_preview(result: ToolMessage | Command) -> str | None:
+    if isinstance(result, ToolMessage):
+        return _as_str(result.content)
+    if isinstance(result, Command):
+        messages = (result.update or {}).get("messages") if isinstance(result.update, dict) else None
+        if isinstance(messages, list) and messages:
+            last = messages[-1]
+            if isinstance(last, ToolMessage):
+                return _as_str(last.content)
+    return None
+
+
 def _to_activity_event(runtime: Runtime, runtime_event: dict[str, Any]) -> ActivityEvent | None:
     event_type = str(runtime_event.get("event") or runtime_event.get("decision") or runtime_event.get("signal") or "")
     payload = dict(runtime_event)
@@ -128,11 +140,16 @@ def _to_activity_event(runtime: Runtime, runtime_event: dict[str, Any]) -> Activ
         tool = _as_str(payload.get("tool")) or "tool"
         tool_input = _recall_tool_input(runtime, task_id) or _as_str(payload.get("tool_input"))
         tool_output = _as_str(payload.get("tool_output_preview")) or _as_str(payload.get("result_preview"))
-        if tool_input:
+        if tool_output and "[plan_gate]" in tool_output:
+            kind = "plan_gate_blocked"
+            line = "Waiting for plan approval before running tools"
+            summary = tool_output[:280]
+        elif tool_input:
             line = f"{tool}: {tool_input}"
         else:
             line = f"{tool} executed"
-        summary = tool_output
+        if summary is None:
+            summary = tool_output
     elif event_type == "model_response":
         tool_calls_count = payload.get("tool_calls_count")
         if isinstance(tool_calls_count, int) and tool_calls_count > 0:
@@ -141,6 +158,8 @@ def _to_activity_event(runtime: Runtime, runtime_event: dict[str, Any]) -> Activ
             line = "Capybara is working on finalizing the response..."
     elif event_type in {"plan_created", "skipped_trivial", "llm_classified_trivial", "parse_failed_fallback"}:
         line = "Capybara is working on creating the implementation plan..."
+    elif event_type == "plan_auto_approved":
+        line = "Plan auto-approved — starting execution"
     elif event_type == "task_started":
         actor = "baby_capy"
         desc = _as_str(payload.get("description"))
@@ -169,7 +188,7 @@ def _to_activity_event(runtime: Runtime, runtime_event: dict[str, Any]) -> Activ
 
     if line is None:
         # Best-effort fallback only for harness/runtime events we still want visible.
-        if source in {"planner_middleware", "plan_evaluator", "task_tool", "execution_trace_middleware"}:
+        if source in {"planner_middleware", "plan_evaluator", "task_tool", "execution_trace_middleware", "activity_timeline_middleware"}:
             line = "Capybara is working on the next step..."
         else:
             return None
@@ -224,8 +243,35 @@ def _build_updates(runtime: Runtime, runtime_events: list[dict[str, Any]]) -> tu
     return events, metrics
 
 
+def _activity_payload(events: list[ActivityEvent], metrics: ContextMetricsState | None) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if events:
+        for event in events:
+            stream_activity_event(event)
+        payload["activity_timeline"] = activity_timeline_update(events)
+    if metrics:
+        payload["context_metrics"] = metrics
+    return payload
+
+
+def _merge_activity_into_command(result: ToolMessage | Command, payload: dict[str, Any]) -> ToolMessage | Command:
+    if not payload or not isinstance(result, Command):
+        return result
+    update = dict(result.update or {})
+    if "activity_timeline" in payload:
+        update["activity_timeline"] = payload["activity_timeline"]
+    if "context_metrics" in payload:
+        update["context_metrics"] = payload["context_metrics"]
+    return Command(update=update)
+
+
 class ActivityTimelineMiddleware(AgentMiddleware[ActivityTimelineMiddlewareState]):
     state_schema = ActivityTimelineMiddlewareState
+
+    def _flush_runtime_activity(self, runtime: Runtime) -> dict[str, Any]:
+        runtime_events = drain_runtime_events(runtime, consumer="activity_timeline")
+        events, metrics = _build_updates(runtime, runtime_events)
+        return _activity_payload(events, metrics)
 
     @override
     def before_agent(self, state: ActivityTimelineMiddlewareState, runtime: Runtime) -> dict | None:
@@ -241,18 +287,11 @@ class ActivityTimelineMiddleware(AgentMiddleware[ActivityTimelineMiddlewareState
 
     @override
     def before_model(self, state: ActivityTimelineMiddlewareState, runtime: Runtime) -> dict | None:
-        runtime_events = drain_runtime_events(runtime, consumer="activity_timeline")
-        events, metrics = _build_updates(runtime, runtime_events)
-        if not events and not metrics:
+        payload = self._flush_runtime_activity(runtime)
+        if not payload:
             return None
-
-        payload: dict[str, Any] = {}
-        if events:
-            for event in events:
-                stream_activity_event(event)
-            payload["activity_timeline"] = activity_timeline_update(events)
-        if metrics:
-            payload["context_metrics"] = merge_context_metrics(state.get("context_metrics"), metrics)
+        if "context_metrics" in payload:
+            payload["context_metrics"] = merge_context_metrics(state.get("context_metrics"), payload["context_metrics"])
         return payload
 
     @override
@@ -309,18 +348,17 @@ class ActivityTimelineMiddleware(AgentMiddleware[ActivityTimelineMiddlewareState
                     )
                 )
 
-        if not updates and not metrics:
+        payload = _activity_payload(updates, metrics)
+        if not payload:
             return None
-
-        for event in updates:
-            stream_activity_event(event)
-
-        payload: dict[str, Any] = {}
-        if updates:
-            payload["activity_timeline"] = activity_timeline_update(updates)
-        if metrics:
-            payload["context_metrics"] = merge_context_metrics(state.get("context_metrics"), metrics)
+        if "context_metrics" in payload:
+            payload["context_metrics"] = merge_context_metrics(state.get("context_metrics"), payload["context_metrics"])
         return payload
+
+    @override
+    def after_agent(self, state: ActivityTimelineMiddlewareState, runtime: Runtime) -> dict | None:
+        payload = self._flush_runtime_activity(runtime)
+        return payload or None
 
     @override
     def wrap_model_call(self, request: ModelRequest, handler) -> ModelCallResult:
@@ -330,8 +368,7 @@ class ActivityTimelineMiddleware(AgentMiddleware[ActivityTimelineMiddlewareState
     async def awrap_model_call(self, request: ModelRequest, handler) -> ModelCallResult:
         return await handler(request)
 
-    @override
-    def wrap_tool_call(self, request: ToolCallRequest, handler) -> ToolMessage | Command:
+    def _wrap_tool_call_inner(self, request: ToolCallRequest, handler) -> ToolMessage | Command:
         tool_name = request.tool_call.get("name")
         append_runtime_event(
             request.runtime,
@@ -351,31 +388,16 @@ class ActivityTimelineMiddleware(AgentMiddleware[ActivityTimelineMiddlewareState
                 "event": "tool_call_end",
                 "tool": tool_name,
                 "task_id": request.tool_call.get("id"),
+                "tool_output_preview": _tool_output_preview(result),
             },
         )
-        return result
+        activity_payload = self._flush_runtime_activity(request.runtime)
+        return _merge_activity_into_command(result, activity_payload)
+
+    @override
+    def wrap_tool_call(self, request: ToolCallRequest, handler) -> ToolMessage | Command:
+        return self._wrap_tool_call_inner(request, handler)
 
     @override
     async def awrap_tool_call(self, request: ToolCallRequest, handler) -> ToolMessage | Command:
-        tool_name = request.tool_call.get("name")
-        append_runtime_event(
-            request.runtime,
-            {
-                "source": "activity_timeline_middleware",
-                "event": "tool_call_start",
-                "tool": tool_name,
-                "task_id": request.tool_call.get("id"),
-                "tool_input": _tool_summary(_as_dict(request.tool_call.get("args")) | {"tool_input": _as_str(_as_dict(request.tool_call.get("args")).get("query"))}),
-            },
-        )
-        result = await handler(request)
-        append_runtime_event(
-            request.runtime,
-            {
-                "source": "activity_timeline_middleware",
-                "event": "tool_call_end",
-                "tool": tool_name,
-                "task_id": request.tool_call.get("id"),
-            },
-        )
-        return result
+        return self._wrap_tool_call_inner(request, handler)

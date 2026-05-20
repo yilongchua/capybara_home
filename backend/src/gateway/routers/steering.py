@@ -411,7 +411,12 @@ async def execute_plan(thread_id: str, request: ExecutePlanRequest) -> ExecutePl
             )
 
         approved_at = datetime.now(UTC).isoformat()
-        next_plan = {**plan, "status": "approved", "approved_at": approved_at}
+        next_plan = {
+            **plan,
+            "status": "approved",
+            "approved_at": approved_at,
+            "awaiting_execution_approval": False,
+        }
 
         history = _as_plan_history(values.get("plan_history"))
         if plan_id:

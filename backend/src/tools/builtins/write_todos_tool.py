@@ -173,7 +173,33 @@ def write_todos_tool(
         todos: List of todo updates. Existing items are patched by ``id``.
             New items are appended when ``id`` is new or omitted.
     """
-    existing_nodes_raw = ((runtime.state or {}).get("todo_graph") or {}).get("nodes") if runtime else None
+    state = runtime.state or {} if runtime else {}
+    plan = state.get("plan") if isinstance(state, dict) else None
+    plan_status = str(plan.get("status") or "").strip().lower() if isinstance(plan, dict) else ""
+    if plan_status == "draft":
+        blocked_completed = [
+            str(item.get("id") or "").strip()
+            for item in todos
+            if str(item.get("status") or "").strip().lower() == "completed"
+        ]
+        blocked_completed = [todo_id for todo_id in blocked_completed if todo_id]
+        if blocked_completed:
+            return Command(
+                update={
+                    "messages": [
+                        ToolMessage(
+                            content=(
+                                "[plan_gate] Cannot mark todos completed while the plan is still draft. "
+                                f"Blocked ids: {', '.join(blocked_completed)}. "
+                                "Approve the plan via Execute Plan first, or mark todos blocked with a reason."
+                            ),
+                            tool_call_id=tool_call_id,
+                        )
+                    ]
+                }
+            )
+
+    existing_nodes_raw = ((state.get("todo_graph") or {}).get("nodes") if isinstance(state, dict) else None)
     existing_nodes = existing_nodes_raw if isinstance(existing_nodes_raw, list) else []
     merged_nodes = merge_todo_nodes(existing_nodes, todos)
     ready_ids = _materialize_ready_ids(merged_nodes)

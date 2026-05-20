@@ -228,6 +228,24 @@ export function hasReasoning(message: Message) {
   return false;
 }
 
+/** True when an AI message after the latest human turn already carries reasoning. */
+export function hasReasoningInCurrentTurn(messages: Message[]): boolean {
+  let lastHumanIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.type === "human") {
+      lastHumanIndex = index;
+      break;
+    }
+  }
+  for (let index = messages.length - 1; index > lastHumanIndex; index -= 1) {
+    const message = messages[index];
+    if (message?.type === "ai" && hasReasoning(message)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function hasToolCalls(message: Message) {
   return (
     message.type === "ai" && message.tool_calls && message.tool_calls.length > 0
