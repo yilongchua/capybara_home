@@ -156,13 +156,49 @@ export function createWorkspaceQueryClient() {
         refetchOnWindowFocus: false,
         refetchOnReconnect: true,
         retry: 2,
-        staleTime: 5_000,
+        staleTime: 30_000,
       },
       mutations: {
         retry: false,
       },
     },
   });
+}
+
+const debouncedRefreshState: {
+  timer: ReturnType<typeof setTimeout> | null;
+  domains: Set<WorkspaceRefreshDomain>;
+  meta?: Record<string, unknown>;
+} = {
+  timer: null,
+  domains: new Set(),
+};
+
+/** Coalesce burst refresh events (e.g. multi-tool turns) into a single invalidation wave. */
+export function publishWorkspaceRefreshDebounced(
+  domains: WorkspaceRefreshDomain[],
+  meta?: Record<string, unknown>,
+  delayMs = 500,
+) {
+  if (typeof window === "undefined") {
+    publishWorkspaceRefresh(domains, meta);
+    return;
+  }
+  for (const domain of uniqDomains(domains)) {
+    debouncedRefreshState.domains.add(domain);
+  }
+  debouncedRefreshState.meta = meta ?? debouncedRefreshState.meta;
+  if (debouncedRefreshState.timer !== null) {
+    clearTimeout(debouncedRefreshState.timer);
+  }
+  debouncedRefreshState.timer = setTimeout(() => {
+    const merged = Array.from(debouncedRefreshState.domains);
+    debouncedRefreshState.domains.clear();
+    debouncedRefreshState.timer = null;
+    const pendingMeta = debouncedRefreshState.meta;
+    debouncedRefreshState.meta = undefined;
+    publishWorkspaceRefresh(merged, pendingMeta);
+  }, delayMs);
 }
 
 export function publishWorkspaceRefresh(
