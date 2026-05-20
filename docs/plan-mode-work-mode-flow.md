@@ -1,0 +1,143 @@
+# Plan Mode to Work Mode Flow
+
+This document captures the current lead-agent execution path from `plan mode` into `work mode`, including clarification handling, work handoff, work-loop execution, and delegated subagent activity.
+
+## Interactive Canvas
+
+[Open the zoomable canvas view](./plan-mode-work-mode-flow-canvas.html)
+
+## Diagram
+
+![Plan Mode to Work Mode Flow](./plan-mode-work-mode-flow.png)
+
+## Mermaid Source
+
+```mermaid
+flowchart TD
+    U[User submits a high-difficulty request] --> FE1[Frontend starts thread stream in plan mode]
+    FE1 --> LA0[Lead agent is created with full middleware stack]
+
+    subgraph PlanMode["Plan Mode Run"]
+        LA0 --> MW0[Thread data, sandbox, search privacy, summarization, skill disclosure]
+        MW0 --> G1[PlanExecutionGateMiddleware keeps execution constrained]
+        G1 --> PM[PlannerMiddleware]
+        PM --> P0{Existing clarification pending?}
+
+        P0 -- Yes --> P1[Apply clarification progress from latest user reply]
+        P1 --> P2{Clarifications fully resolved?}
+        P2 -- No --> P3[Emit next clarification prompt and stay in plan mode]
+        P2 -- Yes --> P4[Auto-approve only if auto_mode is enabled]
+        P4 --> P5{Foreground plan can hand off now?}
+        P5 -- Yes --> P6[Mark handoff requested and spawn work-mode daemon run]
+        P5 -- No --> P7[Return updated plan state]
+
+        P0 -- No --> C0[Classify request complexity]
+        C0 --> C1{Trivial or direct-answer path?}
+        C1 -- Yes --> C2[Skip full planner path]
+        C1 -- No --> P8[Planner model generates structured plan JSON]
+        P8 --> P9[Normalize todo DAG and repair invalid dependencies if needed]
+        P9 --> P10[Write plan.md and versioned plan artifact]
+        P10 --> P11[PlanEvaluatorMiddleware optionally revises todo graph]
+        P11 --> P12[Persist plan, todo_graph, ready_ids, plan history]
+        P12 --> P13{Clarification required?}
+        P13 -- Yes --> P3
+        P13 -- No --> P14{auto_mode enabled?}
+        P14 -- No --> P15[Plan stays draft and current run pauses]
+        P14 -- Yes --> P16[Plan becomes approved immediately]
+        P16 --> P17{Work handoff allowed?}
+        P17 -- Yes --> P6
+        P17 -- No --> P18[Approved plan remains ready for explicit execution]
+    end
+
+    P15 --> FE2[Frontend shows draft plan, todos, and plan artifacts]
+    P18 --> FE2
+    P3 --> FE2
+
+    FE2 --> UX{User clicks Execute Plan or types proceed/run plan}
+    UX --> API[executePlan endpoint is called]
+    API --> H0
+
+    subgraph Handoff["Plan to Work Handoff"]
+        P6 --> H0[Read latest thread state]
+        H0 --> H1[Ensure thread title exists]
+        H1 --> H2[Build a fresh CapybaraClient in work mode]
+        H2 --> H3[Inject original request and resolved clarification context]
+        H3 --> H4[Start a new work-mode run on the same thread]
+        H4 --> H5[Persist plan handoff succeeded and set status to executing]
+    end
+
+    subgraph WorkMode["Lead Agent Work Mode Loop"]
+        H5 --> W0[WorkModeMiddleware before_model]
+        W0 --> W1{todo_graph exists and plan is approved, executing, or completed?}
+        W1 -- No --> W2[No work execution starts]
+        W1 -- Yes --> W3[Repair stale in_progress todos if a prior run was interrupted]
+        W3 --> W4[Detect newly completed todos and emit phase_completed events]
+        W4 --> W5[Compute ready_ids from todo DAG]
+        W5 --> W6{Any ready pending todo?}
+
+        W6 -- No and pending remain --> W7[Emit plan_adapted and optionally auto re-plan]
+        W6 -- No and none remain --> W8[Mark plan completed]
+        W6 -- Yes --> W9[Pick next ready todo]
+
+        W9 --> W10[Emit phase_started]
+        W10 --> W11[Inject work_mode_instruction for the chosen todo]
+        W11 --> W12[Lead model decides tools for the current phase]
+        W12 --> W13[PlanExecutionGate now allows execution tools]
+        W13 --> W14[Tool calls execute]
+        W14 --> W15[SubagentLimitMiddleware caps parallel task fan-out]
+        W15 --> W16[Execution trace and activity timeline emit live events]
+        W16 --> W17{Did the lead agent call task subagents?}
+
+        W17 -- No --> W18[Lead agent continues locally]
+        W17 -- Yes --> S0
+
+        W18 --> W19[Lead agent updates todo status with write_todos]
+        W19 --> W0
+    end
+
+    subgraph Subagents["Delegated Subagent Execution"]
+        S0[task tool creates SubagentExecutor] --> S1[Subagent inherits sandbox, thread_data, and allowed tools]
+        S1 --> S2[Subagent runs in isolated context with task recursion disabled]
+        S2 --> S3[Backend polls background task state]
+        S3 --> S4[Stream task_started, task_running, and task_completed or failed events]
+        S4 --> S5[Return subagent result to lead agent as tool output]
+    end
+
+    S5 --> W18
+
+    W8 --> F0[Lead model writes final synthesis or deliverable]
+    F0 --> F1[EvaluatorMiddleware verifies final response]
+    F1 --> F2{All todos complete and evaluation passes?}
+    F2 -- No --> F3[Inject evaluator feedback and force another correction pass]
+    F3 --> W12
+    F2 -- Yes --> F4[Final answer, artifacts, and completed thread state are persisted]
+
+    subgraph Frontend["User-Visible UI"]
+        FE2 --> UI1[Plan panel and plan artifacts are shown]
+        S4 --> UI2[Subtask cards render Baby Capy progress]
+        W16 --> UI3[Activity timeline streams planning, work, and tool status]
+        F4 --> UI4[Final response and completed subtasks are displayed]
+    end
+```
+
+## Key Notes
+
+- `plan mode` and `work mode` are separate runs on the same thread.
+- A draft plan pauses after planning in foreground mode until explicit execution approval.
+- `spawn_work_mode_handoff(...)` starts the fresh work-mode run.
+- Work mode advances by selecting one ready todo per loop, but that phase can still fan out into multiple subagents.
+- Subagents stream progress back into the same thread, which the frontend converts into subtask cards and activity timeline rows.
+
+## Main Code References
+
+- [backend/src/agents/lead_agent/agent.py](/Users/ryan_chua/Desktop/capybara-home/backend/src/agents/lead_agent/agent.py:508)
+- [backend/src/agents/middlewares/planner_middleware.py](/Users/ryan_chua/Desktop/capybara-home/backend/src/agents/middlewares/planner_middleware.py:582)
+- [backend/src/agents/middlewares/work_run_handoff.py](/Users/ryan_chua/Desktop/capybara-home/backend/src/agents/middlewares/work_run_handoff.py:101)
+- [backend/src/agents/middlewares/work_mode_middleware.py](/Users/ryan_chua/Desktop/capybara-home/backend/src/agents/middlewares/work_mode_middleware.py:258)
+- [backend/src/tools/builtins/task_tool.py](/Users/ryan_chua/Desktop/capybara-home/backend/src/tools/builtins/task_tool.py:250)
+- [backend/src/agents/middlewares/plan_execution_gate_middleware.py](/Users/ryan_chua/Desktop/capybara-home/backend/src/agents/middlewares/plan_execution_gate_middleware.py:93)
+- [backend/src/agents/middlewares/plan_evaluator_middleware.py](/Users/ryan_chua/Desktop/capybara-home/backend/src/agents/middlewares/plan_evaluator_middleware.py:106)
+- [backend/src/agents/middlewares/evaluator_middleware.py](/Users/ryan_chua/Desktop/capybara-home/backend/src/agents/middlewares/evaluator_middleware.py:94)
+- [frontend/src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx](/Users/ryan_chua/Desktop/capybara-home/frontend/src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx:165)
+- [frontend/src/components/workspace/messages/message-list.tsx](/Users/ryan_chua/Desktop/capybara-home/frontend/src/components/workspace/messages/message-list.tsx:50)
+- [frontend/src/components/workspace/messages/subtask-card.tsx](/Users/ryan_chua/Desktop/capybara-home/frontend/src/components/workspace/messages/subtask-card.tsx:44)
