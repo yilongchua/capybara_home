@@ -60,10 +60,13 @@ def clarification_index(plan: dict[str, Any]) -> int:
 
 def current_clarification(plan: dict[str, Any]) -> dict[str, Any] | None:
     clarifications = _clarifications_list(plan)
-    if not clarifications:
-        return None
-    idx = min(clarification_index(plan), len(clarifications) - 1)
-    return clarifications[idx]
+    if clarifications:
+        idx = min(clarification_index(plan), len(clarifications) - 1)
+        return clarifications[idx]
+    question = str(plan.get("clarification_question") or "").strip()
+    if question and bool(plan.get("clarification_pending")):
+        return {"question": question, "options": []}
+    return None
 
 
 def all_clarifications_resolved(plan: dict[str, Any]) -> bool:
@@ -79,17 +82,70 @@ def all_clarifications_resolved(plan: dict[str, Any]) -> bool:
 
 
 def handoff_already_started(plan: dict[str, Any]) -> bool:
+    if bool(plan.get("execution_handoff_failed")):
+        return False
     return bool(plan.get("execution_handoff_started"))
 
 
-def mark_handoff_started(plan: dict[str, Any]) -> dict[str, Any]:
-    started_at = _utc_now_iso()
+def work_execution_underway(values: dict[str, Any]) -> bool:
+    """True when work mode is actively driving plan execution on this thread."""
+    work_mode = values.get("work_mode")
+    if isinstance(work_mode, dict) and bool(work_mode.get("active")):
+        return True
+    plan = values.get("plan")
+    if isinstance(plan, dict):
+        status = str(plan.get("status") or "").strip().lower()
+        if status in {"executing", "completed"}:
+            return True
+    return False
+
+
+def execute_plan_should_duplicate(plan: dict[str, Any], values: dict[str, Any]) -> bool:
+    """Duplicate only when a handoff succeeded and work is actually running."""
+    return handoff_already_started(plan) and work_execution_underway(values)
+
+
+def mark_handoff_requested(plan: dict[str, Any]) -> dict[str, Any]:
     return {
         **plan,
+        "execution_requested_at": _utc_now_iso(),
+        "execution_handoff_failed": False,
+        "execution_handoff_error": None,
+        "execution_handoff_failed_at": None,
+    }
+
+
+def mark_handoff_succeeded(plan: dict[str, Any]) -> dict[str, Any]:
+    started_at = _utc_now_iso()
+    status = str(plan.get("status") or "").strip().lower()
+    next_status = "executing" if status == "approved" else status
+    return {
+        **plan,
+        "status": next_status,
         "execution_handoff_started": True,
         "execution_handoff_started_at": started_at,
         "execution_requested_at": plan.get("execution_requested_at") or started_at,
+        "execution_handoff_failed": False,
+        "execution_handoff_error": None,
+        "execution_handoff_failed_at": None,
     }
+
+
+def mark_handoff_failed(plan: dict[str, Any], error: str | None = None) -> dict[str, Any]:
+    message = str(error or "").strip()[:500]
+    return {
+        **plan,
+        "execution_handoff_started": False,
+        "execution_handoff_started_at": None,
+        "execution_handoff_failed": True,
+        "execution_handoff_failed_at": _utc_now_iso(),
+        "execution_handoff_error": message or None,
+    }
+
+
+def mark_handoff_started(plan: dict[str, Any]) -> dict[str, Any]:
+    """Backward-compatible alias for successful handoff completion."""
+    return mark_handoff_succeeded(plan)
 
 
 def should_spawn_work_handoff(
@@ -140,6 +196,10 @@ def _match_answer_to_option(answer_text: str, clarification: dict[str, Any]) -> 
         if normalized_answer == normalized_label or normalized_label in normalized_answer or normalized_answer in normalized_label:
             description = option.get("description")
             return label, str(description).strip() if description else None
+
+    # Unstructured or legacy clarifications without options: accept substantive free text.
+    if len(normalized_answer) >= 3 and not _option_labels(clarification):
+        return answer_text.strip(), None
 
     # Accept substantive free-text replies when options exist but text doesn't match exactly.
     if len(normalized_answer) >= 3 and _option_labels(clarification):
@@ -254,6 +314,14 @@ def resolve_original_user_request(values: dict[str, Any]) -> str | None:
         if prompt.strip():
             return prompt
     return None
+
+
+def resolve_auto_mode(values: dict[str, Any], *, request_auto_mode: bool | None = None) -> bool:
+    if request_auto_mode is not None:
+        return bool(request_auto_mode)
+    if bool(values.get("auto_mode")):
+        return True
+    return False
 
 
 def apply_clarification_progress(

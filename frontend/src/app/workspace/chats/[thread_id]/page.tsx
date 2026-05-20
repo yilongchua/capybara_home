@@ -46,6 +46,7 @@ import { useRenameThread, useThreadStream } from "@/core/threads/hooks";
 import { useContextTokens } from "@/core/threads/use-context-tokens";
 import { useRejoinRunningRun } from "@/core/threads/use-rejoin-running-run";
 import { useThreadNotification } from "@/core/threads/use-thread-notification";
+import { publishWorkspaceRefresh } from "@/core/workspace-refresh";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
 
@@ -211,6 +212,7 @@ function ChatPageContent({
   const [uiNotices, setUiNotices] = useState<LiveGenerationNotice[]>([]);
   const [pendingExecutePlan, setPendingExecutePlan] = useState(false);
   const [isExecutingPlan, setIsExecutingPlan] = useState(false);
+  const [runPollBump, setRunPollBump] = useState(0);
   const [hiddenPlanEventKey, setHiddenPlanEventKey] = useState<string | null>(null);
   const [pendingMountPath, setPendingMountPath] = useState<string | null>(null);
   const suppressedAutoExecutePlanKeyRef = useRef<string | null>(null);
@@ -270,7 +272,9 @@ function ChatPageContent({
     },
   });
 
-  const { runningRun } = useRejoinRunningRun(isNewThread ? null : threadId, thread);
+  const { runningRun } = useRejoinRunningRun(isNewThread ? null : threadId, thread, {
+    pollBump: runPollBump,
+  });
 
   const handleStop = useCallback(async () => {
     await queueControls.stop();
@@ -366,6 +370,7 @@ function ChatPageContent({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             plan_id: effectivePlanCreatedEvent?.plan_id,
+            auto_mode: settings.context.auto_mode === true,
           }),
         });
         if (!response.ok) {
@@ -388,6 +393,10 @@ function ChatPageContent({
         executePlanRetryCountRef.current = 0;
         setPendingExecutePlan(false);
         setIsExecutingPlan(false);
+        setRunPollBump((value) => value + 1);
+        publishWorkspaceRefresh(["runs", "threads", `thread:${threadId}`], {
+          source: "execute-plan",
+        });
       } catch (error) {
         // Keep popup open so user can retry execute.
         console.error("Failed to execute plan:", error);
@@ -407,6 +416,7 @@ function ChatPageContent({
     pendingExecutePlan,
     setSettings,
     settings.context,
+    settings.context.auto_mode,
     threadId,
     thread.isLoading,
   ]);

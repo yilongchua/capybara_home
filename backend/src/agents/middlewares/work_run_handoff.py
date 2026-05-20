@@ -109,13 +109,17 @@ def _run_work_mode_handoff(
     from langgraph_sdk import get_client
 
     from src.agents.middlewares.daemon_agent_invoke import invoke_agent_async
-    from src.agents.middlewares.plan_execution import format_clarification_context_for_work
+    from src.agents.middlewares.plan_execution import (
+        format_clarification_context_for_work,
+        mark_handoff_failed,
+        mark_handoff_succeeded,
+    )
     from src.client import CapybaraClient
 
     time.sleep(delay_seconds)
     values: dict[str, Any] = {}
+    lg_client = get_client(url=_langgraph_url())
     try:
-        lg_client = get_client(url=_langgraph_url())
         state = lg_client.threads.get_state(thread_id)
         if hasattr(state, "__await__"):
             import asyncio
@@ -177,8 +181,31 @@ def _run_work_mode_handoff(
                 "original_user_request": original_user_request or "",
             },
         )
-    except Exception:
+        plan = values.get("plan") if isinstance(values, dict) else None
+        if isinstance(plan, dict):
+            try:
+                result = lg_client.threads.update_state(thread_id, {"plan": mark_handoff_succeeded(plan)})
+                if hasattr(result, "__await__"):
+                    import asyncio
+
+                    asyncio.run(result)
+            except Exception:
+                logger.exception("Failed to persist successful work handoff for thread %s", thread_id)
+    except Exception as exc:
         logger.exception("Automatic work-mode handoff failed for thread %s", thread_id)
+        plan = values.get("plan") if isinstance(values, dict) else None
+        if isinstance(plan, dict):
+            try:
+                result = lg_client.threads.update_state(
+                    thread_id,
+                    {"plan": mark_handoff_failed(plan, error=str(exc))},
+                )
+                if hasattr(result, "__await__"):
+                    import asyncio
+
+                    asyncio.run(result)
+            except Exception:
+                logger.exception("Failed to persist failed work handoff for thread %s", thread_id)
 
 
 def spawn_work_mode_handoff(

@@ -23,7 +23,7 @@ from src.agents.middlewares.plan_execution import (
     apply_clarification_progress,
     approve_plan_if_auto_mode,
     build_clarification_prompt_message,
-    mark_handoff_started,
+    mark_handoff_requested,
     should_spawn_work_handoff,
 )
 from src.agents.middlewares.runtime_events import append_runtime_event
@@ -614,7 +614,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                     if isinstance(thread_id, str) and thread_id:
                         user_prompt = original_user_prompt(messages) or ""
                         requested_model_name = runtime_context.get("model_name")
-                        resolved_plan = mark_handoff_started(resolved_plan)
+                        resolved_plan = mark_handoff_requested(resolved_plan)
                         spawn_work_mode_handoff(
                             thread_id=thread_id,
                             requested_model_name=requested_model_name if isinstance(requested_model_name, str) else None,
@@ -896,7 +896,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
             thread_id = runtime_context.get("thread_id")
             if isinstance(thread_id, str) and thread_id:
                 requested_model_name = runtime_context.get("model_name")
-                plan_dict = mark_handoff_started(plan_dict)
+                plan_dict = mark_handoff_requested(plan_dict)
                 payload["plan"] = plan_dict
                 spawn_work_mode_handoff(
                     thread_id=thread_id,

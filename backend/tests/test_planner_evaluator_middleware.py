@@ -306,7 +306,8 @@ def test_planner_auto_mode_clarification_resolution_spawns_work_handoff(tmp_path
     assert update is not None
     assert update["plan"]["clarification_pending"] is False
     assert update["plan"]["status"] == "approved"
-    assert update["plan"]["execution_handoff_started"] is True
+    assert update["plan"].get("execution_handoff_started") is not True
+    assert update["plan"].get("execution_handoff_failed") is False
     assert len(spawn_calls) == 1
 
 
