@@ -18,6 +18,12 @@ interface AssistantClarificationGroup extends GenericMessageGroup<"assistant:cla
 
 interface AssistantSubagentGroup extends GenericMessageGroup<"assistant:subagent"> {}
 
+const SYNTHETIC_HUMAN_MESSAGE_NAMES = new Set([
+  "todo_reminder",
+  "planner_handoff",
+  "planner_clarification_required",
+]);
+
 type MessageGroup =
   | HumanMessageGroup
   | AssistantProcessingGroup
@@ -52,7 +58,7 @@ export function groupMessages<T>(
   }
 
   for (const message of messages) {
-    if (message.name === "todo_reminder") {
+    if (message.type === "human" && message.name && SYNTHETIC_HUMAN_MESSAGE_NAMES.has(message.name)) {
       continue;
     }
 

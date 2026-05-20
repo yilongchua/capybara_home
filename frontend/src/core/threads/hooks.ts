@@ -62,6 +62,7 @@ export type PlanCreatedEvent = {
   plan_id?: string;
   status?: string;
   auto_approved?: boolean;
+  clarification_pending?: boolean;
   title: string;
   summary: string;
   domain: string;
@@ -194,6 +195,37 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     return undefined;
   }
   return value as Record<string, unknown>;
+}
+
+function asOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function formatSubagentActivityLabel(
+  subagentType: string | undefined,
+  detail: string | undefined,
+  eventType: "task_started" | "task_running" | "task_completed" | "task_failed" | "task_timed_out",
+): string {
+  const agent = asOptionalString(subagentType) ?? "task";
+  const normalizedDetail = asOptionalString(detail);
+  if (eventType === "task_completed") {
+    return normalizedDetail
+      ? `Baby Capy - ${agent} finished ${normalizedDetail}`
+      : `Baby Capy - ${agent} finished the delegated task`;
+  }
+  if (eventType === "task_failed" || eventType === "task_timed_out") {
+    return normalizedDetail
+      ? `Baby Capy - ${agent} hit an issue while working on ${normalizedDetail}`
+      : `Baby Capy - ${agent} hit an issue while working on the delegated task`;
+  }
+  if (eventType === "task_running") {
+    return normalizedDetail
+      ? `Baby Capy - ${agent} is working on ${normalizedDetail}...`
+      : `Baby Capy - ${agent} is working on delegated steps...`;
+  }
+  return normalizedDetail
+    ? `Baby Capy - ${agent} is working on ${normalizedDetail}...`
+    : `Baby Capy - ${agent} is working on a delegated task...`;
 }
 
 const WORKSPACE_REFRESH_TOOLS = new Set([
@@ -377,6 +409,7 @@ export function useThreadStream({
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
   const queueRef = useRef<QueuedMessage[]>([]);
   const isSubmittingRef = useRef(false);
+  const [isSubmittingBusy, setIsSubmittingBusy] = useState(false);
   const isDequeuingRef = useRef(false);
   const activeSteerRequestRef = useRef<Set<string>>(new Set());
   const steeringLockUntilRef = useRef<Map<string, number>>(new Map());
@@ -680,6 +713,12 @@ export function useThreadStream({
       tool_summary?: string;
       group_id?: string;
     }) => {
+      const payload = asRecord(event.trace?.payload) ?? {};
+      const subagentType = asOptionalString(payload.subagent_type);
+      const description = asOptionalString(payload.description);
+      const groupTitle =
+        asOptionalString(payload.group_title) ??
+        (subagentType && description ? `${subagentType}: ${description}` : undefined);
       const taskUpdatedAt =
         typeof event.trace?.timestamp === "number"
           ? event.trace.timestamp
@@ -688,6 +727,9 @@ export function useThreadStream({
         id: event.task_id,
         status: "in_progress",
         latestMessage: event.message,
+        subagent_type: subagentType,
+        description,
+        group_title: groupTitle,
         updated_at: taskUpdatedAt,
       });
       syntheticActivitySeqRef.current += 1;
@@ -701,11 +743,14 @@ export function useThreadStream({
         timestamp: taskUpdatedAt,
         actor: "baby_capy",
         kind: "task_running",
-        line: event.tool_summary
-          ? `Baby Capy is working on ${event.tool_summary}...`
-          : "Baby Capy is working on delegated steps...",
+        line: formatSubagentActivityLabel(subagentType, event.tool_summary, "task_running"),
         task_id: event.task_id,
         group_id: event.group_id ?? event.task_id,
+        group_kind: asOptionalString(payload.group_kind),
+        group_title: groupTitle,
+        group_role: "step",
+        subagent_type: subagentType,
+        description,
         tool_summary: event.tool_summary,
         assistant_message_id:
           typeof event.trace?.assistant_message_id === "string"
@@ -718,7 +763,6 @@ export function useThreadStream({
       });
       if (!event.trace?.event_type) return;
       const tracePayload = event.trace.payload;
-      const payload = asRecord(tracePayload) ?? {};
       const traceRunId =
         typeof event.trace.run_id === "string" ? event.trace.run_id : undefined;
       const traceId =
@@ -777,11 +821,14 @@ export function useThreadStream({
           "Running subtask";
         const subagentType =
           typeof payload.subagent_type === "string" ? payload.subagent_type : "task";
+        const groupTitle =
+          asOptionalString(payload.group_title) ?? `${subagentType}: ${description}`;
         updateSubtask({
           id: event.task_id,
           status: "in_progress",
           description,
           subagent_type: subagentType,
+          group_title: groupTitle,
           started_at: taskTimestamp,
           updated_at: taskTimestamp,
         });
@@ -796,18 +843,35 @@ export function useThreadStream({
           timestamp: taskTimestamp,
           actor: "baby_capy",
           kind: "task_started",
-          line: `Baby Capy is working on ${description}...`,
+          line: formatSubagentActivityLabel(subagentType, description, "task_started"),
           task_id: event.task_id,
           group_id: event.task_id,
+          group_kind: asOptionalString(payload.group_kind),
+          group_title: groupTitle,
+          group_role: "header",
+          subagent_type: subagentType,
+          description,
           assistant_message_id:
             typeof event.trace?.assistant_message_id === "string"
               ? event.trace.assistant_message_id
               : undefined,
         });
       } else if (event.type === "task_completed") {
+        const payload = asRecord(event.trace?.payload) ?? {};
+        const description =
+          event.description ??
+          (typeof payload.description === "string" ? payload.description : undefined) ??
+          "delegated task";
+        const subagentType =
+          typeof payload.subagent_type === "string" ? payload.subagent_type : "task";
+        const groupTitle =
+          asOptionalString(payload.group_title) ?? `${subagentType}: ${description}`;
         updateSubtask({
           id: event.task_id,
           status: "completed",
+          description,
+          subagent_type: subagentType,
+          group_title: groupTitle,
           result: event.result,
           completed_at: taskTimestamp,
           updated_at: taskTimestamp,
@@ -823,18 +887,35 @@ export function useThreadStream({
           timestamp: taskTimestamp,
           actor: "baby_capy",
           kind: "task_completed",
-          line: "Baby Capy is working on wrapping up results...",
+          line: formatSubagentActivityLabel(subagentType, description, "task_completed"),
           task_id: event.task_id,
           group_id: event.task_id,
+          group_kind: asOptionalString(payload.group_kind),
+          group_title: groupTitle,
+          group_role: "terminal",
+          subagent_type: subagentType,
+          description,
           assistant_message_id:
             typeof event.trace?.assistant_message_id === "string"
               ? event.trace.assistant_message_id
               : undefined,
         });
       } else {
+        const payload = asRecord(event.trace?.payload) ?? {};
+        const description =
+          event.description ??
+          (typeof payload.description === "string" ? payload.description : undefined) ??
+          "delegated task";
+        const subagentType =
+          typeof payload.subagent_type === "string" ? payload.subagent_type : "task";
+        const groupTitle =
+          asOptionalString(payload.group_title) ?? `${subagentType}: ${description}`;
         updateSubtask({
           id: event.task_id,
           status: "failed",
+          description,
+          subagent_type: subagentType,
+          group_title: groupTitle,
           error:
             event.error ??
             (event.type === "task_timed_out" ? "Task timed out." : "Task failed."),
@@ -852,9 +933,14 @@ export function useThreadStream({
           timestamp: taskTimestamp,
           actor: "baby_capy",
           kind: event.type,
-          line: "Baby Capy is working on recovery after an issue...",
+          line: formatSubagentActivityLabel(subagentType, description, event.type),
           task_id: event.task_id,
           group_id: event.task_id,
+          group_kind: asOptionalString(payload.group_kind),
+          group_title: groupTitle,
+          group_role: "terminal",
+          subagent_type: subagentType,
+          description,
           assistant_message_id:
             typeof event.trace?.assistant_message_id === "string"
               ? event.trace.assistant_message_id
@@ -1153,6 +1239,7 @@ export function useThreadStream({
       options?: SendMessageOptions,
     ) => {
       isSubmittingRef.current = true;
+      setIsSubmittingBusy(true);
       const text = message.text.trim();
       prevMsgCountRef.current = thread.messages.length;
 
@@ -1274,6 +1361,7 @@ export function useThreadStream({
         throw error;
       } finally {
         isSubmittingRef.current = false;
+        setIsSubmittingBusy(false);
       }
     },
     [
@@ -1451,11 +1539,11 @@ export function useThreadStream({
   }, [processQueue]);
 
   useEffect(() => {
-    if (messageQueue.length === 0 || thread.isLoading || isSubmittingRef.current) {
+    if (messageQueue.length === 0 || thread.isLoading || isSubmittingBusy) {
       return;
     }
     processQueueRef.current();
-  }, [messageQueue.length, thread.isLoading]);
+  }, [messageQueue.length, thread.isLoading, isSubmittingBusy]);
 
   const sendMessage = useCallback(
     async (
@@ -1472,6 +1560,7 @@ export function useThreadStream({
       });
 
       if (!shouldQueue) {
+        await submitMessageNow(threadId, message, extraContext, options);
         return;
       }
 
@@ -1488,7 +1577,7 @@ export function useThreadStream({
       applyQueue(nextQueue);
       processQueueRef.current();
     },
-    [applyQueue, thread.isLoading],
+    [applyQueue, submitMessageNow, thread.isLoading],
   );
 
   const dismissQueued = useCallback(
@@ -1573,12 +1662,31 @@ export function useThreadStream({
         ? ({ ...thread, messages: resolvedMessages } as typeof thread)
         : thread;
 
-  // Merge thread with optimistic messages for display
+  const queuedDisplayMessages: Message[] = messageQueue
+    .filter((item) => !item.steerIntent)
+    .flatMap((item) => {
+      const text = item.message.text.trim();
+      const hasFiles = Boolean(item.message.files?.length);
+      if (!text && !hasFiles) {
+        return [];
+      }
+      return [
+        {
+          type: "human" as const,
+          id: `queued-${item.id}`,
+          content: text ? [{ type: "text" as const, text }] : "",
+          additional_kwargs: hasFiles ? { files: [] } : {},
+        },
+      ];
+    });
+
+  // Merge thread with optimistic and queued messages for display
+  const pendingDisplayMessages = [...optimisticMessages, ...queuedDisplayMessages];
   const mergedThread =
-    optimisticMessages.length > 0
+    pendingDisplayMessages.length > 0
       ? ({
           ...threadForDisplay,
-          messages: [...threadForDisplay.messages, ...optimisticMessages],
+          messages: [...threadForDisplay.messages, ...pendingDisplayMessages],
         } as typeof thread)
       : threadForDisplay;
 

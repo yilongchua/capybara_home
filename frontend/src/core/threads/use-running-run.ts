@@ -37,11 +37,12 @@ export function useRunningRun(threadId: string | null | undefined): {
     }
     const client = getAPIClient();
     let cancelled = false;
-    setLoading(true);
-
-    client.runs
-      .list(threadId, { status: "running", limit: 1 })
-      .then((runs) => {
+    const pollRunningRun = async (isInitial: boolean) => {
+      if (isInitial) {
+        setLoading(true);
+      }
+      try {
+        const runs = await client.runs.list(threadId, { status: "running", limit: 1 });
         if (cancelled) return;
         const first = runs?.[0];
         if (first) {
@@ -53,17 +54,36 @@ export function useRunningRun(threadId: string | null | undefined): {
         } else {
           setRunningRun(null);
         }
-      })
-      .catch(() => {
+      } catch {
         if (cancelled) return;
         setRunningRun(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      } finally {
+        if (isInitial && !cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void pollRunningRun(true);
+    const interval = window.setInterval(() => {
+      void pollRunningRun(false);
+    }, 3000);
+    const onFocus = () => {
+      void pollRunningRun(false);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void pollRunningRun(false);
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
       cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [threadId]);
 

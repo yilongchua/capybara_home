@@ -42,6 +42,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.config import get_stream_writer
 from langgraph.runtime import Runtime
 
+from src.agents.middlewares.plan_execution import format_clarification_context_for_work
 from src.agents.middlewares.todo_dag_middleware import _materialize_ready_ids
 
 logger = logging.getLogger(__name__)
@@ -170,6 +171,7 @@ def _run_plan_mode_rerun(
     let the Work Mode run reach its checkpoint before starting a new run on the
     same thread (LangGraph serialises runs per thread via the checkpoint lock).
     """
+    from src.agents.middlewares.daemon_agent_invoke import invoke_agent_async
     from src.client import CapybaraClient
 
     time.sleep(2.0)
@@ -193,7 +195,8 @@ def _run_plan_mode_rerun(
             }
         )
         client._ensure_agent(config)  # noqa: SLF001
-        client._agent.invoke(  # noqa: SLF001
+        invoke_agent_async(
+            client._agent,  # noqa: SLF001
             {"messages": [HumanMessage(name="work_mode_plan_rerun", content=system_message)]},
             config=config,
             context={
@@ -415,9 +418,17 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
             logger.exception("Failed to emit phase_started SSE for %s", next_todo["id"])
 
         todo_content = next_todo.get("content", "")
+        rationale = str(next_todo.get("rationale") or "").strip()
+        rationale_block = f"\nRationale: {rationale}" if rationale else ""
         subagent_hint = ""
         if next_todo.get("subagent_type"):
             subagent_hint = f" Use a {next_todo['subagent_type']} subagent if available."
+
+        clarification_block = ""
+        if isinstance(plan_state, dict):
+            clarification_text = format_clarification_context_for_work(plan_state)
+            if clarification_text:
+                clarification_block = f"\n{clarification_text}\n"
 
         report_contract = ""
         if _is_report_todo(todo_content):
@@ -433,7 +444,8 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
             name="work_mode_instruction",
             content=(
                 f"<work_mode_instruction>\n"
-                f"Execute the following task now: {todo_content}.{subagent_hint}\n"
+                f"Execute the following task now: {todo_content}.{subagent_hint}{rationale_block}\n"
+                f"{clarification_block}"
                 f"{report_contract}"
                 f"When done, call write_todos to mark todo id '{next_todo['id']}' as completed.\n"
                 f"If write_todos is unexpectedly unavailable, state that explicitly and include the intended status update for todo id '{next_todo['id']}'.\n"

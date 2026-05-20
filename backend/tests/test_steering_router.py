@@ -153,6 +153,54 @@ def test_execute_plan_conflict_when_clarification_pending(monkeypatch):
     assert response.status == "conflict"
 
 
+def test_execute_plan_resolves_answered_clarification(monkeypatch):
+    threads = _ThreadsClient(
+        values={
+            "messages": [
+                {
+                    "type": "human",
+                    "name": "planner_clarification_required",
+                    "content": "<planner_clarification>Question: What timeframe should the research cover?</planner_clarification>",
+                },
+                {
+                    "type": "human",
+                    "content": [{"type": "text", "text": "Last 12 months (Recommended)"}],
+                },
+            ],
+            "plan": {
+                "plan_id": "plan-1",
+                "status": "draft",
+                "title": "Plan",
+                "clarification_pending": True,
+                "clarification_index": 0,
+                "clarification_answers": [],
+                "clarifications": [
+                    {
+                        "question": "What timeframe should the research cover?",
+                        "options": [
+                            {"label": "Last 12 months", "recommended": True},
+                            {"label": "Last 3 years", "recommended": False},
+                        ],
+                    }
+                ],
+                "clarification_question": "What timeframe should the research cover?",
+            },
+            "plan_history": [{"plan_id": "plan-1", "title": "Plan", "status": "draft"}],
+        }
+    )
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(threads))
+    monkeypatch.setattr("src.gateway.routers.steering.spawn_work_mode_handoff", lambda **kwargs: None)
+
+    response = asyncio.run(execute_plan("thread-1", ExecutePlanRequest(plan_id="plan-1")))
+
+    assert response.acknowledged is True
+    assert response.status == "accepted"
+    assert response.plan_status == "approved"
+    updated_plan = threads.calls[-1][1]["plan"]
+    assert updated_plan["clarification_pending"] is False
+    assert isinstance(updated_plan["clarification_answered_at"], str)
+
+
 def test_execute_plan_accepts_draft_plan(monkeypatch):
     threads = _ThreadsClient(
         values={
@@ -170,12 +218,43 @@ def test_execute_plan_accepts_draft_plan(monkeypatch):
 
 
 def test_execute_plan_duplicate_for_already_approved(monkeypatch):
-    threads = _ThreadsClient(values={"plan": {"plan_id": "plan-1", "status": "approved"}})
+    threads = _ThreadsClient(
+        values={
+            "plan": {
+                "plan_id": "plan-1",
+                "status": "approved",
+                "execution_handoff_started": True,
+            }
+        }
+    )
     monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(threads))
+    spawn_calls: list[dict] = []
+    monkeypatch.setattr(
+        "src.gateway.routers.steering.spawn_work_mode_handoff",
+        lambda **kwargs: spawn_calls.append(kwargs),
+    )
 
     response = asyncio.run(execute_plan("thread-1", ExecutePlanRequest(plan_id="plan-1")))
     assert response.status == "duplicate"
     assert response.plan_status == "approved"
+    assert spawn_calls == []
+
+
+def test_execute_plan_recovers_approved_plan_without_handoff(monkeypatch):
+    threads = _ThreadsClient(values={"plan": {"plan_id": "plan-1", "status": "approved"}})
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(threads))
+    spawn_calls: list[dict] = []
+    monkeypatch.setattr(
+        "src.gateway.routers.steering.spawn_work_mode_handoff",
+        lambda **kwargs: spawn_calls.append(kwargs),
+    )
+
+    response = asyncio.run(execute_plan("thread-1", ExecutePlanRequest(plan_id="plan-1")))
+
+    assert response.status == "accepted"
+    assert response.plan_status == "approved"
+    assert len(spawn_calls) == 1
+    assert threads.calls[-1][1]["plan"]["execution_handoff_started"] is True
 
 
 def test_execute_plan_conflict_when_plan_missing(monkeypatch):

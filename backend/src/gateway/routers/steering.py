@@ -12,6 +12,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from src.agents.memory.compaction_archive import append_compaction_entry
+from src.agents.middlewares.plan_execution import (
+    apply_clarification_progress,
+    handoff_already_started,
+    mark_handoff_started,
+    resolve_original_user_request,
+)
+from src.agents.middlewares.work_run_handoff import spawn_work_mode_handoff
 from src.agents.steering_queue_store import enqueue_steering_intent
 
 router = APIRouter(prefix="/api", tags=["steering"])
@@ -119,6 +126,13 @@ def _normalized_pending_intents(raw: Any) -> list[dict[str, str]]:
 
 def _detail_with_status(status: str, message: str) -> dict[str, str]:
     return {"status": status, "detail": message}
+
+
+def _requested_model_from_values(values: dict[str, Any]) -> str | None:
+    model_name = values.get("model_name")
+    if isinstance(model_name, str) and model_name.strip():
+        return model_name.strip()
+    return None
 
 
 def _as_plan(raw: Any) -> dict[str, Any]:
@@ -385,38 +399,68 @@ async def execute_plan(thread_id: str, request: ExecutePlanRequest) -> ExecutePl
             )
 
         current_status = str(plan.get("status") or "draft").strip().lower() or "draft"
-        if current_status in {"approved", "executing"}:
+        if current_status in {"approved", "executing", "completed"}:
+            if handoff_already_started(plan):
+                return ExecutePlanResponse(
+                    thread_id=thread_id,
+                    acknowledged=True,
+                    plan_id=plan_id,
+                    plan_status=current_status,
+                    status="duplicate",
+                )
+            # Recover stalled approved plans that never started work handoff.
+            next_plan = mark_handoff_started(plan)
+            await client.threads.update_state(thread_id, {"plan": next_plan})
+            auto_mode = bool(values.get("auto_mode"))
+            spawn_work_mode_handoff(
+                thread_id=thread_id,
+                requested_model_name=_requested_model_from_values(values),
+                auto_mode=auto_mode,
+                original_user_request=resolve_original_user_request(values),
+                thread_name_suffix="-execute-plan-recover",
+            )
             return ExecutePlanResponse(
                 thread_id=thread_id,
                 acknowledged=True,
                 plan_id=plan_id,
                 plan_status=current_status,
-                status="duplicate",
-            )
-        if current_status == "completed":
-            return ExecutePlanResponse(
-                thread_id=thread_id,
-                acknowledged=False,
-                plan_id=plan_id,
-                plan_status=current_status,
-                status="conflict",
-            )
-        if bool(plan.get("clarification_pending")):
-            return ExecutePlanResponse(
-                thread_id=thread_id,
-                acknowledged=False,
-                plan_id=plan_id,
-                plan_status=current_status,
-                status="conflict",
+                status="accepted",
             )
 
-        approved_at = datetime.now(UTC).isoformat()
-        next_plan = {
-            **plan,
-            "status": "approved",
-            "approved_at": approved_at,
-            "awaiting_execution_approval": False,
-        }
+        messages = values.get("messages")
+        message_list = messages if isinstance(messages, list) else []
+        if bool(plan.get("clarification_pending")):
+            progress = apply_clarification_progress(plan, message_list)
+            if progress is None:
+                return ExecutePlanResponse(
+                    thread_id=thread_id,
+                    acknowledged=False,
+                    plan_id=plan_id,
+                    plan_status=current_status,
+                    status="conflict",
+                )
+            plan = dict(progress["plan"])
+            if bool(plan.get("clarification_pending")):
+                await client.threads.update_state(thread_id, {"plan": plan})
+                return ExecutePlanResponse(
+                    thread_id=thread_id,
+                    acknowledged=False,
+                    plan_id=plan_id,
+                    plan_status=current_status,
+                    status="conflict",
+                )
+
+        approved_at = str(plan.get("approved_at") or datetime.now(UTC).isoformat())
+        handoff_started_at = datetime.now(UTC).isoformat()
+        next_plan = mark_handoff_started(
+            {
+                **plan,
+                "status": "approved",
+                "approved_at": approved_at,
+                "awaiting_execution_approval": False,
+                "execution_requested_at": handoff_started_at,
+            }
+        )
 
         history = _as_plan_history(values.get("plan_history"))
         if plan_id:
@@ -435,6 +479,13 @@ async def execute_plan(thread_id: str, request: ExecutePlanRequest) -> ExecutePl
                 "plan": next_plan,
                 "plan_history": history,
             },
+        )
+        spawn_work_mode_handoff(
+            thread_id=thread_id,
+            requested_model_name=_requested_model_from_values(values),
+            auto_mode=bool(values.get("auto_mode")),
+            original_user_request=resolve_original_user_request(values),
+            thread_name_suffix="-execute-plan",
         )
         return ExecutePlanResponse(
             thread_id=thread_id,

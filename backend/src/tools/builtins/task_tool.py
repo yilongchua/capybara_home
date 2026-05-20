@@ -123,6 +123,22 @@ def _summarize_subagent_activity(message: dict) -> str | None:
     return None
 
 
+def _normalize_subagent_label(value: str) -> str:
+    label = value.strip()
+    if not label:
+        return "task"
+    return label
+
+
+def _normalize_description(description: str | None) -> str:
+    value = str(description or "").strip()
+    return value or "delegated task"
+
+
+def _build_group_title(subagent_type: str, description: str) -> str:
+    return f"{_normalize_subagent_label(subagent_type)}: {description}"
+
+
 @tool("task", parse_docstring=True)
 def task_tool(
     runtime: ToolRuntime[ContextT, ThreadState],
@@ -197,6 +213,10 @@ def task_tool(
 
     if overrides:
         config = replace(config, **overrides)
+
+    normalized_description = _normalize_description(description)
+    normalized_subagent_type = _normalize_subagent_label(subagent_type)
+    group_title = _build_group_title(normalized_subagent_type, normalized_description)
 
     # Extract parent context from runtime
     sandbox_state = None
@@ -276,9 +296,12 @@ def task_tool(
         event_type="task_started",
         status="running",
         payload={
-            "description": description,
-            "subagent_type": subagent_type,
+            "description": normalized_description,
+            "subagent_type": normalized_subagent_type,
             "max_turns": config.max_turns,
+            "group_id": str(task_id),
+            "group_kind": "subagent_task",
+            "group_title": group_title,
         },
         thinking={
             "source": "summary",
@@ -296,8 +319,11 @@ def task_tool(
         {
             "type": "task_started",
             "task_id": task_id,
-            "description": description,
+            "description": normalized_description,
+            "subagent_type": normalized_subagent_type,
             "group_id": str(task_id),
+            "group_kind": "subagent_task",
+            "group_title": group_title,
             "trace": started_trace,
         }
     )
@@ -312,8 +338,10 @@ def task_tool(
             "turn_id": str(tool_call_id),
             "assistant_message_id": str(assistant_message_id) if assistant_message_id is not None else None,
             "description": description,
-            "subagent_type": subagent_type,
+            "subagent_type": normalized_subagent_type,
             "group_id": str(task_id),
+            "group_kind": "subagent_task",
+            "group_title": group_title,
             "trace_event": started_trace,
             "trace_already_streamed": True,
         },
@@ -361,7 +389,11 @@ def task_tool(
                     payload={
                         "message_index": i + 1,
                         "total_messages": current_message_count,
-                        "subagent_type": subagent_type,
+                        "subagent_type": normalized_subagent_type,
+                        "description": normalized_description,
+                        "group_id": str(task_id),
+                        "group_kind": "subagent_task",
+                        "group_title": group_title,
                     },
                     token_usage=token_usage,
                     thinking=thinking,
@@ -377,6 +409,10 @@ def task_tool(
                         "message_index": i + 1,  # 1-based index for display
                         "total_messages": current_message_count,
                         "group_id": str(task_id),
+                        "group_kind": "subagent_task",
+                        "group_title": group_title,
+                        "subagent_type": normalized_subagent_type,
+                        "description": normalized_description,
                         "tool_summary": tool_summary,
                         "trace": running_trace,
                     }
@@ -393,8 +429,11 @@ def task_tool(
                         "assistant_message_id": str(assistant_message_id) if assistant_message_id is not None else None,
                         "message_index": i + 1,
                         "total_messages": current_message_count,
-                        "subagent_type": subagent_type,
+                        "subagent_type": normalized_subagent_type,
+                        "description": normalized_description,
                         "group_id": str(task_id),
+                        "group_kind": "subagent_task",
+                        "group_title": group_title,
                         "tool_summary": tool_summary,
                         "trace_event": running_trace,
                         "trace_already_streamed": True,
@@ -412,7 +451,11 @@ def task_tool(
                 status="completed",
                 payload={
                     "result_preview": str(result.result or "")[:400],
-                    "subagent_type": subagent_type,
+                    "subagent_type": normalized_subagent_type,
+                    "description": normalized_description,
+                    "group_id": str(task_id),
+                    "group_kind": "subagent_task",
+                    "group_title": group_title,
                 },
                 thinking={
                     "source": "summary",
@@ -430,6 +473,10 @@ def task_tool(
                     "type": "task_completed",
                     "task_id": task_id,
                     "group_id": str(task_id),
+                    "group_kind": "subagent_task",
+                    "group_title": group_title,
+                    "subagent_type": normalized_subagent_type,
+                    "description": normalized_description,
                     "result": result.result,
                     "trace": completed_trace,
                 }
@@ -444,8 +491,11 @@ def task_tool(
                     "task_id": str(task_id),
                     "turn_id": str(tool_call_id),
                     "assistant_message_id": str(assistant_message_id) if assistant_message_id is not None else None,
-                    "subagent_type": subagent_type,
+                    "subagent_type": normalized_subagent_type,
+                    "description": normalized_description,
                     "group_id": str(task_id),
+                    "group_kind": "subagent_task",
+                    "group_title": group_title,
                     "trace_event": completed_trace,
                     "trace_already_streamed": True,
                 },
@@ -461,7 +511,11 @@ def task_tool(
                 status="failed",
                 payload={
                     "error": str(result.error or "")[:400],
-                    "subagent_type": subagent_type,
+                    "subagent_type": normalized_subagent_type,
+                    "description": normalized_description,
+                    "group_id": str(task_id),
+                    "group_kind": "subagent_task",
+                    "group_title": group_title,
                 },
                 thinking={
                     "source": "summary",
@@ -479,6 +533,10 @@ def task_tool(
                     "type": "task_failed",
                     "task_id": task_id,
                     "group_id": str(task_id),
+                    "group_kind": "subagent_task",
+                    "group_title": group_title,
+                    "subagent_type": normalized_subagent_type,
+                    "description": normalized_description,
                     "error": result.error,
                     "trace": failed_trace,
                 }
@@ -494,8 +552,11 @@ def task_tool(
                     "turn_id": str(tool_call_id),
                     "assistant_message_id": str(assistant_message_id) if assistant_message_id is not None else None,
                     "error": str(result.error or "")[:400],
-                    "subagent_type": subagent_type,
+                    "subagent_type": normalized_subagent_type,
+                    "description": normalized_description,
                     "group_id": str(task_id),
+                    "group_kind": "subagent_task",
+                    "group_title": group_title,
                     "trace_event": failed_trace,
                     "trace_already_streamed": True,
                 },
@@ -511,7 +572,11 @@ def task_tool(
                 status="failed",
                 payload={
                     "error": str(result.error or "")[:400],
-                    "subagent_type": subagent_type,
+                    "subagent_type": normalized_subagent_type,
+                    "description": normalized_description,
+                    "group_id": str(task_id),
+                    "group_kind": "subagent_task",
+                    "group_title": group_title,
                 },
                 thinking={
                     "source": "summary",
@@ -529,6 +594,10 @@ def task_tool(
                     "type": "task_timed_out",
                     "task_id": task_id,
                     "group_id": str(task_id),
+                    "group_kind": "subagent_task",
+                    "group_title": group_title,
+                    "subagent_type": normalized_subagent_type,
+                    "description": normalized_description,
                     "error": result.error,
                     "trace": timed_out_trace,
                 }
@@ -544,8 +613,11 @@ def task_tool(
                     "turn_id": str(tool_call_id),
                     "assistant_message_id": str(assistant_message_id) if assistant_message_id is not None else None,
                     "error": str(result.error or "")[:400],
-                    "subagent_type": subagent_type,
+                    "subagent_type": normalized_subagent_type,
+                    "description": normalized_description,
                     "group_id": str(task_id),
+                    "group_kind": "subagent_task",
+                    "group_title": group_title,
                     "trace_event": timed_out_trace,
                     "trace_already_streamed": True,
                 },
@@ -574,7 +646,11 @@ def task_tool(
                 status="failed",
                 payload={
                     "error": "Task polling timed out",
-                    "subagent_type": subagent_type,
+                    "subagent_type": normalized_subagent_type,
+                    "description": normalized_description,
+                    "group_id": str(task_id),
+                    "group_kind": "subagent_task",
+                    "group_title": group_title,
                 },
                 thinking={
                     "source": "summary",
@@ -592,6 +668,10 @@ def task_tool(
                     "type": "task_timed_out",
                     "task_id": task_id,
                     "group_id": str(task_id),
+                    "group_kind": "subagent_task",
+                    "group_title": group_title,
+                    "subagent_type": normalized_subagent_type,
+                    "description": normalized_description,
                     "trace": timeout_trace,
                 }
             )
@@ -606,8 +686,11 @@ def task_tool(
                     "turn_id": str(tool_call_id),
                     "assistant_message_id": str(assistant_message_id) if assistant_message_id is not None else None,
                     "error": "Task polling timed out",
-                    "subagent_type": subagent_type,
+                    "subagent_type": normalized_subagent_type,
+                    "description": normalized_description,
                     "group_id": str(task_id),
+                    "group_kind": "subagent_task",
+                    "group_title": group_title,
                     "trace_event": timeout_trace,
                     "trace_already_streamed": True,
                 },

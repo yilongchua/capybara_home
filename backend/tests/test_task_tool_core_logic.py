@@ -135,6 +135,8 @@ def test_task_tool_accepts_registered_research_subagents(monkeypatch, subagent_t
     non_trace_events = [e for e in events if e.get("type") != "trace_event.v1"]
     assert non_trace_events[0]["type"] == "task_started"
     assert non_trace_events[0]["description"] == "research task"
+    assert non_trace_events[0]["subagent_type"] == subagent_type
+    assert non_trace_events[0]["group_title"] == f"{subagent_type}: research task"
 
 
 def test_task_tool_emits_running_and_completed_events(monkeypatch):
@@ -200,6 +202,10 @@ def test_task_tool_emits_running_and_completed_events(monkeypatch):
     assert event_types == ["task_started", "task_running", "task_running", "task_completed"]
     non_trace_events = [e for e in events if e.get("type") != "trace_event.v1"]
     assert non_trace_events[-1]["result"] == "all done"
+    assert non_trace_events[0]["group_title"] == "general-purpose: 运行子任务"
+    assert non_trace_events[1]["description"] == "运行子任务"
+    assert non_trace_events[1]["subagent_type"] == "general-purpose"
+    assert non_trace_events[-1]["group_title"] == "general-purpose: 运行子任务"
     assert [e["event"] for e in runtime_events] == [
         "task_started",
         "task_running",
@@ -287,6 +293,9 @@ def test_task_tool_returns_failed_message(monkeypatch):
     non_trace_events = [e for e in events if e.get("type") != "trace_event.v1"]
     assert non_trace_events[-1]["type"] == "task_failed"
     assert non_trace_events[-1]["error"] == "subagent crashed"
+    assert non_trace_events[-1]["description"] == "执行任务"
+    assert non_trace_events[-1]["subagent_type"] == "general-purpose"
+    assert non_trace_events[-1]["group_title"] == "general-purpose: 执行任务"
 
 
 def test_task_tool_raises_timed_out_error(monkeypatch):
@@ -322,6 +331,7 @@ def test_task_tool_raises_timed_out_error(monkeypatch):
     non_trace_events = [e for e in events if e.get("type") != "trace_event.v1"]
     assert non_trace_events[-1]["type"] == "task_timed_out"
     assert non_trace_events[-1]["error"] == "timeout"
+    assert non_trace_events[-1]["description"] == "执行任务"
 
 
 def test_task_tool_polling_safety_timeout(monkeypatch):

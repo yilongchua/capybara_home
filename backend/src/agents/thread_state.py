@@ -66,11 +66,18 @@ class PlanState(TypedDict, total=False):
     latest_evaluator_verdict: str
     evaluator_report_path: str
     clarifications: list[dict]
+    clarification_index: int
+    clarification_answers: list[dict]
+    clarification_resolved: bool
     clarification_pending: bool
     clarification_question: str
     clarification_answered_at: str
+    awaiting_execution_approval: bool
     created_at: str
     approved_at: str
+    execution_requested_at: str
+    execution_handoff_started: bool
+    execution_handoff_started_at: str
     execution_started_at: str
     completed_at: str
 

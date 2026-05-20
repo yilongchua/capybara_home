@@ -65,8 +65,20 @@ export interface PlanState {
     }>;
   }>;
   clarification_pending?: boolean;
+  clarification_index?: number;
+  clarification_answers?: Array<{
+    question?: string;
+    selected_label?: string;
+    selected_description?: string | null;
+    answered_at?: string;
+  }>;
+  clarification_resolved?: boolean;
   clarification_question?: string;
   clarification_answered_at?: string;
+  awaiting_execution_approval?: boolean;
+  execution_requested_at?: string;
+  execution_handoff_started?: boolean;
+  execution_handoff_started_at?: string;
   sprint_contract_path?: string;
   plan_path?: string;
   latest_alias_path?: string;

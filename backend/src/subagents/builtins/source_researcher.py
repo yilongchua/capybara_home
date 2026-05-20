@@ -50,5 +50,5 @@ You have access to the sandbox environment:
     tools=["web_search", "bash", "read_file", "ls"],
     disallowed_tools=["task", "ask_clarification", "present_files", "write_file", "str_replace", "save_to_knowledge_vault", "view_image"],
     model="inherit",
-    max_turns=12,
+    max_turns=25,
 )

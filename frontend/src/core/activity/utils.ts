@@ -49,6 +49,26 @@ export function normalizeActivityEvent(input: unknown): ActivityEvent | null {
       typeof record.group_id === "string" || record.group_id === null
         ? record.group_id
         : undefined,
+    group_kind:
+      typeof record.group_kind === "string" || record.group_kind === null
+        ? record.group_kind
+        : undefined,
+    group_title:
+      typeof record.group_title === "string" || record.group_title === null
+        ? record.group_title
+        : undefined,
+    group_role:
+      typeof record.group_role === "string" || record.group_role === null
+        ? record.group_role
+        : undefined,
+    subagent_type:
+      typeof record.subagent_type === "string" || record.subagent_type === null
+        ? record.subagent_type
+        : undefined,
+    description:
+      typeof record.description === "string" || record.description === null
+        ? record.description
+        : undefined,
     tool_summary:
       typeof record.tool_summary === "string" || record.tool_summary === null
         ? record.tool_summary

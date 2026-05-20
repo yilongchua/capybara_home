@@ -124,9 +124,13 @@ export function ChatActivityPanel({
   const hasInProgressPhase = (effectivePhaseExecution?.phase_results ?? []).some(
     (phase) => phase.status === "in_progress",
   );
+  const mergedActivityForRunSignal = useMemo(
+    () => mergeActivityEvents(asActivityTimelineState(thread.values.activity_timeline), liveEvents),
+    [liveEvents, thread.values.activity_timeline],
+  );
   const hasRecentLiveRunSignal = useMemo(() => {
     const now = Date.now() / 1000;
-    return liveEvents.some((event) => {
+    return mergedActivityForRunSignal.some((event) => {
       const kind = (event.kind ?? "").toLowerCase();
       const isStartLike =
         kind.includes("start") ||
@@ -140,7 +144,7 @@ export function ChatActivityPanel({
       const recent = now - event.timestamp < 120;
       return isStartLike && !isEndLike && recent;
     });
-  }, [liveEvents]);
+  }, [mergedActivityForRunSignal]);
 
   const runState: "run" | "idle" =
     thread.isLoading && hasInProgressPhase && hasRecentLiveRunSignal ? "run" : "idle";

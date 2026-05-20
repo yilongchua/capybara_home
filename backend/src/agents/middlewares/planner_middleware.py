@@ -18,9 +18,17 @@ from langgraph.config import get_stream_writer
 from langgraph.runtime import Runtime
 
 from src.agents.middlewares.handoff_sync import render_plan_md
-from src.agents.middlewares.message_selection import extract_text, is_synthetic_human_message, message_name, message_type, original_user_prompt
+from src.agents.middlewares.message_selection import extract_text, original_user_prompt
+from src.agents.middlewares.plan_execution import (
+    apply_clarification_progress,
+    approve_plan_if_auto_mode,
+    build_clarification_prompt_message,
+    mark_handoff_started,
+    should_spawn_work_handoff,
+)
 from src.agents.middlewares.runtime_events import append_runtime_event
 from src.agents.middlewares.todo_dag_middleware import _legacy_todos, normalize_todo_nodes
+from src.agents.middlewares.work_run_handoff import spawn_work_mode_handoff
 from src.config.handoffs_config import HandoffsConfig
 from src.config.sprint_contracts_config import SprintContractsConfig
 from src.models import ModelRouter, create_chat_model
@@ -38,26 +46,6 @@ class PlannerState(AgentState):
     complexity_tier: NotRequired[str | None]
     plan_evaluated: NotRequired[bool]
     plan_history: NotRequired[list[dict[str, Any]] | None]
-
-
-def _pending_clarification_answered(messages: list[Any]) -> bool:
-    if not messages:
-        return False
-    last_ask_idx = -1
-    for idx, message in enumerate(messages):
-        if message_type(message) == "tool" and message_name(message) == "ask_clarification":
-            last_ask_idx = idx
-    if last_ask_idx < 0:
-        return False
-    for message in messages[last_ask_idx + 1 :]:
-        if message_type(message) != "human":
-            continue
-        if is_synthetic_human_message(message):
-            continue
-        text = extract_text(getattr(message, "content", ""))
-        if text.strip():
-            return True
-    return False
 
 
 def _utc_now_iso() -> str:
@@ -493,23 +481,22 @@ def _parse_plan_response(raw: str, max_steps: int) -> PlannerOutput:
     if not todos:
         todos = [{"id": "todo-1", "content": "Complete the user request end-to-end.", "status": "pending", "depends_on": [], "owner": "lead", "subagent_type": None}]
 
-    # Parse clarifications
+    # Parse clarifications (accept LLM clarifications even when requires_clarification is false)
     clarifications: list[PlannerClarification] = []
-    if payload.get("requires_clarification"):
-        for raw_clar in payload.get("clarifications") or []:
-            if not isinstance(raw_clar, dict):
-                continue
-            options = [
-                ClarificationOption(
-                    label=str(o.get("label") or ""),
-                    recommended=bool(o.get("recommended", False)),
-                    description=o.get("description"),
-                )
-                for o in (raw_clar.get("options") or [])
-                if isinstance(o, dict)
-            ]
-            if raw_clar.get("question") and options:
-                clarifications.append(PlannerClarification(question=str(raw_clar["question"]), options=options))
+    for raw_clar in payload.get("clarifications") or []:
+        if not isinstance(raw_clar, dict):
+            continue
+        options = [
+            ClarificationOption(
+                label=str(o.get("label") or ""),
+                recommended=bool(o.get("recommended", False)),
+                description=o.get("description"),
+            )
+            for o in (raw_clar.get("options") or [])
+            if isinstance(o, dict)
+        ]
+        if raw_clar.get("question") and options:
+            clarifications.append(PlannerClarification(question=str(raw_clar["question"]), options=options))
 
     return PlannerOutput(
         title=title,
@@ -596,21 +583,49 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         current_plan = state.get("plan")
         if isinstance(current_plan, dict) and bool(current_plan.get("clarification_pending")):
             messages = state.get("messages", []) or []
-            if _pending_clarification_answered(messages):
-                resolved_plan = {
-                    **current_plan,
-                    "clarification_pending": False,
-                    "clarification_answered_at": _utc_now_iso(),
-                }
+            progress = apply_clarification_progress(current_plan, messages)
+            if progress is not None:
+                resolved_plan = dict(progress["plan"])
+                auto_mode = _auto_mode_enabled(runtime, state)
+                if not bool(resolved_plan.get("clarification_pending")):
+                    resolved_plan = approve_plan_if_auto_mode(resolved_plan, auto_mode=auto_mode)
                 append_runtime_event(
                     runtime,
                     {
                         "source": "planner_middleware",
                         "decision": "clarification_resolved",
                         "plan_id": resolved_plan.get("plan_id"),
+                        "clarification_pending": bool(resolved_plan.get("clarification_pending")),
                     },
                 )
-                return {"plan": resolved_plan}
+                payload: dict[str, Any] = {"plan": resolved_plan}
+                if progress.get("messages"):
+                    payload["messages"] = progress["messages"]
+                    return payload
+
+                plan_status = str(resolved_plan.get("status") or "").strip().lower()
+                if should_spawn_work_handoff(
+                    resolved_plan,
+                    plan_behavior=_plan_behavior(runtime),
+                    plan_status=plan_status,
+                ):
+                    runtime_context = _runtime_context(runtime)
+                    thread_id = runtime_context.get("thread_id")
+                    if isinstance(thread_id, str) and thread_id:
+                        user_prompt = original_user_prompt(messages) or ""
+                        requested_model_name = runtime_context.get("model_name")
+                        resolved_plan = mark_handoff_started(resolved_plan)
+                        spawn_work_mode_handoff(
+                            thread_id=thread_id,
+                            requested_model_name=requested_model_name if isinstance(requested_model_name, str) else None,
+                            auto_mode=auto_mode,
+                            original_user_request=user_prompt or None,
+                            thread_name_suffix="-planner-clarification-auto",
+                        )
+                        payload["plan"] = resolved_plan
+                    if _plan_behavior(runtime) == "plan_foreground":
+                        payload["jump_to"] = "end"
+                return payload
 
         if not self._should_plan(state):
             return None
@@ -775,25 +790,18 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
 
         clarification_prompt_message = None
         if primary_clarification is not None:
-            structured_options = [
+            clarification_prompt_message = build_clarification_prompt_message(
                 {
-                    "label": option.label,
-                    "recommended": option.recommended,
-                    "description": option.description,
+                    "question": primary_clarification.question,
+                    "options": [
+                        {
+                            "label": option.label,
+                            "recommended": option.recommended,
+                            "description": option.description,
+                        }
+                        for option in primary_clarification.options
+                    ],
                 }
-                for option in primary_clarification.options
-                if option.label.strip()
-            ]
-            clarification_prompt_message = HumanMessage(
-                name="planner_clarification_required",
-                content=(
-                    "<planner_clarification>\n"
-                    "Before any execution, ask the user this clarification via `ask_clarification`.\n"
-                    f"Question: {primary_clarification.question}\n"
-                    "IMPORTANT: pass options as structured dicts; do NOT flatten to plain strings.\n"
-                    f"Options JSON: {json.dumps(structured_options, ensure_ascii=False)}\n"
-                    "</planner_clarification>"
-                ),
             )
 
         # Emit plan_created with inline first_todos — no async fetch needed on frontend
@@ -858,6 +866,9 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                     for clarification in clarifications
                 ],
                 "clarification_pending": clarification_pending,
+                "clarification_index": 0 if clarification_pending else 0,
+                "clarification_answers": [],
+                "clarification_resolved": not clarification_pending,
                 "clarification_question": primary_clarification.question if primary_clarification else None,
                 "created_at": created_at,
             }
@@ -880,6 +891,20 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         }
 
         pause_after_plan = not clarification_pending and _plan_behavior(runtime) == "plan_foreground"
+        if should_spawn_work_handoff(plan_dict, plan_behavior=_plan_behavior(runtime), plan_status=plan_status):
+            runtime_context = _runtime_context(runtime)
+            thread_id = runtime_context.get("thread_id")
+            if isinstance(thread_id, str) and thread_id:
+                requested_model_name = runtime_context.get("model_name")
+                plan_dict = mark_handoff_started(plan_dict)
+                payload["plan"] = plan_dict
+                spawn_work_mode_handoff(
+                    thread_id=thread_id,
+                    requested_model_name=requested_model_name if isinstance(requested_model_name, str) else None,
+                    auto_mode=auto_mode,
+                    original_user_request=user_prompt,
+                    thread_name_suffix="-planner-auto",
+                )
         if pause_after_plan:
             payload["jump_to"] = "end"
         return payload

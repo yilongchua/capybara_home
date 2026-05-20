@@ -44,7 +44,7 @@ import type { ForkDraft } from "@/core/threads/fork";
 import type { ComplexityEscalationEvent, PlanAdaptedEvent, PlanCreatedEvent } from "@/core/threads/hooks";
 import { useRenameThread, useThreadStream } from "@/core/threads/hooks";
 import { useContextTokens } from "@/core/threads/use-context-tokens";
-import { useRunningRun } from "@/core/threads/use-running-run";
+import { useRejoinRunningRun } from "@/core/threads/use-rejoin-running-run";
 import { useThreadNotification } from "@/core/threads/use-thread-notification";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
@@ -125,6 +125,28 @@ function parseErrorDetail(rawBody: string): string {
   return trimmed;
 }
 
+type ExecutePlanResponse = {
+  acknowledged: boolean;
+  status: "accepted" | "duplicate" | "conflict" | "failed";
+  plan_status?: string | null;
+};
+
+function getExecutePlanFailureMessage(result: ExecutePlanResponse): string | null {
+  if (result.acknowledged && result.status !== "conflict" && result.status !== "failed") {
+    return null;
+  }
+  if (result.status === "conflict") {
+    if (result.plan_status) {
+      return `Plan execution is blocked while the plan is ${result.plan_status}.`;
+    }
+    return "Plan execution is blocked. Please resolve the pending plan state and try again.";
+  }
+  if (result.status === "failed") {
+    return "Plan execution failed. Please try again.";
+  }
+  return "Plan execution was not accepted. Please try again.";
+}
+
 export default function ChatPage() {
   const { threadId, isNewThread, setIsNewThread, isMock } = useThreadChat();
 
@@ -180,7 +202,6 @@ function ChatPageContent({
   // langgraph-sdk `useStream` already auto-joins via reconnectOnMount, so this
   // is observation-only — it lets the UI distinguish "fresh open" from
   // "resuming a still-running answer that started in another tab/session."
-  const { runningRun } = useRunningRun(isNewThread ? null : threadId);
   const { onFinish } = useThreadNotification();
 
   const [planCreatedEvent, setPlanCreatedEvent] = useState<PlanCreatedEvent | null>(null);
@@ -189,6 +210,8 @@ function ChatPageContent({
   const [forkDraft, setForkDraft] = useState<ForkDraft | null>(null);
   const [uiNotices, setUiNotices] = useState<LiveGenerationNotice[]>([]);
   const [pendingExecutePlan, setPendingExecutePlan] = useState(false);
+  const [isExecutingPlan, setIsExecutingPlan] = useState(false);
+  const [hiddenPlanEventKey, setHiddenPlanEventKey] = useState<string | null>(null);
   const [pendingMountPath, setPendingMountPath] = useState<string | null>(null);
   const suppressedAutoExecutePlanKeyRef = useRef<string | null>(null);
   const suppressedComplexityEscalationKeyRef = useRef<string | null>(null);
@@ -246,6 +269,9 @@ function ChatPageContent({
       setEscalationEvent(event);
     },
   });
+
+  const { runningRun } = useRejoinRunningRun(isNewThread ? null : threadId, thread);
+
   const handleStop = useCallback(async () => {
     await queueControls.stop();
   }, [queueControls]);
@@ -255,14 +281,79 @@ function ChatPageContent({
     },
     [setSettings],
   );
+  const clarificationPending =
+    planCreatedEvent?.clarification_pending === true ||
+    thread.values.plan?.clarification_pending === true;
+  const effectivePlanCreatedEvent = useMemo(() => {
+    if (planCreatedEvent) {
+      return planCreatedEvent;
+    }
+    const plan = thread.values.plan;
+    if (!plan || clarificationPending) {
+      return null;
+    }
+    const planStatus = String(plan.status ?? "").toLowerCase();
+    const awaitingApproval = plan.awaiting_execution_approval === true || planStatus === "draft";
+    const approvedButIdle =
+      planStatus === "approved" &&
+      !plan.execution_started_at &&
+      !thread.values.work_mode?.active;
+    if (!awaitingApproval && !approvedButIdle) {
+      return null;
+    }
+    const todos = Array.isArray(thread.values.todos) ? thread.values.todos : [];
+    const firstTodos = todos
+      .map((todo) => String(todo.content ?? "").trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    const todoCount = todos.length > 0 ? todos.length : (plan.todo_ids?.length ?? 0);
+    return {
+      type: "plan_created" as const,
+      plan_id: plan.plan_id,
+      status: plan.status,
+      auto_approved: false,
+      clarification_pending: false,
+      title: String(plan.title ?? "Approved Plan"),
+      summary: String(plan.summary ?? ""),
+      domain: String(plan.domain ?? "generic"),
+      todo_count: todoCount,
+      first_todos: firstTodos,
+      plan_path: plan.plan_path ?? null,
+    };
+  }, [clarificationPending, planCreatedEvent, thread.values.plan, thread.values.todos, thread.values.work_mode?.active]);
+  const effectivePlanEventKey = useMemo(
+    () => planEventKey(effectivePlanCreatedEvent),
+    [effectivePlanCreatedEvent, planEventKey],
+  );
+  const planReviewHref = useMemo(() => {
+    const planPath = effectivePlanCreatedEvent?.plan_path ?? "/mnt/user-data/workspace/plan.md";
+    return urlOfArtifact({ filepath: planPath, threadId, isMock });
+  }, [effectivePlanCreatedEvent?.plan_path, isMock, threadId]);
+
+  useEffect(() => {
+    if (!effectivePlanEventKey) {
+      return;
+    }
+    if (hiddenPlanEventKey && hiddenPlanEventKey !== effectivePlanEventKey) {
+      setHiddenPlanEventKey(null);
+      setIsExecutingPlan(false);
+    }
+  }, [effectivePlanEventKey, hiddenPlanEventKey]);
 
   const handleExecutePlan = useCallback(() => {
     const run = async () => {
       try {
-        const eventKey = planEventKey(planCreatedEvent);
+        if (isExecutingPlan) {
+          return;
+        }
+        const eventKey = effectivePlanEventKey;
         if (eventKey && suppressedAutoExecutePlanKeyRef.current === eventKey) {
           return;
         }
+        setSettings("context", { ...settings.context, mode: "work" });
+        setIsExecutingPlan(true);
+        setHiddenPlanEventKey(eventKey);
+        setPlanCreatedEvent(null);
         if (thread.isLoading) {
           if (!pendingExecutePlan) {
             toast.message("Plan execution is queued and will start after the current run finishes.");
@@ -274,7 +365,7 @@ function ChatPageContent({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            plan_id: planCreatedEvent?.plan_id,
+            plan_id: effectivePlanCreatedEvent?.plan_id,
           }),
         });
         if (!response.ok) {
@@ -289,25 +380,36 @@ function ChatPageContent({
           }
           throw new Error(parseErrorDetail(raw));
         }
+        const result = await response.json() as ExecutePlanResponse;
+        const failureMessage = getExecutePlanFailureMessage(result);
+        if (failureMessage) {
+          throw new Error(failureMessage);
+        }
         executePlanRetryCountRef.current = 0;
         setPendingExecutePlan(false);
-        setPlanCreatedEvent(null);
-        await sendMessage(
-          threadId,
-          { text: "", files: [] },
-          { execute_approved_plan: true },
-          { mode: "work" },
-        );
+        setIsExecutingPlan(false);
       } catch (error) {
         // Keep popup open so user can retry execute.
         console.error("Failed to execute plan:", error);
         const detail = error instanceof Error ? error.message : "Unknown error";
         toast.error(`Failed to execute plan. ${detail}`);
         setPendingExecutePlan(false);
+        setIsExecutingPlan(false);
+        setHiddenPlanEventKey(null);
       }
     };
     void run();
-  }, [isInFlightRunConflict, pendingExecutePlan, planCreatedEvent, planEventKey, sendMessage, threadId, thread.isLoading]);
+  }, [
+    effectivePlanCreatedEvent?.plan_id,
+    effectivePlanEventKey,
+    isExecutingPlan,
+    isInFlightRunConflict,
+    pendingExecutePlan,
+    setSettings,
+    settings.context,
+    threadId,
+    thread.isLoading,
+  ]);
 
   // Auto-trigger Execute Plan when a plan is created and auto_mode is on.
   useEffect(() => {
@@ -428,24 +530,6 @@ function ChatPageContent({
   }, [mountStatusNoticeId, mountedFolder, mountedFolderFiles, mountedNoticeId, pendingMountPath, renameThread, thread.values.title, threadId]);
 
   useEffect(() => {
-    if (!planCreatedEvent || settings.context.auto_mode !== true) {
-      return;
-    }
-    if (planCreatedEvent.auto_approved || planCreatedEvent.status === "approved") {
-      return;
-    }
-    const eventKey = planEventKey(planCreatedEvent);
-    if (eventKey && suppressedAutoExecutePlanKeyRef.current === eventKey) {
-      return;
-    }
-    if (thread.isLoading) {
-      setPendingExecutePlan(true);
-      return;
-    }
-    void handleExecutePlan();
-  }, [planCreatedEvent, settings.context.auto_mode, handleExecutePlan, planEventKey, thread.isLoading]);
-
-  useEffect(() => {
     if (settings.context.mode !== "plan") {
       return;
     }
@@ -468,15 +552,17 @@ function ChatPageContent({
   }, [handleExecutePlan, pendingExecutePlan, planCreatedEvent, thread.isLoading]);
 
   const handleKeepEditingPlan = useCallback(() => {
-    const eventKey = planEventKey(planCreatedEvent);
+    const eventKey = planEventKey(effectivePlanCreatedEvent);
     if (eventKey) {
       suppressedAutoExecutePlanKeyRef.current = eventKey;
+      setHiddenPlanEventKey(eventKey);
     }
     setSettings("context", { ...settings.context, mode: "plan" });
+    setIsExecutingPlan(false);
     executePlanRetryCountRef.current = 0;
     setPendingExecutePlan(false);
     setPlanCreatedEvent(null);
-  }, [planCreatedEvent, planEventKey, setSettings, settings.context]);
+  }, [effectivePlanCreatedEvent, planEventKey, setSettings, settings.context]);
 
   const handleRevisePlan = useCallback(() => {
     const blockedIds = adaptationEvent?.blocked_ids ?? [];
@@ -533,7 +619,7 @@ function ChatPageContent({
       suppressedComplexityEscalationKeyRef.current = null;
       const maybeIntent = normalizeIntent(message.text ?? "");
       const planStatus = String(thread.values.plan?.status ?? "").toLowerCase();
-      const hasPlanReadyForExecution = planStatus === "draft";
+      const hasPlanReadyForExecution = planStatus === "draft" || planStatus === "approved";
       if (
         !thread.isLoading &&
         hasPlanReadyForExecution &&
@@ -619,7 +705,7 @@ function ChatPageContent({
           >
             <div className="flex w-full items-center gap-2 text-sm font-medium">
               <ThreadTitle threadId={threadId} thread={thread} />
-              {runningRun && thread.isLoading && (
+              {runningRun && (thread.isLoading || isExecutingPlan) && (
                 <span
                   className="text-muted-foreground rounded bg-amber-500/10 px-2 py-0.5 text-xs font-normal"
                   title={`Resuming run ${runningRun.runId}`}
@@ -701,12 +787,14 @@ function ChatPageContent({
                     />
                   </div>
                 )}
-                <div className="relative">
-                  {planCreatedEvent && !isNewThread && (
+                  <div className="relative">
+                  {effectivePlanCreatedEvent && !clarificationPending && !isNewThread && effectivePlanEventKey !== hiddenPlanEventKey && !(effectivePlanCreatedEvent.auto_approved && settings.context.auto_mode === true) && (
                     <ExecutePlanPopup
-                      event={planCreatedEvent}
+                      event={effectivePlanCreatedEvent}
+                      planHref={planReviewHref}
                       onExecute={handleExecutePlan}
                       onDismiss={handleKeepEditingPlan}
+                      isExecuting={isExecutingPlan}
                     />
                   )}
                   {adaptationEvent && !isNewThread && (

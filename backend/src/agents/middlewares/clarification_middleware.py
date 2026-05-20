@@ -42,13 +42,19 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
     def before_model(self, state: ClarificationMiddlewareState, runtime: Runtime) -> dict | None:
         """Cache auto_mode flag in runtime context so wrap_tool_call can read it.
 
-        Reads from config.configurable first (per-run frontend flag), falls back
-        to state.auto_mode (persisted value), then defaults to False.
+        Reads from config.configurable first (embedded-client/frontend config),
+        then runtime.context (React stream path), falls back to state.auto_mode
+        (persisted value), then defaults to False.
         """
         runtime_config = getattr(runtime, "config", None)
         configurable = (runtime_config or {}).get("configurable") or {} if runtime_config else {}
-        auto_mode = bool(configurable.get("auto_mode", state.get("auto_mode", False)))
         ctx = getattr(runtime, "context", None)
+        auto_mode = bool(
+            configurable.get(
+                "auto_mode",
+                (ctx or {}).get("auto_mode", state.get("auto_mode", False)),
+            )
+        )
         if ctx is not None:
             ctx[_AUTO_MODE_CTX_KEY] = auto_mode
         return None

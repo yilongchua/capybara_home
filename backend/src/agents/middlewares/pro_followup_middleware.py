@@ -40,6 +40,7 @@ def _run_background_followup(
     requested_model_name: str | None,
     summary_prompt: str,
 ) -> None:
+    from src.agents.middlewares.daemon_agent_invoke import invoke_agent_async
     from src.client import CapybaraClient
 
     time.sleep(2.0)
@@ -65,7 +66,8 @@ def _run_background_followup(
     )
     client._ensure_agent(config)  # noqa: SLF001
     try:
-        client._agent.invoke(  # noqa: SLF001
+        invoke_agent_async(
+            client._agent,  # noqa: SLF001
             {"messages": [HumanMessage(name="plan_followup_prompt", content=summary_prompt)]},
             config=config,
             context={

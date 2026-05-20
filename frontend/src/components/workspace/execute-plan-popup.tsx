@@ -7,12 +7,16 @@ import type { PlanCreatedEvent } from "@/core/threads/hooks";
 
 export function ExecutePlanPopup({
   event,
+  planHref,
   onExecute,
   onDismiss,
+  isExecuting = false,
 }: {
   event: PlanCreatedEvent;
+  planHref: string;
   onExecute: () => void;
   onDismiss: () => void;
+  isExecuting?: boolean;
 }) {
   return (
     <div className="pointer-events-none absolute right-0 bottom-full left-0 z-20 mb-3 flex items-end justify-center">
@@ -38,6 +42,18 @@ export function ExecutePlanPopup({
                 )}
               </p>
             )}
+            <p className="mt-2 text-xs">
+              Please review{" "}
+              <a
+                href={planHref}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-4"
+              >
+                plan.md
+              </a>
+              .
+            </p>
           </div>
           <Button
             size="icon-sm"
@@ -49,11 +65,11 @@ export function ExecutePlanPopup({
           </Button>
         </div>
         <div className="mt-3 flex gap-2">
-          <Button size="sm" className="gap-1.5" onClick={onExecute}>
+          <Button size="sm" className="gap-1.5" onClick={onExecute} disabled={isExecuting}>
             <PlayIcon className="size-3.5" />
-            Execute Plan
+            {isExecuting ? "Starting..." : "Execute Plan"}
           </Button>
-          <Button size="sm" variant="outline" onClick={onDismiss}>
+          <Button size="sm" variant="outline" onClick={onDismiss} disabled={isExecuting}>
             Keep editing
           </Button>
         </div>

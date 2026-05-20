@@ -12,7 +12,7 @@ const {
   updateById,
 } = await import(new URL("./queue.ts", import.meta.url).href);
 
-void test("shouldEnqueueMessage is always true in strict queue-first mode", () => {
+void test("shouldEnqueueMessage submits immediately when idle", () => {
   assert.equal(
     shouldEnqueueMessage({
       queued: false,
@@ -20,8 +20,20 @@ void test("shouldEnqueueMessage is always true in strict queue-first mode", () =
       isSubmitting: false,
       queueLength: 0,
     }),
-    true,
+    false,
   );
+  assert.equal(
+    shouldEnqueueMessage({
+      queued: true,
+      isLoading: false,
+      isSubmitting: false,
+      queueLength: 0,
+    }),
+    false,
+  );
+});
+
+void test("shouldEnqueueMessage queues while busy or backlog exists", () => {
   assert.equal(
     shouldEnqueueMessage({
       queued: true,
@@ -34,8 +46,16 @@ void test("shouldEnqueueMessage is always true in strict queue-first mode", () =
   assert.equal(
     shouldEnqueueMessage({
       isLoading: false,
-      isSubmitting: false,
+      isSubmitting: true,
       queueLength: 0,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldEnqueueMessage({
+      isLoading: false,
+      isSubmitting: false,
+      queueLength: 2,
     }),
     true,
   );

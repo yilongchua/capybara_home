@@ -6,8 +6,9 @@ export type QueueDecisionInput = {
 };
 
 export function shouldEnqueueMessage(input: QueueDecisionInput): boolean {
-  void input;
-  return true;
+  // Queue only while a run is active or other messages are already waiting.
+  // InputBox always passes queued:true, but that must not delay the first idle submit.
+  return input.isLoading || input.isSubmitting || input.queueLength > 0;
 }
 
 export function enqueueMessage<T>(queue: T[], item: T): T[] {

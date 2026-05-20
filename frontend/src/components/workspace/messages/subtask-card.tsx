@@ -63,6 +63,10 @@ export function SubtaskCard({
       settings.toolPresentation.iconByTool,
     );
   }, [settings.toolPresentation.iconByTool, task.latestMessage, task.subagent_type]);
+  const taskLabel = useMemo(
+    () => task.group_title?.trim() || `${task.subagent_type}: ${task.description}`,
+    [task.description, task.group_title, task.subagent_type],
+  );
   const taskIconNode = useMemo(() => {
     const iconByType: Record<ToolIconKey, ReactElement> = {
       web: <GlobeIcon className="size-4" />,
@@ -81,9 +85,9 @@ export function SubtaskCard({
     } else if (task.status === "in_progress") {
       return isStaleRunning
         ? <ClipboardListIcon className="size-3" />
-        : <CapybaraRunner actor="baby_capy" size="sm" taskDescription={task.description} />;
+        : <CapybaraRunner actor="baby_capy" size="sm" taskDescription={taskLabel} />;
     }
-  }, [isStaleRunning, task.status, task.description]);
+  }, [isStaleRunning, task.status, taskLabel]);
   return (
     <ChainOfThought
       className={cn("relative w-full gap-2 rounded-lg border py-0", className)}
@@ -116,14 +120,14 @@ export function SubtaskCard({
                 label={
                   task.status === "in_progress" ? (
                     isStaleRunning
-                      ? task.description
+                      ? taskLabel
                       : (
                         <Shimmer duration={3} spread={3}>
-                          {task.description}
+                          {taskLabel}
                         </Shimmer>
                       )
                   ) : (
-                    task.description
+                    taskLabel
                   )
                 }
                 icon={taskIconNode}

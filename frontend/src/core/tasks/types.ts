@@ -5,6 +5,7 @@ export interface Subtask {
   status: "in_progress" | "completed" | "failed";
   subagent_type: string;
   description: string;
+  group_title?: string;
   latestMessage?: AIMessage;
   prompt: string;
   result?: string;

@@ -32,6 +32,11 @@ class ActivityEvent(TypedDict, total=False):
     line: str
     task_id: str | None
     group_id: str | None
+    group_kind: str | None
+    group_title: str | None
+    group_role: str | None
+    subagent_type: str | None
+    description: str | None
     tool_summary: str | None
     assistant_message_id: str | None
     payload: dict[str, Any]
@@ -97,6 +102,11 @@ def create_activity_event(
     line: str,
     task_id: str | None = None,
     group_id: str | None = None,
+    group_kind: str | None = None,
+    group_title: str | None = None,
+    group_role: str | None = None,
+    subagent_type: str | None = None,
+    description: str | None = None,
     tool_summary: str | None = None,
     assistant_message_id: str | None = None,
     payload: dict[str, Any] | None = None,
@@ -115,6 +125,11 @@ def create_activity_event(
         "line": line,
         "task_id": task_id,
         "group_id": group_id,
+        "group_kind": group_kind,
+        "group_title": group_title,
+        "group_role": group_role,
+        "subagent_type": subagent_type,
+        "description": description,
         "tool_summary": tool_summary,
         "assistant_message_id": assistant_message_id,
         "payload": payload or {},

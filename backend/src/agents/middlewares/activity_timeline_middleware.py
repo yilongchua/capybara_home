@@ -72,6 +72,18 @@ def _tool_summary(payload: dict[str, Any]) -> str | None:
     return _as_str(payload.get("tool_summary")) or _as_str(payload.get("tool_input")) or _as_str(payload.get("description"))
 
 
+def _subagent_label(payload: dict[str, Any]) -> str:
+    return _as_str(payload.get("subagent_type")) or "task"
+
+
+def _subagent_description(payload: dict[str, Any]) -> str:
+    return _as_str(payload.get("description")) or "delegated task"
+
+
+def _subagent_group_title(payload: dict[str, Any]) -> str:
+    return _as_str(payload.get("group_title")) or f"{_subagent_label(payload)}: {_subagent_description(payload)}"
+
+
 def _runtime_context(runtime: Runtime) -> dict[str, Any]:
     context = getattr(runtime, "context", None)
     if isinstance(context, dict):
@@ -124,6 +136,11 @@ def _to_activity_event(runtime: Runtime, runtime_event: dict[str, Any]) -> Activ
     group_id = _as_str(payload.get("group_id")) or task_id
     assistant_message_id = _as_str(payload.get("assistant_message_id"))
     summary = _tool_summary(payload)
+    group_kind = _as_str(payload.get("group_kind"))
+    group_title = _as_str(payload.get("group_title"))
+    subagent_type = _as_str(payload.get("subagent_type"))
+    description = _as_str(payload.get("description"))
+    group_role: str | None = None
 
     actor = "capybara"
     kind = event_type or "event"
@@ -162,17 +179,36 @@ def _to_activity_event(runtime: Runtime, runtime_event: dict[str, Any]) -> Activ
         line = "Plan auto-approved — starting execution"
     elif event_type == "task_started":
         actor = "baby_capy"
-        desc = _as_str(payload.get("description"))
-        line = f"Baby Capy is working on {desc}..." if desc else "Baby Capy is working on a delegated task..."
+        group_kind = group_kind or "subagent_task"
+        group_title = group_title or _subagent_group_title(payload)
+        subagent_type = subagent_type or _subagent_label(payload)
+        description = description or _subagent_description(payload)
+        group_role = "header"
+        line = f"Baby Capy - {subagent_type} is working on {description}..."
     elif event_type == "task_running":
         actor = "baby_capy"
-        line = f"Baby Capy is working on {summary}..." if summary else "Baby Capy is working on delegated steps..."
+        group_kind = group_kind or "subagent_task"
+        group_title = group_title or _subagent_group_title(payload)
+        subagent_type = subagent_type or _subagent_label(payload)
+        description = description or _subagent_description(payload)
+        group_role = "step"
+        line = f"Baby Capy - {subagent_type} is working on {summary}..." if summary else f"Baby Capy - {subagent_type} is working on delegated steps..."
     elif event_type == "task_completed":
         actor = "baby_capy"
-        line = "Baby Capy is working on wrapping up results..."
+        group_kind = group_kind or "subagent_task"
+        group_title = group_title or _subagent_group_title(payload)
+        subagent_type = subagent_type or _subagent_label(payload)
+        description = description or _subagent_description(payload)
+        group_role = "terminal"
+        line = f"Baby Capy - {subagent_type} finished {description}"
     elif event_type in {"task_failed", "task_timed_out"}:
         actor = "baby_capy"
-        line = "Baby Capy is working on recovery after an issue..."
+        group_kind = group_kind or "subagent_task"
+        group_title = group_title or _subagent_group_title(payload)
+        subagent_type = subagent_type or _subagent_label(payload)
+        description = description or _subagent_description(payload)
+        group_role = "terminal"
+        line = f"Baby Capy - {subagent_type} hit an issue while working on {description}"
     elif event_type == "context_tokens":
         line = "Capybara is thinking..."
     elif event_type == "compaction":
@@ -200,6 +236,11 @@ def _to_activity_event(runtime: Runtime, runtime_event: dict[str, Any]) -> Activ
         line=line,
         task_id=task_id,
         group_id=group_id,
+        group_kind=group_kind,
+        group_title=group_title,
+        group_role=group_role,
+        subagent_type=subagent_type,
+        description=description,
         tool_summary=summary,
         assistant_message_id=assistant_message_id,
         payload=payload,

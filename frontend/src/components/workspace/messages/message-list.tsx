@@ -26,6 +26,7 @@ import {
 import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
 import type { Subtask } from "@/core/tasks";
 import { useSubtaskContext } from "@/core/tasks/context";
+import { mergeSubtask } from "@/core/tasks/utils";
 import type { AgentThreadState } from "@/core/threads";
 import {
   resolveAdjacentBranch,
@@ -64,6 +65,10 @@ function buildSubtaskUpdates(
           id: toolCall.id,
           subagent_type: toolCall.args.subagent_type,
           description: toolCall.args.description,
+          group_title:
+            typeof toolCall.args.subagent_type === "string" && typeof toolCall.args.description === "string"
+              ? `${toolCall.args.subagent_type}: ${toolCall.args.description}`
+              : undefined,
           prompt: toolCall.args.prompt,
           status: "in_progress",
         });
@@ -115,6 +120,7 @@ function normalizeSubtask(task: Partial<Subtask> & { id: string }): Subtask {
     status: task.status ?? "in_progress",
     subagent_type: task.subagent_type ?? "task",
     description: task.description ?? "Running subtask",
+    group_title: task.group_title,
     prompt: task.prompt ?? "",
     latestMessage: task.latestMessage,
     result: task.result,
@@ -174,7 +180,7 @@ export function MessageList({
   const { t } = useI18n();
   const { isMock, setForkDraft } = useThread();
   const rehypePlugins = useRehypeSplitWordsIntoSpans(!thread.isLoading);
-  const { setTasks } = useSubtaskContext();
+  const { tasks: contextTasks, setTasks } = useSubtaskContext();
   const { liveEvents: liveActivityEvents } = useActivityContext();
   const messages = thread.messages;
   const persistedReasoningInCurrentTurn = useMemo(
@@ -479,7 +485,7 @@ export function MessageList({
                 .filter((toolCall) => toolCall.name === "task" && Boolean(toolCall.id))
                 .map((toolCall) => toolCall.id!);
               for (const taskId of messageTaskIds) {
-                const task = subtasksById[taskId];
+                const task = mergeSubtask(subtasksById[taskId], contextTasks[taskId]);
                 if (!task) {
                   continue;
                 }

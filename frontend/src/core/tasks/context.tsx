@@ -75,6 +75,7 @@ export function useUpdateSubtask() {
           prevTask?.status === nextTask.status &&
           prevTask.subagent_type === nextTask.subagent_type &&
           prevTask.description === nextTask.description &&
+          prevTask.group_title === nextTask.group_title &&
           prevTask.prompt === nextTask.prompt &&
           prevTask.result === nextTask.result &&
           prevTask.error === nextTask.error &&

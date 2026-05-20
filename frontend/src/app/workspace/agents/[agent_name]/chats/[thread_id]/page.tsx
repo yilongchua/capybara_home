@@ -30,6 +30,7 @@ import { useNotification } from "@/core/notification/hooks";
 import { useLocalSettings } from "@/core/settings";
 import type { ForkDraft } from "@/core/threads/fork";
 import { useThreadStream } from "@/core/threads/hooks";
+import { useRejoinRunningRun } from "@/core/threads/use-rejoin-running-run";
 import { textOfMessage } from "@/core/threads/utils";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
@@ -45,6 +46,28 @@ const EXECUTE_PLAN_INTENTS = new Set([
 
 function normalizeIntent(text: string): string {
   return text.toLowerCase().trim().replace(/[.!?]+$/g, "");
+}
+
+type ExecutePlanResponse = {
+  acknowledged: boolean;
+  status: "accepted" | "duplicate" | "conflict" | "failed";
+  plan_status?: string | null;
+};
+
+function getExecutePlanFailureMessage(result: ExecutePlanResponse): string | null {
+  if (result.acknowledged && result.status !== "conflict" && result.status !== "failed") {
+    return null;
+  }
+  if (result.status === "conflict") {
+    if (result.plan_status) {
+      return `Plan execution is blocked while the plan is ${result.plan_status}.`;
+    }
+    return "Plan execution is blocked. Please resolve the pending plan state and try again.";
+  }
+  if (result.status === "failed") {
+    return "Plan execution failed. Please try again.";
+  }
+  return "Plan execution was not accepted. Please try again.";
 }
 
 export default function AgentChatPage() {
@@ -112,6 +135,7 @@ function AgentChatPageContent({
       }
     },
   });
+  const { runningRun } = useRejoinRunningRun(isNewThread ? null : threadId, thread);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -136,6 +160,7 @@ function AgentChatPageContent({
 
   const handleExecutePlan = useCallback(() => {
     const run = async () => {
+      setSettings("context", { ...settings.context, mode: "work" });
       const response = await fetch(`${getBackendBaseURL()}${api.threads.executePlan(threadId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -146,21 +171,20 @@ function AgentChatPageContent({
         toast.error(`Failed to execute plan. ${detail}`);
         return;
       }
-      await sendMessage(
-        threadId,
-        { text: "", files: [] },
-        { agent_name: agentName, execute_approved_plan: true },
-        { mode: "work" },
-      );
+      const result = await response.json() as ExecutePlanResponse;
+      const failureMessage = getExecutePlanFailureMessage(result);
+      if (failureMessage) {
+        toast.error(`Failed to execute plan. ${failureMessage}`);
+      }
     };
     void run();
-  }, [agentName, sendMessage, threadId]);
+  }, [setSettings, settings.context, threadId]);
 
   const handleSubmit = useCallback(
     (message: PromptInputMessage, options?: InputBoxSubmitOptions) => {
       const maybeIntent = normalizeIntent(message.text ?? "");
       const planStatus = String(thread.values.plan?.status ?? "").toLowerCase();
-      const hasPlanReadyForExecution = planStatus === "draft";
+      const hasPlanReadyForExecution = planStatus === "draft" || planStatus === "approved";
       if (
         !thread.isLoading &&
         hasPlanReadyForExecution &&
@@ -236,8 +260,16 @@ function AgentChatPageContent({
               </span>
             </div>
 
-            <div className="flex w-full items-center text-sm font-medium">
+            <div className="flex w-full items-center gap-2 text-sm font-medium">
               <ThreadTitle threadId={threadId} thread={thread} />
+              {runningRun && thread.isLoading && (
+                <span
+                  className="text-muted-foreground rounded bg-amber-500/10 px-2 py-0.5 text-xs font-normal"
+                  title={`Resuming run ${runningRun.runId}`}
+                >
+                  resuming…
+                </span>
+              )}
             </div>
             {queueControls.queueLength > 0 && (
               <span className="text-muted-foreground rounded bg-blue-500/10 px-2 py-0.5 text-xs font-normal">

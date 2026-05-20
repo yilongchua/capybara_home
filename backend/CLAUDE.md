@@ -205,6 +205,8 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 **Concurrency**: endpoint-aware queueing in `SubagentLimitMiddleware` (research helpers route to helper/triage endpoint, excess primary-targeted `task` calls defer), cooperative per-subagent timeout
 **Flow**: `task()` tool → `SubagentExecutor` → background thread → poll 5s → SSE events → result
 **Events**: `task_started`, `task_running`, `task_completed`/`task_failed`/`task_timed_out`
+- **Turn budgets**: `source-researcher` and `comparison-dimension-researcher` now default to `max_turns=25`, which becomes the subagent run's LangGraph `recursion_limit`
+- **UI labeling**: subagent lifecycle events now carry `subagent_type`, `description`, `group_id`, and `group_title`, and the activity timeline renders them as `Baby Capy - {subagent_type} ...` while preserving per-task grouping
 
 ### Tool System (`src/tools/`)
 

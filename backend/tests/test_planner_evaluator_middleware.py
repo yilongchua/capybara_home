@@ -38,8 +38,8 @@ def _router() -> ModelRouter:
     return ModelRouter(app_config=cfg)
 
 
-def _runtime():
-    return SimpleNamespace(context={"thread_id": "thread-1", "model_name": "primary"})
+def _runtime(*, auto_mode: bool = False):
+    return SimpleNamespace(context={"thread_id": "thread-1", "model_name": "primary", "auto_mode": auto_mode})
 
 
 def test_planner_creates_plan_todos_and_handoffs(monkeypatch, tmp_path: Path):
@@ -235,6 +235,17 @@ def test_planner_clears_clarification_pending_after_user_answer(tmp_path: Path):
             "plan_id": "plan-1",
             "status": "draft",
             "clarification_pending": True,
+            "clarification_index": 0,
+            "clarification_answers": [],
+            "clarifications": [
+                {
+                    "question": "What years should this cover?",
+                    "options": [
+                        {"label": "2024 to 2026", "recommended": True},
+                        {"label": "Last 12 months", "recommended": False},
+                    ],
+                }
+            ],
             "clarification_question": "What years should this cover?",
         },
         "messages": [
@@ -248,6 +259,97 @@ def test_planner_clears_clarification_pending_after_user_answer(tmp_path: Path):
     assert update is not None
     assert update["plan"]["clarification_pending"] is False
     assert isinstance(update["plan"]["clarification_answered_at"], str)
+
+
+def test_planner_auto_mode_clarification_resolution_spawns_work_handoff(tmp_path: Path, monkeypatch):
+    spawn_calls: list[dict] = []
+    monkeypatch.setattr(
+        "src.agents.middlewares.planner_middleware.spawn_work_mode_handoff",
+        lambda **kwargs: spawn_calls.append(kwargs),
+    )
+    middleware = PlannerMiddleware(
+        router=_router(),
+        requested_model="primary",
+        max_plan_steps=PlannerConfig().max_plan_steps,
+        dag_enabled=True,
+        handoffs_config=HandoffsConfig(enabled=True, dir=".handoffs"),
+        sprint_contracts_config=SprintContractsConfig(enabled=True, min_todos_trigger=2),
+    )
+    state = {
+        "plan": {
+            "plan_id": "plan-1",
+            "status": "draft",
+            "clarification_pending": True,
+            "clarification_index": 0,
+            "clarification_answers": [],
+            "clarifications": [
+                {
+                    "question": "Which islands best match your pace?",
+                    "options": [
+                        {"label": "Santorini & Crete", "recommended": True},
+                        {"label": "Rhodes only", "recommended": False},
+                    ],
+                }
+            ],
+            "clarification_question": "Which islands best match your pace?",
+            "awaiting_execution_approval": True,
+        },
+        "messages": [
+            HumanMessage(content="Plan Greece trip"),
+            ToolMessage(content="[Auto Mode] Selected: Santorini & Crete", tool_call_id="tc-1", name="ask_clarification"),
+        ],
+        "thread_data": {"workspace_path": str(tmp_path)},
+    }
+    runtime = _runtime(auto_mode=True)
+    runtime.context["plan_behavior"] = "plan_foreground"
+    update = middleware.before_model(state, runtime)
+    assert update is not None
+    assert update["plan"]["clarification_pending"] is False
+    assert update["plan"]["status"] == "approved"
+    assert update["plan"]["execution_handoff_started"] is True
+    assert len(spawn_calls) == 1
+
+
+def test_planner_clears_clarification_pending_after_auto_mode_selection(tmp_path: Path):
+    middleware = PlannerMiddleware(
+        router=_router(),
+        requested_model="primary",
+        max_plan_steps=PlannerConfig().max_plan_steps,
+        dag_enabled=True,
+        handoffs_config=HandoffsConfig(enabled=True, dir=".handoffs"),
+        sprint_contracts_config=SprintContractsConfig(enabled=True, min_todos_trigger=2),
+    )
+    state = {
+        "plan": {
+            "plan_id": "plan-1",
+            "status": "draft",
+            "clarification_pending": True,
+            "clarification_index": 0,
+            "clarification_answers": [],
+            "clarifications": [
+                {
+                    "question": "Which islands best match your pace?",
+                    "options": [
+                        {"label": "Santorini & Crete", "recommended": True},
+                        {"label": "Rhodes only", "recommended": False},
+                    ],
+                }
+            ],
+            "clarification_question": "Which islands best match your pace?",
+            "awaiting_execution_approval": True,
+        },
+        "messages": [
+            HumanMessage(content="Plan Greece trip"),
+            ToolMessage(content="[Auto Mode] Selected: Santorini & Crete", tool_call_id="tc-1", name="ask_clarification"),
+        ],
+        "thread_data": {"workspace_path": str(tmp_path)},
+    }
+    update = middleware.before_model(state, _runtime(auto_mode=True))
+    assert update is not None
+    assert update["plan"]["clarification_pending"] is False
+    assert update["plan"]["status"] == "approved"
+    assert update["plan"]["awaiting_execution_approval"] is False
+    assert isinstance(update["plan"]["approved_at"], str)
 
 
 def test_evaluator_defers_when_todos_incomplete(tmp_path: Path):

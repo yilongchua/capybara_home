@@ -97,18 +97,20 @@ def normalize_todo_nodes(raw_todos: list[TodoNodeInput]) -> list[dict[str, Any]]
         if status not in {"pending", "in_progress", "completed", "blocked"}:
             status = "pending"
         depends_on = [str(dep) for dep in (raw.get("depends_on") or []) if str(dep).strip()]
-        nodes.append(
-            {
-                "id": node_id,
-                "content": content,
-                "status": status,
-                "depends_on": depends_on,
-                "owner": raw.get("owner") or "lead",
-                "subagent_type": raw.get("subagent_type"),
-                "target_endpoint": raw.get("target_endpoint"),
-                "tool_budget": raw.get("tool_budget"),
-            }
-        )
+        rationale = str(raw.get("rationale") or "").strip()
+        node: dict[str, Any] = {
+            "id": node_id,
+            "content": content,
+            "status": status,
+            "depends_on": depends_on,
+            "owner": raw.get("owner") or "lead",
+            "subagent_type": raw.get("subagent_type"),
+            "target_endpoint": raw.get("target_endpoint"),
+            "tool_budget": raw.get("tool_budget"),
+        }
+        if rationale:
+            node["rationale"] = rationale
+        nodes.append(node)
 
     ids = {node["id"] for node in nodes}
     for node in nodes:
@@ -141,7 +143,7 @@ def merge_todo_nodes(existing_nodes: list[dict[str, Any]], raw_updates: list[Tod
         if "depends_on" in raw:
             deps = [str(dep).strip() for dep in (raw.get("depends_on") or []) if str(dep).strip()]
             target["depends_on"] = deps
-        for key in ("owner", "subagent_type", "target_endpoint", "tool_budget"):
+        for key in ("owner", "subagent_type", "target_endpoint", "tool_budget", "rationale"):
             if key in raw:
                 target[key] = raw.get(key)
 
@@ -155,7 +157,7 @@ def merge_todo_nodes(existing_nodes: list[dict[str, Any]], raw_updates: list[Tod
         if not content:
             content = raw_id or f"Todo {len(merged) + idx + 1}"
         status = _valid_status(raw.get("status")) or "pending"
-        candidate = {
+        candidate: dict[str, Any] = {
             "id": raw_id or _slugify(content, len(merged) + idx),
             "content": content,
             "status": status,
@@ -165,6 +167,9 @@ def merge_todo_nodes(existing_nodes: list[dict[str, Any]], raw_updates: list[Tod
             "target_endpoint": raw.get("target_endpoint"),
             "tool_budget": raw.get("tool_budget"),
         }
+        rationale = str(raw.get("rationale") or "").strip()
+        if rationale:
+            candidate["rationale"] = rationale
         base_id = str(raw_id or candidate["id"])
         next_id = base_id
         suffix = 2

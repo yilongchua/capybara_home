@@ -108,6 +108,8 @@ The lead agent spawns sub-agents for parallel execution. Each sub-agent gets its
 - Max 3 concurrent sub-agents per turn
 - 15-minute timeout per task
 - Built-in agents: `general-purpose`, `bash`
+- Research-oriented delegates such as `source-researcher` and `comparison-dimension-researcher` default to a 25-turn recursion budget for longer evidence-gathering runs
+- Activity timeline rows label the active delegate as `Baby Capy - {subagent_type} ...` and keep grouped subtask IDs for trace/debug correlation
 
 ### Sandboxed Execution
 
