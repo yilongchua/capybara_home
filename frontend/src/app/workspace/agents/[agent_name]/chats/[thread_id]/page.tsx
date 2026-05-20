@@ -32,6 +32,7 @@ import type { ForkDraft } from "@/core/threads/fork";
 import { useThreadStream } from "@/core/threads/hooks";
 import { useRejoinRunningRun } from "@/core/threads/use-rejoin-running-run";
 import { textOfMessage } from "@/core/threads/utils";
+import { publishWorkspaceRefresh } from "@/core/workspace-refresh";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
 
@@ -104,6 +105,7 @@ function AgentChatPageContent({
   const { agent } = useAgent(agentName);
   const [forkDraft, setForkDraft] = useState<ForkDraft | null>(null);
   const [uiNotices, setUiNotices] = useState<LiveGenerationNotice[]>([]);
+  const [runPollBump, setRunPollBump] = useState(0);
   const { notices: generationNotices, artifactPaths: generationArtifacts } =
     useGenerationCompletions(threadId);
   const { showNotification } = useNotification();
@@ -135,7 +137,9 @@ function AgentChatPageContent({
       }
     },
   });
-  const { runningRun } = useRejoinRunningRun(isNewThread ? null : threadId, thread);
+  const { runningRun } = useRejoinRunningRun(isNewThread ? null : threadId, thread, {
+    pollBump: runPollBump,
+  });
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -164,7 +168,9 @@ function AgentChatPageContent({
       const response = await fetch(`${getBackendBaseURL()}${api.threads.executePlan(threadId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          auto_mode: settings.context.auto_mode === true,
+        }),
       });
       if (!response.ok) {
         const detail = await response.text();
@@ -175,10 +181,15 @@ function AgentChatPageContent({
       const failureMessage = getExecutePlanFailureMessage(result);
       if (failureMessage) {
         toast.error(`Failed to execute plan. ${failureMessage}`);
+        return;
       }
+      setRunPollBump((value) => value + 1);
+      publishWorkspaceRefresh(["runs", "threads", `thread:${threadId}`], {
+        source: "execute-plan",
+      });
     };
     void run();
-  }, [setSettings, settings.context, threadId]);
+  }, [setSettings, settings.context, settings.context.auto_mode, threadId]);
 
   const handleSubmit = useCallback(
     (message: PromptInputMessage, options?: InputBoxSubmitOptions) => {

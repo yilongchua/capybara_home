@@ -22,7 +22,10 @@ export interface RunningRunInfo {
   createdAt: string | null;
 }
 
-export function useRunningRun(threadId: string | null | undefined): {
+export function useRunningRun(
+  threadId: string | null | undefined,
+  pollBump = 0,
+): {
   runningRun: RunningRunInfo | null;
   loading: boolean;
 } {
@@ -85,7 +88,7 @@ export function useRunningRun(threadId: string | null | undefined): {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [threadId]);
+  }, [pollBump, threadId]);
 
   return { runningRun, loading };
 }

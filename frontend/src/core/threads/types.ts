@@ -79,6 +79,9 @@ export interface PlanState {
   execution_requested_at?: string;
   execution_handoff_started?: boolean;
   execution_handoff_started_at?: string;
+  execution_handoff_failed?: boolean;
+  execution_handoff_failed_at?: string;
+  execution_handoff_error?: string | null;
   sprint_contract_path?: string;
   plan_path?: string;
   latest_alias_path?: string;

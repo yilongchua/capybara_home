@@ -15,8 +15,10 @@ type ThreadStream = {
 export function useRejoinRunningRun(
   threadId: string | null | undefined,
   thread: ThreadStream,
+  options?: { pollBump?: number },
 ): ReturnType<typeof useRunningRun> {
-  const { runningRun, loading } = useRunningRun(threadId);
+  const pollBump = options?.pollBump ?? 0;
+  const { runningRun, loading } = useRunningRun(threadId, pollBump);
   const lastJoinedRunningRunRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -25,7 +27,7 @@ export function useRejoinRunningRun(
 
   useEffect(() => {
     const runId = runningRun?.runId;
-    if (!runId || thread.isLoading) {
+    if (!runId) {
       return;
     }
     if (lastJoinedRunningRunRef.current === runId) {
@@ -36,7 +38,7 @@ export function useRejoinRunningRun(
       lastJoinedRunningRunRef.current = null;
       console.warn("Failed to rejoin running stream:", error);
     });
-  }, [runningRun?.runId, thread, thread.isLoading]);
+  }, [runningRun?.runId, thread]);
 
   return { runningRun, loading };
 }

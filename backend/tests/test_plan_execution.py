@@ -7,9 +7,12 @@ from langchain_core.messages import HumanMessage, ToolMessage
 from src.agents.middlewares.plan_execution import (
     all_clarifications_resolved,
     apply_clarification_progress,
+    execute_plan_should_duplicate,
     handoff_already_started,
     has_answer_for_current_question,
+    mark_handoff_failed,
     should_spawn_work_handoff,
+    work_execution_underway,
 )
 
 
@@ -88,6 +91,36 @@ def test_apply_clarification_progress_finishes_all_questions():
     assert updated["clarification_resolved"] is True
     assert len(updated["clarification_answers"]) == 2
     assert all_clarifications_resolved(updated) is True
+
+
+def test_legacy_clarification_question_without_options_accepts_free_text_answer():
+    plan = {
+        "plan_id": "plan-1",
+        "status": "draft",
+        "clarification_pending": True,
+        "clarification_index": 0,
+        "clarification_question": "What years should this cover?",
+        "clarifications": [],
+    }
+    messages = [
+        HumanMessage(
+            name="planner_clarification_required",
+            content="Question: What years should this cover?",
+        ),
+        HumanMessage(content="2024 through 2026"),
+    ]
+    assert has_answer_for_current_question(plan, messages) is True
+    progress = apply_clarification_progress(plan, messages)
+    assert progress is not None
+    assert progress["plan"]["clarification_pending"] is False
+
+
+def test_execute_plan_should_duplicate_only_when_work_is_underway():
+    plan = {"status": "approved", "execution_handoff_started": True}
+    assert execute_plan_should_duplicate(plan, {"work_mode": {"active": True}}) is True
+    assert execute_plan_should_duplicate(plan, {"work_mode": {"active": False}}) is False
+    failed_plan = mark_handoff_failed({**plan, "execution_handoff_started": False})
+    assert handoff_already_started(failed_plan) is False
 
 
 def test_should_spawn_work_handoff_requires_approved_and_not_started():

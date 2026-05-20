@@ -14,8 +14,9 @@ from pydantic import BaseModel, Field
 from src.agents.memory.compaction_archive import append_compaction_entry
 from src.agents.middlewares.plan_execution import (
     apply_clarification_progress,
-    handoff_already_started,
-    mark_handoff_started,
+    execute_plan_should_duplicate,
+    mark_handoff_requested,
+    resolve_auto_mode,
     resolve_original_user_request,
 )
 from src.agents.middlewares.work_run_handoff import spawn_work_mode_handoff
@@ -66,6 +67,10 @@ class ExecutePlanRequest(BaseModel):
         min_length=1,
         max_length=128,
         description="Optional explicit plan id to execute; defaults to current active plan.",
+    )
+    auto_mode: bool | None = Field(
+        default=None,
+        description="Optional auto-mode preference for the work handoff run.",
     )
 
 
@@ -399,8 +404,9 @@ async def execute_plan(thread_id: str, request: ExecutePlanRequest) -> ExecutePl
             )
 
         current_status = str(plan.get("status") or "draft").strip().lower() or "draft"
+        auto_mode = resolve_auto_mode(values, request_auto_mode=request.auto_mode)
         if current_status in {"approved", "executing", "completed"}:
-            if handoff_already_started(plan):
+            if execute_plan_should_duplicate(plan, values):
                 return ExecutePlanResponse(
                     thread_id=thread_id,
                     acknowledged=True,
@@ -408,10 +414,9 @@ async def execute_plan(thread_id: str, request: ExecutePlanRequest) -> ExecutePl
                     plan_status=current_status,
                     status="duplicate",
                 )
-            # Recover stalled approved plans that never started work handoff.
-            next_plan = mark_handoff_started(plan)
+            # Recover stalled approved plans or retry after a failed handoff.
+            next_plan = mark_handoff_requested(plan)
             await client.threads.update_state(thread_id, {"plan": next_plan})
-            auto_mode = bool(values.get("auto_mode"))
             spawn_work_mode_handoff(
                 thread_id=thread_id,
                 requested_model_name=_requested_model_from_values(values),
@@ -451,14 +456,12 @@ async def execute_plan(thread_id: str, request: ExecutePlanRequest) -> ExecutePl
                 )
 
         approved_at = str(plan.get("approved_at") or datetime.now(UTC).isoformat())
-        handoff_started_at = datetime.now(UTC).isoformat()
-        next_plan = mark_handoff_started(
+        next_plan = mark_handoff_requested(
             {
                 **plan,
                 "status": "approved",
                 "approved_at": approved_at,
                 "awaiting_execution_approval": False,
-                "execution_requested_at": handoff_started_at,
             }
         )
 
@@ -483,7 +486,7 @@ async def execute_plan(thread_id: str, request: ExecutePlanRequest) -> ExecutePl
         spawn_work_mode_handoff(
             thread_id=thread_id,
             requested_model_name=_requested_model_from_values(values),
-            auto_mode=bool(values.get("auto_mode")),
+            auto_mode=auto_mode,
             original_user_request=resolve_original_user_request(values),
             thread_name_suffix="-execute-plan",
         )

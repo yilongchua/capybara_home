@@ -78,6 +78,9 @@ class PlanState(TypedDict, total=False):
     execution_requested_at: str
     execution_handoff_started: bool
     execution_handoff_started_at: str
+    execution_handoff_failed: bool
+    execution_handoff_failed_at: str
+    execution_handoff_error: str
     execution_started_at: str
     completed_at: str
 
