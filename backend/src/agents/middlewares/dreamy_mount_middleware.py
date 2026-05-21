@@ -89,16 +89,13 @@ class DreamyMountMiddleware(AgentMiddleware[DreamyMountState]):
 
         lines = [
             "<mounted_folder>",
-            f"A local folder is mounted and accessible at the virtual path: {VIRTUAL_MOUNT_PATH}",
+            f"A local folder is mounted and accessible at"
+            f"virtual path: {VIRTUAL_MOUNT_PATH}",
             f"Real path on host: {mounted_path_str}",
-            "",
-            f"Derived analysis artifacts such as repo_overview.md, failed_files.md, and file_catalog.md are stored in {VIRTUAL_ANALYSE_PATH}.",
-            "",
+            f"Derived analysis artifacts such as 'repo_overview.md', 'failed_files.md', and 'file_catalog.md' are stored in {VIRTUAL_ANALYSE_PATH}.",
             f"Use {VIRTUAL_MOUNT_PATH}/<filename> with read_file, write_file, str_replace, bash, and ls.",
-            "When the user references @filename (e.g. @work.txt), resolve it to "
-            f"{VIRTUAL_MOUNT_PATH}/<filename>.",
+            f"When the user references @filename (e.g. @work.txt), resolve it to {VIRTUAL_MOUNT_PATH}/<filename>.",
             "You can read, edit, and create files directly in this folder — changes are persistent.",
-            "</mounted_folder>",
         ]
         block = "\n".join(lines)
 

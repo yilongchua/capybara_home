@@ -15,7 +15,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import HumanMessage
 from langgraph.runtime import Runtime
 
-_MAX_TODO_RECOVERY_ATTEMPTS = 2
+_MAX_TODO_RECOVERY_ATTEMPTS = 10
 logger = logging.getLogger(__name__)
 
 _TODO_RECOVERY_PROMPT = """You are in work mode. Do not create a new plan.

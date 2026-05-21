@@ -1560,7 +1560,32 @@ export function useThreadStream({
       });
 
       if (!shouldQueue) {
-        await submitMessageNow(threadId, message, extraContext, options);
+        try {
+          await submitMessageNow(threadId, message, extraContext, options);
+        } catch (error) {
+          if (!isRetryableSubmitConflictError(error)) {
+            throw error;
+          }
+
+          const queueItem: QueuedMessage = {
+            id: uuid(),
+            createdAt: Date.now(),
+            threadId,
+            message,
+            extraContext,
+            allowSteer: !Boolean(options?.checkpoint),
+            options: options ? { ...options, queued: false } : undefined,
+          };
+          const nextQueue = enqueueMessage(queueRef.current, queueItem);
+          applyQueue(nextQueue);
+
+          clearScheduledQueueRetry();
+          queueRetryTimeoutRef.current = window.setTimeout(() => {
+            queueRetryTimeoutRef.current = null;
+            processQueueRef.current();
+          }, 2000);
+          return;
+        }
         return;
       }
 
@@ -1577,7 +1602,7 @@ export function useThreadStream({
       applyQueue(nextQueue);
       processQueueRef.current();
     },
-    [applyQueue, submitMessageNow, thread.isLoading],
+    [applyQueue, clearScheduledQueueRetry, submitMessageNow, thread.isLoading],
   );
 
   const dismissQueued = useCallback(

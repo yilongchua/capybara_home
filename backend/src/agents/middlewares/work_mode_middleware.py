@@ -125,6 +125,22 @@ def _latest_human_prompt(messages: list[Any]) -> str:
     return ""
 
 
+def _runtime_user_prompt(runtime_context: dict[str, Any], messages: list[Any]) -> str:
+    """Resolve the best prompt for complexity classification.
+
+    Prefer the raw user turn text from runtime context because middleware may
+    prepend operational guidance blocks (e.g. <mounted_folder>) to the last
+    HumanMessage before Work Mode runs.
+    """
+    current_turn = str(runtime_context.get("current_turn_text") or "").strip()
+    if current_turn:
+        return current_turn
+    original_request = str(runtime_context.get("original_user_request") or "").strip()
+    if original_request:
+        return original_request
+    return _latest_human_prompt(messages)
+
+
 class WorkModeMiddlewareState(AgentState):
     """Compatible with the ThreadState schema."""
 
@@ -275,7 +291,7 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
         if not nodes:
             complexity_tier = state.get("complexity_tier")
             if not complexity_tier:
-                prompt = _latest_human_prompt(state.get("messages", []) or [])
+                prompt = _runtime_user_prompt(runtime_context, state.get("messages", []) or [])
                 if prompt:
                     complexity_tier = _classify_complexity(prompt)
                     if complexity_tier:
