@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,7 +14,8 @@ from uuid import uuid4
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import HumanMessage
+from langchain.agents.middleware.types import ModelCallResult, ModelRequest, ModelResponse
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.config import get_stream_writer
 from langgraph.runtime import Runtime
 
@@ -46,6 +48,8 @@ class PlannerState(AgentState):
     complexity_tier: NotRequired[str | None]
     plan_evaluated: NotRequired[bool]
     plan_history: NotRequired[list[dict[str, Any]] | None]
+    planner_ephemeral_handoff: NotRequired[str | None]
+    planner_ephemeral_clarification: NotRequired[str | None]
 
 
 def _utc_now_iso() -> str:
@@ -559,6 +563,39 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         self._research_fanout = bool(research_fanout)
         self._research_fanout_min_todos = max(2, int(research_fanout_min_todos))
 
+    def _with_ephemeral_planner_context(self, request: ModelRequest) -> ModelRequest:
+        runtime_state = request.runtime.state if isinstance(request.runtime.state, dict) else {}
+        if not isinstance(runtime_state, dict):
+            return request
+        if bool(runtime_state.get("plan_evaluated")):
+            return request
+        handoff_text = str(runtime_state.get("planner_ephemeral_handoff") or "").strip()
+        clarification_text = str(runtime_state.get("planner_ephemeral_clarification") or "").strip()
+        prefix: list = []
+        if handoff_text:
+            prefix.append(SystemMessage(name="planner_handoff", content=handoff_text))
+        if clarification_text:
+            prefix.append(SystemMessage(name="planner_clarification_required", content=clarification_text))
+        if not prefix:
+            return request
+        return request.override(messages=[*prefix, *request.messages])
+
+    @override
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelCallResult:
+        return handler(self._with_ephemeral_planner_context(request))
+
+    @override
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelCallResult:
+        return await handler(self._with_ephemeral_planner_context(request))
+
     def _should_plan(self, state: PlannerState, runtime: Runtime) -> bool:
         if state.get("plan"):
             return False
@@ -892,7 +929,8 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
             "artifacts": artifact_paths,
             "complexity_tier": tier,
             "plan_evaluated": False,
-            "messages": [message for message in [planner_handoff, clarification_prompt_message] if message is not None],
+            "planner_ephemeral_handoff": planner_handoff.content,
+            "planner_ephemeral_clarification": clarification_prompt_message.content if clarification_prompt_message is not None else None,
         }
 
         pause_after_plan = not clarification_pending and _plan_behavior(runtime) == "plan_foreground"

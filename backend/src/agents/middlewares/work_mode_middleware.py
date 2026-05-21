@@ -33,12 +33,14 @@ import logging
 import re
 import threading
 import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, NotRequired, override
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import HumanMessage
+from langchain.agents.middleware.types import ModelCallResult, ModelRequest, ModelResponse
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.config import get_stream_writer
 from langgraph.runtime import Runtime
 
@@ -270,6 +272,56 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
         # None = first call; seeded from current state to suppress spurious
         # phase_completed events when resuming a thread mid-execution.
         self._completed_before: frozenset[str] | None = None
+
+    def _ephemeral_work_instruction(self, state: dict[str, Any] | None) -> str | None:
+        if not isinstance(state, dict):
+            return None
+        phase_execution = state.get("phase_execution")
+        if not isinstance(phase_execution, dict):
+            return None
+        instruction_text = str(phase_execution.get("ephemeral_instruction_text") or "").strip()
+        if not instruction_text:
+            return None
+        todo_id = str(phase_execution.get("last_todo_id") or "").strip()
+        if not todo_id:
+            return None
+        todo_graph = state.get("todo_graph")
+        nodes = todo_graph.get("nodes") if isinstance(todo_graph, dict) else None
+        if not isinstance(nodes, list):
+            return None
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if str(node.get("id") or "") != todo_id:
+                continue
+            status = str(node.get("status") or "").strip().lower()
+            if status in {"completed", "blocked"}:
+                return None
+            return instruction_text
+        return None
+
+    def _with_ephemeral_instruction(self, request: ModelRequest) -> ModelRequest:
+        instruction_text = self._ephemeral_work_instruction(request.runtime.state if isinstance(request.runtime.state, dict) else None)
+        if not instruction_text:
+            return request
+        msg = SystemMessage(name="work_mode_instruction", content=f"<work_mode_instruction>\n{instruction_text}\n</work_mode_instruction>")
+        return request.override(messages=[msg, *request.messages])
+
+    @override
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelCallResult:
+        return handler(self._with_ephemeral_instruction(request))
+
+    @override
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelCallResult:
+        return await handler(self._with_ephemeral_instruction(request))
 
     @override
     def before_model(self, state: WorkModeMiddlewareState, runtime: Runtime) -> dict[str, Any] | None:  # noqa: ARG002
@@ -522,8 +574,6 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
                 "If write_todos is unexpectedly unavailable, state that explicitly and include the intended status update.\n"
                 "Do NOT output any text — the system will automatically assign the next phase.\n"
             )
-        instruction = HumanMessage(name="work_mode_instruction", content=f"<work_mode_instruction>\n{instruction_body}</work_mode_instruction>")
-
         # ── Update phase_execution state ───────────────────────────────────────
         phase_results: list[dict] = list(existing_pe.get("phase_results") or [])
 
@@ -578,8 +628,8 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
                 "forced_reconcile_done": forced_reconcile_done,
                 "last_todo_id": next_todo_id,
                 "last_instruction_kind": instruction_kind,
+                "ephemeral_instruction_text": instruction_body.strip(),
             },
-            "messages": [instruction],
         }
         if graph_update is not None:
             update_payload["todo_graph"] = graph_update

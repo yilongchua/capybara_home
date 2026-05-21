@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import NotRequired, override
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import HumanMessage
+from langchain.agents.middleware.types import ModelCallResult, ModelRequest, ModelResponse
+from langchain_core.messages import SystemMessage
 from langgraph.runtime import Runtime
 
 from src.agents.thread_state import ThreadDataState
@@ -38,6 +40,19 @@ class DreamyMountMiddleware(AgentMiddleware[DreamyMountState]):
     """
 
     state_schema = DreamyMountState
+
+    def _mount_block(self, mounted_path_str: str) -> str:
+        lines = [
+            "<mounted_folder>",
+            f"A local folder is mounted and accessible at"
+            f"virtual path: {VIRTUAL_MOUNT_PATH}",
+            f"Real path on host: {mounted_path_str}",
+            f"Derived analysis artifacts such as 'repo_overview.md', 'failed_files.md', and 'file_catalog.md' are stored in {VIRTUAL_ANALYSE_PATH}.",
+            f"Use {VIRTUAL_MOUNT_PATH}/<filename> with read_file, write_file, str_replace, bash, and ls.",
+            f"When the user references @filename (e.g. @work.txt), resolve it to {VIRTUAL_MOUNT_PATH}/<filename>.",
+            "You can read, edit, and create files directly in this folder — changes are persistent.",
+        ]
+        return "\n".join(lines)
 
     @override
     def before_agent(self, state: DreamyMountState, runtime: Runtime) -> dict | None:
@@ -75,45 +90,38 @@ class DreamyMountMiddleware(AgentMiddleware[DreamyMountState]):
         if mode == "plan":
             return {"thread_data": updated_thread_data}
 
-        if existing_thread_data.get("mounted_prompt_injected_path") == mounted_path_str:
-            return {"thread_data": updated_thread_data}
+        return {"thread_data": updated_thread_data}
 
-        messages = list(state.get("messages", []))
-        if not messages:
-            return {"thread_data": updated_thread_data}
+    def _with_ephemeral_mount_context(self, request: ModelRequest) -> ModelRequest:
+        context = request.runtime.context if isinstance(request.runtime.context, dict) else {}
+        mode = str(context.get("mode") or "").strip().lower() or "work"
+        if mode == "plan":
+            return request
 
-        last_idx = len(messages) - 1
-        last_msg = messages[last_idx]
-        if not isinstance(last_msg, HumanMessage):
-            return {"thread_data": updated_thread_data}
+        runtime_state = request.runtime.state if isinstance(request.runtime.state, dict) else {}
+        thread_data = runtime_state.get("thread_data") if isinstance(runtime_state, dict) else None
+        if not isinstance(thread_data, dict):
+            return request
 
-        lines = [
-            "<mounted_folder>",
-            f"A local folder is mounted and accessible at"
-            f"virtual path: {VIRTUAL_MOUNT_PATH}",
-            f"Real path on host: {mounted_path_str}",
-            f"Derived analysis artifacts such as 'repo_overview.md', 'failed_files.md', and 'file_catalog.md' are stored in {VIRTUAL_ANALYSE_PATH}.",
-            f"Use {VIRTUAL_MOUNT_PATH}/<filename> with read_file, write_file, str_replace, bash, and ls.",
-            f"When the user references @filename (e.g. @work.txt), resolve it to {VIRTUAL_MOUNT_PATH}/<filename>.",
-            "You can read, edit, and create files directly in this folder — changes are persistent.",
-        ]
-        block = "\n".join(lines)
+        mounted_path_str = str(thread_data.get("mounted_path") or "").strip()
+        if not mounted_path_str:
+            return request
 
-        original_content = last_msg.content
-        if isinstance(original_content, str):
-            updated_content = f"{block}\n\n{original_content}"
-        elif isinstance(original_content, list):
-            text_parts = [p.get("text", "") for p in original_content if isinstance(p, dict) and p.get("type") == "text"]
-            updated_content = f"{block}\n\n" + "\n".join(text_parts)
-        else:
-            updated_content = f"{block}\n\n{original_content!s}"
+        mount_msg = SystemMessage(content=self._mount_block(mounted_path_str), name="mounted_folder_context")
+        return request.override(messages=[mount_msg, *request.messages])
 
-        messages[last_idx] = HumanMessage(
-            content=updated_content,
-            id=last_msg.id,
-            additional_kwargs=last_msg.additional_kwargs,
-        )
-        return {
-            "thread_data": {**updated_thread_data, "mounted_prompt_injected_path": mounted_path_str},
-            "messages": messages,
-        }
+    @override
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelCallResult:
+        return handler(self._with_ephemeral_mount_context(request))
+
+    @override
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelCallResult:
+        return await handler(self._with_ephemeral_mount_context(request))
