@@ -559,7 +559,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         self._research_fanout = bool(research_fanout)
         self._research_fanout_min_todos = max(2, int(research_fanout_min_todos))
 
-    def _should_plan(self, state: PlannerState) -> bool:
+    def _should_plan(self, state: PlannerState, runtime: Runtime) -> bool:
         if state.get("plan"):
             return False
         if state.get("todo_graph"):
@@ -567,6 +567,11 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         messages = state.get("messages", []) or []
         human_count = sum(1 for msg in messages if getattr(msg, "type", None) == "human")
         ai_count = sum(1 for msg in messages if getattr(msg, "type", None) == "ai")
+        mode = str(_runtime_context(runtime).get("mode") or "").strip().lower()
+        # In Plan mode, allow re-planning in ongoing chats even when there are
+        # prior AI turns, as long as no active plan/todo graph is linked.
+        if mode == "plan":
+            return human_count >= 1
         return human_count >= 1 and ai_count == 0
 
     def _invoke_planner(self, user_prompt: str) -> tuple[PlannerOutput, str]:
@@ -627,7 +632,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                         payload["jump_to"] = "end"
                 return payload
 
-        if not self._should_plan(state):
+        if not self._should_plan(state, runtime):
             return None
 
         messages = state.get("messages", []) or []

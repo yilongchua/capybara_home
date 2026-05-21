@@ -16,7 +16,20 @@ from src.config.handoffs_config import HandoffsConfig
 from src.models import ModelRouter, create_chat_model
 from src.sandbox.path_mapping import replace_virtual_path, to_virtual_path
 
-_EVALUATOR_PROMPT_TEMPLATE = "You are a strict evaluator. Respond with:\nVERDICT: PASS or FAIL\nCRITIQUE: <one concise paragraph>\n\nPlan title: {plan_title}\nPlan summary: {plan_summary}\n\nCandidate response:\n{candidate_response}\n"
+_EVALUATOR_PROMPT_TEMPLATE = (
+    "You are a strict evaluator for Plan mode. Respond with:\n"
+    "VERDICT: PASS or FAIL\n"
+    "CRITIQUE: <one concise paragraph>\n\n"
+    "Enforcement rules:\n"
+    "- A planning turn is only valid when both artifacts exist:\n"
+    "  1) /mnt/user-data/workspace/plan.md\n"
+    "  2) /mnt/user-data/workspace/plans/plan-*.md (timestamped trace artifact)\n"
+    "- If artifacts are missing or stale, return FAIL and instruct the agent to continue and create fresh plan artifacts now.\n"
+    "- Do not suggest recovering from previous plans; require creating a fresh plan turn artifact pair.\n\n"
+    "Plan title: {plan_title}\n"
+    "Plan summary: {plan_summary}\n\n"
+    "Candidate response:\n{candidate_response}\n"
+)
 
 
 class EvaluatorState(AgentState):
@@ -161,11 +174,32 @@ class EvaluatorMiddleware(AgentMiddleware[EvaluatorState]):
                 )
 
         plan_path = plan.get("plan_path")
+        latest_alias_path = plan.get("latest_alias_path")
         thread_data = state.get("thread_data") or {}
-        if self._handoffs_config.enabled and plan_path:
-            resolved_plan_path = replace_virtual_path(str(plan_path), thread_data)
-            if not Path(resolved_plan_path).exists():
-                failures.append("Planner handoff artifact plan.md is missing.")
+        if self._handoffs_config.enabled:
+            if not plan_path or not latest_alias_path:
+                failures.append(
+                    "Plan artifacts are incomplete: expected both versioned `plans/plan-*.md` and latest alias `plan.md` paths in plan state. Continue planning and create both now."
+                )
+            else:
+                resolved_plan_path = replace_virtual_path(str(plan_path), thread_data)
+                resolved_alias_path = replace_virtual_path(str(latest_alias_path), thread_data)
+                versioned_exists = Path(resolved_plan_path).exists()
+                alias_exists = Path(resolved_alias_path).exists()
+                plan_path_text = str(plan_path).strip()
+                alias_path_text = str(latest_alias_path).strip()
+                if "/workspace/plans/plan-" not in plan_path_text:
+                    failures.append(
+                        "Versioned plan trace artifact path is invalid. Continue planning and write a fresh timestamped plan file under `/mnt/user-data/workspace/plans/`."
+                    )
+                if not alias_path_text.endswith("/workspace/plan.md"):
+                    failures.append(
+                        "Latest plan alias path is invalid. Continue planning and update `/mnt/user-data/workspace/plan.md` for this turn."
+                    )
+                if not versioned_exists or not alias_exists:
+                    failures.append(
+                        "Required plan artifacts are missing on disk (`plan.md` + timestamped `plans/plan-*.md`). Continue planning and create both for this turn."
+                    )
 
         if domain == "research" and isinstance(nodes, list):
             synthesis_todos = [

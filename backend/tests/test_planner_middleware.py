@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from src.agents.middlewares.planner_middleware import (
     ClarificationOption,
@@ -16,7 +16,7 @@ from src.agents.middlewares.planner_middleware import (
 
 
 def _runtime(*, auto_mode: bool = False, plan_behavior: str = "plan_foreground") -> SimpleNamespace:
-    return SimpleNamespace(context={"auto_mode": auto_mode, "plan_behavior": plan_behavior})
+    return SimpleNamespace(context={"auto_mode": auto_mode, "plan_behavior": plan_behavior, "mode": "plan"})
 
 
 def _planner(monkeypatch) -> PlannerMiddleware:
@@ -109,3 +109,18 @@ def test_research_clarifications_normalize_recommended_first_and_option_count() 
     options = clarifications[0].options
     assert 2 <= len(options) <= 4
     assert options[0].recommended is True
+
+
+def test_plan_mode_replans_even_with_prior_ai_messages(monkeypatch) -> None:
+    middleware = _planner(monkeypatch)
+    state = {
+        "messages": [
+            HumanMessage(content="Initial request"),
+            AIMessage(content="Prior assistant response"),
+            HumanMessage(content="Come up with a plan for this implementation."),
+        ]
+    }
+    update = middleware.before_model(state, _runtime())
+    assert update is not None
+    assert update.get("jump_to") == "end"
+    assert update["plan"]["status"] == "draft"
