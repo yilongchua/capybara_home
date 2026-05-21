@@ -126,6 +126,22 @@ function parseErrorDetail(rawBody: string): string {
   return trimmed;
 }
 
+function isThreadLockError(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : JSON.stringify(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("http 409") ||
+    normalized.includes("http 423") ||
+    normalized.includes("in-flight runs") ||
+    normalized.includes("temporarily locked")
+  );
+}
+
 type ExecutePlanResponse = {
   acknowledged: boolean;
   status: "accepted" | "duplicate" | "conflict" | "failed";
@@ -213,6 +229,7 @@ function ChatPageContent({
   const [pendingExecutePlan, setPendingExecutePlan] = useState(false);
   const [isExecutingPlan, setIsExecutingPlan] = useState(false);
   const [runPollBump, setRunPollBump] = useState(0);
+  const [isMountBootstrapRunning, setIsMountBootstrapRunning] = useState(false);
   const [hiddenPlanEventKey, setHiddenPlanEventKey] = useState<string | null>(null);
   const [pendingMountPath, setPendingMountPath] = useState<string | null>(null);
   const suppressedAutoExecutePlanKeyRef = useRef<string | null>(null);
@@ -224,6 +241,10 @@ function ChatPageContent({
   const renameThread = useRenameThread();
   const mountStatusNoticeId = `mount-status-${threadId}`;
   const mountedNoticeId = `mount-ready-${threadId}`;
+  const mountBootstrapStorageKey = useMemo(
+    () => `mount.bootstrap.sent.${threadId}`,
+    [threadId],
+  );
 
   const isInFlightRunConflict = useCallback((statusCode: number, rawBody: string): boolean => {
     if (statusCode === 409 || statusCode === 423) {
@@ -462,10 +483,29 @@ function ChatPageContent({
     if (!pendingMountPath) {
       return;
     }
+    const normalizedPath = pendingMountPath.trim();
+    if (!normalizedPath) {
+      return;
+    }
+
+    // React Strict Mode can remount components in development, which resets
+    // refs and may dispatch this verification twice. Persist a per-thread/path
+    // marker so we only send once for the same mounted target.
+    const marker = `${threadId}:${normalizedPath}`;
+    if (typeof window !== "undefined") {
+      const sentMarker = window.sessionStorage.getItem(mountBootstrapStorageKey);
+      if (sentMarker === marker) {
+        mountBootstrapSentRef.current = threadId;
+        return;
+      }
+      window.sessionStorage.setItem(mountBootstrapStorageKey, marker);
+    }
+
     if (mountBootstrapSentRef.current === threadId) {
       return;
     }
     mountBootstrapSentRef.current = threadId;
+    setIsMountBootstrapRunning(true);
     void sendMessage(
       threadId,
       {
@@ -474,8 +514,17 @@ function ChatPageContent({
       },
       undefined,
       { queued: true },
-    );
-  }, [pendingMountPath, sendMessage, threadId]);
+    ).catch((error) => {
+      // Mount bootstrap verification is best-effort. During short overlap
+      // windows, thread-level lock conflicts are expected and already retried.
+      if (isThreadLockError(error)) {
+        return;
+      }
+      console.error("Mount bootstrap verification failed:", error);
+    }).finally(() => {
+      setIsMountBootstrapRunning(false);
+    });
+  }, [mountBootstrapStorageKey, pendingMountPath, sendMessage, threadId]);
 
   useEffect(() => {
     const currentTitle = String(thread.values.title ?? "").trim();
@@ -491,6 +540,12 @@ function ChatPageContent({
       return;
     }
     if (!mountedFolderFiles) {
+      return;
+    }
+    if (pendingMountPath && thread.messages.length === 0) {
+      return;
+    }
+    if (isMountBootstrapRunning || thread.isLoading || runningRun) {
       return;
     }
 
@@ -530,6 +585,9 @@ function ChatPageContent({
           id: mountedNoticeId,
         });
       } catch (error) {
+        if (isThreadLockError(error)) {
+          return;
+        }
         console.error("Failed to finalize mounted thread title:", error);
       } finally {
         if (finalizingMountedTitleRef.current === threadId) {
@@ -537,7 +595,7 @@ function ChatPageContent({
         }
       }
     })();
-  }, [mountStatusNoticeId, mountedFolder, mountedFolderFiles, mountedNoticeId, pendingMountPath, renameThread, thread.values.title, threadId]);
+  }, [isMountBootstrapRunning, mountStatusNoticeId, mountedFolder, mountedFolderFiles, mountedNoticeId, pendingMountPath, renameThread, runningRun, thread.isLoading, thread.messages.length, thread.values.title, threadId]);
 
   useEffect(() => {
     if (settings.context.mode !== "plan") {

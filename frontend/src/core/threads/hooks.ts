@@ -336,8 +336,36 @@ function isRetryableSubmitConflictError(error: unknown): boolean {
   const asAny = error as {
     status?: unknown;
     statusCode?: unknown;
-    response?: { status?: unknown };
+    response?: { status?: unknown; data?: unknown; body?: unknown };
+    detail?: unknown;
   };
+
+  const detailCandidates = [
+    asAny?.detail,
+    asAny?.response?.data,
+    asAny?.response?.body,
+  ]
+    .map((value) => {
+      if (typeof value === "string") {
+        return value.toLowerCase();
+      }
+      try {
+        return JSON.stringify(value).toLowerCase();
+      } catch {
+        return "";
+      }
+    })
+    .filter(Boolean);
+  const merged = [normalized, ...detailCandidates].join(" ");
+  const hasRetryableConflictDetail =
+    merged.includes("in-flight runs") ||
+    merged.includes("has in-flight runs") ||
+    merged.includes("temporarily locked") ||
+    merged.includes("no tasks in progress");
+  if (hasRetryableConflictDetail) {
+    return true;
+  }
+
   const status = typeof asAny?.status === "number"
     ? asAny.status
     : typeof asAny?.statusCode === "number"
@@ -346,19 +374,11 @@ function isRetryableSubmitConflictError(error: unknown): boolean {
         ? asAny.response.status
         : null;
 
-  const hasConflictStatus =
+  return (
     status === 409 ||
     status === 423 ||
     normalized.includes("http 409") ||
-    normalized.includes("http 423");
-  if (!hasConflictStatus) {
-    return false;
-  }
-
-  return (
-    normalized.includes("in-flight runs") ||
-    normalized.includes("temporarily locked") ||
-    normalized.includes("no tasks in progress")
+    normalized.includes("http 423")
   );
 }
 

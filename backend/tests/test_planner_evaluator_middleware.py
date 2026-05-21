@@ -377,9 +377,13 @@ def test_evaluator_marks_plan_passed_on_llm_pass(monkeypatch, tmp_path: Path):
             return SimpleNamespace(content="VERDICT: PASS\nCRITIQUE: Looks good.")
 
     monkeypatch.setattr("src.agents.middlewares.evaluator_middleware.create_chat_model", lambda **kwargs: _Model())
-    plan_file = tmp_path / ".handoffs" / "plan.md"
-    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    workspace = tmp_path / "workspace"
+    plans = workspace / "plans"
+    plans.mkdir(parents=True, exist_ok=True)
+    plan_file = plans / "plan-20260521-000000-sample.md"
     plan_file.write_text("# Plan", encoding="utf-8")
+    alias_file = workspace / "plan.md"
+    alias_file.write_text("# Plan", encoding="utf-8")
     middleware = EvaluatorMiddleware(
         router=_router(),
         requested_model="primary",
@@ -387,16 +391,21 @@ def test_evaluator_marks_plan_passed_on_llm_pass(monkeypatch, tmp_path: Path):
         handoffs_config=HandoffsConfig(enabled=True, dir=".handoffs"),
     )
     state = {
-        "plan": {"title": "Plan", "summary": "Summary", "plan_path": str(plan_file)},
+        "plan": {
+            "title": "Plan",
+            "summary": "Summary",
+            "plan_path": "/mnt/user-data/workspace/plans/plan-20260521-000000-sample.md",
+            "latest_alias_path": "/mnt/user-data/workspace/plan.md",
+        },
         "eval_attempts": 0,
         "todo_graph": {"nodes": [{"id": "todo-1", "status": "completed"}]},
         "messages": [AIMessage(content="Final answer")],
-        "thread_data": {"workspace_path": str(tmp_path)},
+        "thread_data": {"workspace_path": str(workspace)},
     }
     update = middleware.after_model(state, _runtime())
     assert update is not None
     assert update["plan"]["evaluation_status"] == "passed"
-    assert (tmp_path / ".handoffs" / "report.md").exists()
+    assert (workspace / ".handoffs" / "report.md").exists()
 
 
 def test_evaluator_resolves_virtual_plan_path(monkeypatch, tmp_path: Path):
@@ -407,6 +416,9 @@ def test_evaluator_resolves_virtual_plan_path(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("src.agents.middlewares.evaluator_middleware.create_chat_model", lambda **kwargs: _Model())
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
+    plans = workspace / "plans"
+    plans.mkdir(parents=True, exist_ok=True)
+    (plans / "plan-20260521-000000-sample.md").write_text("# Plan", encoding="utf-8")
     (workspace / "plan.md").write_text("# Plan", encoding="utf-8")
     middleware = EvaluatorMiddleware(
         router=_router(),
@@ -415,7 +427,12 @@ def test_evaluator_resolves_virtual_plan_path(monkeypatch, tmp_path: Path):
         handoffs_config=HandoffsConfig(enabled=True, dir=".handoffs"),
     )
     state = {
-        "plan": {"title": "Plan", "summary": "Summary", "plan_path": "/mnt/user-data/workspace/plan.md"},
+        "plan": {
+            "title": "Plan",
+            "summary": "Summary",
+            "plan_path": "/mnt/user-data/workspace/plans/plan-20260521-000000-sample.md",
+            "latest_alias_path": "/mnt/user-data/workspace/plan.md",
+        },
         "eval_attempts": 0,
         "todo_graph": {"nodes": [{"id": "todo-1", "status": "completed"}]},
         "messages": [AIMessage(content="Final answer")],
