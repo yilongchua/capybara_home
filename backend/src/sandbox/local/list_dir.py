@@ -1,72 +1,11 @@
-import fnmatch
 from pathlib import Path
 
-IGNORE_PATTERNS = [
-    # Version Control
-    ".git",
-    ".svn",
-    ".hg",
-    ".bzr",
-    # Dependencies
-    "node_modules",
-    "__pycache__",
-    ".venv",
-    "venv",
-    ".env",
-    "env",
-    ".tox",
-    ".nox",
-    ".eggs",
-    "*.egg-info",
-    "site-packages",
-    # Build outputs
-    "dist",
-    "build",
-    ".next",
-    ".nuxt",
-    ".output",
-    ".turbo",
-    "target",
-    "out",
-    # IDE & Editor
-    ".idea",
-    ".vscode",
-    "*.swp",
-    "*.swo",
-    "*~",
-    ".project",
-    ".classpath",
-    ".settings",
-    # OS generated
-    ".DS_Store",
-    "Thumbs.db",
-    "desktop.ini",
-    "*.lnk",
-    # Logs & temp files
-    "*.log",
-    "*.tmp",
-    "*.temp",
-    "*.bak",
-    "*.cache",
-    ".cache",
-    "logs",
-    # Coverage & test artifacts
-    ".coverage",
-    "coverage",
-    ".nyc_output",
-    "htmlcov",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-]
+from src.utils.runtime_artifact_ignore import is_runtime_artifact_name
 
 
 def _should_ignore(name: str) -> bool:
-    """Check if a file/directory name matches any ignore pattern."""
-    for pattern in IGNORE_PATTERNS:
-        if fnmatch.fnmatch(name, pattern):
-            return True
-    return False
+    """Check if a file/directory name matches runtime-artifact ignore policy."""
+    return is_runtime_artifact_name(name)
 
 
 def list_dir(path: str, max_depth: int = 2) -> list[str]:
@@ -80,7 +19,7 @@ def list_dir(path: str, max_depth: int = 2) -> list[str]:
 
     Returns:
         A list of absolute paths for files and directories,
-        excluding items matching IGNORE_PATTERNS.
+        excluding items matching runtime-artifact ignore policy.
     """
     result: list[str] = []
     root_path = Path(path).resolve()

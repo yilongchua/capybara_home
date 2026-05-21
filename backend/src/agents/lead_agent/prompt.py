@@ -110,6 +110,9 @@ After `ask_clarification` is called, execution stops and waits for the user's re
 - For PDF, PPT, Excel, and Word files, converted Markdown versions (*.md) are available alongside originals
 - For mounted-folder analysis, treat `/mnt/user-data/workspace/.docs` as the canonical mirrored source corpus and `/mnt/user-data/workspace/.analyse` as the derived analysis companion
 - Do not rely on `/mnt/user-data/mounted/...` for primary analysis when `.docs` mirror exists
+- Scope discipline: only list/read files directly required for the user request; avoid broad repo/workspace enumeration by default, except when executing explicit repository-wide indexing/mirroring tasks such as `/analyse`
+- Environment discipline: do NOT read non-essential runtime environment folders/files (for example `venv/`, `.venv/`, `env/`, `node_modules/`, build caches, lock/cache artifacts) unless they are explicitly required to complete the task.
+- Rebuild relevance rule: prefer files that contribute to understanding, changing, validating, or rebuilding the target project/workflow; skip environment/runtime artifacts that do not materially help that objective.
 - Never use host absolute paths (for example `/System/Volumes/Data/.../threads/<thread_id>/...`); thread ids are runtime-specific and already mapped into `/mnt/user-data/...`
 - All temporary work happens in `/mnt/user-data/workspace`
 - Final deliverables should be written in `/mnt/user-data/workspace` and presented using `present_files` tool
@@ -218,6 +221,9 @@ WORKING_DIRECTORY_SECTION = """<working_directory existed="true">
 - For PDF, PPT, Excel, and Word files, converted Markdown versions (*.md) are available alongside originals
 - For mounted-folder analysis, treat `/mnt/user-data/workspace/.docs` as the canonical mirrored source corpus and `/mnt/user-data/workspace/.analyse` as the derived analysis companion
 - Do not rely on `/mnt/user-data/mounted/...` for primary analysis when `.docs` mirror exists
+- Scope discipline: only list/read files directly required for the user request; avoid broad repo/workspace enumeration by default, except when executing explicit repository-wide indexing/mirroring tasks such as `/analyse`
+- Environment discipline: do NOT read non-essential runtime environment folders/files (for example `venv/`, `.venv/`, `env/`, `node_modules/`, build caches, lock/cache artifacts) unless they are explicitly required to complete the task.
+- Rebuild relevance rule: prefer files that contribute to understanding, changing, validating, or rebuilding the target project/workflow; skip environment/runtime artifacts that do not materially help that objective.
 - Never use host absolute paths (for example `/System/Volumes/Data/.../threads/<thread_id>/...`); thread ids are runtime-specific and already mapped into `/mnt/user-data/...`
 - All temporary work happens in `/mnt/user-data/workspace`
 - Final deliverables should be written in `/mnt/user-data/workspace` and presented using `present_files` tool
@@ -539,6 +545,7 @@ Primary objective:
 Allowed work in Plan Mode:
 - Inspect files, configs, logs, schemas, prompts, and repo structure.
 - Use read-only tools to understand scope, terminology, constraints, root cause, and environment shape.
+- Keep exploration task-scoped: avoid broad reads of non-essential runtime environment artifacts (for example `venv/`, `.venv/`, `env/`, `node_modules/`, caches) unless they are explicitly in scope for the planning objective, or the plan is specifically for `/analyse` mirror/index generation diagnostics.
 - Use narrow web or recall research only when it improves planning quality by reducing ambiguity or clarifying the problem space.
 
 Not allowed in Plan Mode:

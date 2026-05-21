@@ -23,6 +23,7 @@ from src.config.app_config import get_app_config
 from src.config.paths import get_paths
 from src.models.factory import create_chat_model
 from src.models.router import ModelRouter
+from src.utils.runtime_artifact_ignore import should_skip_relative_path
 
 logger = logging.getLogger(__name__)
 
@@ -54,25 +55,6 @@ _REPO_OVERVIEW_JOB_BY_THREAD: dict[str, str] = {}
 _REPO_OVERVIEW_TASKS: dict[str, asyncio.Task[None]] = {}
 _ANALYSE_LOCKS: dict[str, threading.Lock] = {}
 _ANALYSE_LOCKS_GUARD = threading.Lock()
-
-_SKIP_DIR_NAMES = {
-    ".git",
-    ".hg",
-    ".svn",
-    "__pycache__",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".runtime",
-    ".next",
-    ".turbo",
-    "node_modules",
-    "dist",
-    "build",
-    "coverage",
-    ".idea",
-    ".vscode",
-}
 
 _TEXT_EXTENSIONS = {
     ".md",
@@ -948,7 +930,7 @@ def _run_analyse_sync(thread_id: str, source_root: Path) -> _AnalyseArtifacts:
         if not source_path.is_file():
             continue
         rel = source_path.relative_to(source_root)
-        if any(part in _SKIP_DIR_NAMES for part in rel.parts):
+        if should_skip_relative_path(rel):
             continue
         if rel.parts and rel.parts[0] == ".docs":
             continue
@@ -1078,7 +1060,7 @@ def _run_analyse_sync(thread_id: str, source_root: Path) -> _AnalyseArtifacts:
 
     for p in sorted(source_root.rglob("*")):
         rel = p.relative_to(source_root)
-        if any(part in _SKIP_DIR_NAMES for part in rel.parts):
+        if should_skip_relative_path(rel):
             continue
         if rel.parts and rel.parts[0] == ".docs":
             continue
@@ -1456,7 +1438,7 @@ async def list_mount_folder_files(
         truncated = False
         for p in folder.rglob("*"):
             rel = p.relative_to(folder).as_posix()
-            if any(part in _SKIP_DIR_NAMES for part in rel.split("/")):
+            if should_skip_relative_path(rel):
                 continue
             if p.is_dir():
                 continue
