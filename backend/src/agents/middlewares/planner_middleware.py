@@ -564,7 +564,10 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         self._research_fanout_min_todos = max(2, int(research_fanout_min_todos))
 
     def _with_ephemeral_planner_context(self, request: ModelRequest) -> ModelRequest:
-        runtime_state = request.runtime.state if isinstance(request.runtime.state, dict) else {}
+        runtime_state = request.state if isinstance(getattr(request, "state", None), dict) else {}
+        if not runtime_state:
+            runtime_obj = getattr(request, "runtime", None)
+            runtime_state = getattr(runtime_obj, "state", {}) if isinstance(getattr(runtime_obj, "state", None), dict) else {}
         if not isinstance(runtime_state, dict):
             return request
         if bool(runtime_state.get("plan_evaluated")):

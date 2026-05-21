@@ -91,7 +91,10 @@ class PlanExecutionGateMiddleware(AgentMiddleware[PlanExecutionGateState]):
         )
 
     def _maybe_block(self, request: ToolCallRequest) -> Command | None:
-        state = request.runtime.state if request.runtime is not None else {}
+        state = request.state if isinstance(getattr(request, "state", None), dict) else {}
+        if not state:
+            runtime_obj = getattr(request, "runtime", None)
+            state = getattr(runtime_obj, "state", {}) if isinstance(getattr(runtime_obj, "state", None), dict) else {}
         plan = state.get("plan") if isinstance(state, dict) else None
         tool_name = str(request.tool_call.get("name") or "")
         tool_args = request.tool_call.get("args") or {}

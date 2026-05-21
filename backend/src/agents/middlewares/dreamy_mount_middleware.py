@@ -98,7 +98,10 @@ class DreamyMountMiddleware(AgentMiddleware[DreamyMountState]):
         if mode == "plan":
             return request
 
-        runtime_state = request.runtime.state if isinstance(request.runtime.state, dict) else {}
+        runtime_state = request.state if isinstance(getattr(request, "state", None), dict) else {}
+        if not runtime_state:
+            runtime_obj = getattr(request, "runtime", None)
+            runtime_state = getattr(runtime_obj, "state", {}) if isinstance(getattr(runtime_obj, "state", None), dict) else {}
         thread_data = runtime_state.get("thread_data") if isinstance(runtime_state, dict) else None
         if not isinstance(thread_data, dict):
             return request

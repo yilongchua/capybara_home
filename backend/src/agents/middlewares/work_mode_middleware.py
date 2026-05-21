@@ -301,7 +301,12 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
         return None
 
     def _with_ephemeral_instruction(self, request: ModelRequest) -> ModelRequest:
-        instruction_text = self._ephemeral_work_instruction(request.runtime.state if isinstance(request.runtime.state, dict) else None)
+        request_state = request.state if isinstance(getattr(request, "state", None), dict) else None
+        if request_state is None:
+            runtime_obj = getattr(request, "runtime", None)
+            runtime_state = getattr(runtime_obj, "state", None)
+            request_state = runtime_state if isinstance(runtime_state, dict) else None
+        instruction_text = self._ephemeral_work_instruction(request_state)
         if not instruction_text:
             return request
         msg = SystemMessage(name="work_mode_instruction", content=f"<work_mode_instruction>\n{instruction_text}\n</work_mode_instruction>")
