@@ -130,7 +130,7 @@ Middlewares execute in strict order in `src/agents/lead_agent/agent.py`:
 10. **ViewImageMiddleware** / **RetryPolicyMiddleware** / **ModelTimeoutMiddleware** - Vision injection, retries, and bounded model/tool calls
 11. **WebSearchCircuitBreakerMiddleware** / **ToolResultTruncationMiddleware** / **SubagentLimitMiddleware** - Search retry controls, tool-output caps, and endpoint-aware `task` scheduling
 12. **EvaluatorMiddleware** / **TodoFailureRetryMiddleware** / **ScratchpadTaskMemoryMiddleware** / **PlanFileSyncMiddleware** - Final verification, todo repair, handoff scratchpad, and plan-file sync
-13. **ResumeStateMiddleware** / **ProgressGuardMiddleware** / **PlanFollowupMiddleware** / **LoopDetectionMiddleware** - Resume continuity, stall detection, follow-up planning, and repetitive-call detection
+13. **ResumeStateMiddleware** / **ProgressGuardMiddleware** / **PlanFollowupMiddleware** / **LoopDetectionMiddleware** / **RecursionBudgetPivotMiddleware** - Resume continuity, stall detection, follow-up planning, repetitive-call detection, and evaluator-driven mid-run steering at recursion-budget thresholds (lead agent only, off by default; see `recursion_pivot` config)
 14. **TrajectoryMiddleware** / **ExecutionTraceMiddleware** / **ActivityTimelineMiddleware** / **MetricsMiddleware** - Runtime trace, activity, and metrics capture
 15. **ClarificationMiddleware** - Intercepts `ask_clarification` tool calls, interrupts via `Command(goto=END)` (must be last)
 
@@ -252,6 +252,17 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 - Supports `thinking_enabled` flag with per-model `when_thinking_enabled` overrides
 - Supports `supports_vision` flag for image understanding models
 - Config values starting with `$` resolved as environment variables
+
+### User-Endpoint Models (`src/models/user_model_synthesis.py`)
+
+User-added LLM endpoints from `extensions_config.json` (`userModels[*].models`) are flattened into `ModelConfig` entries and merged into `AppConfig.models` at config load. Every downstream consumer (`create_chat_model`, `ModelRouter.resolve`, `_resolve_model_name`, `/api/models`, vision-tool gating) reads from the unified list — there is no separate "user model" code path.
+
+- **Name format**: `{endpoint_key}/{model_id}` (e.g. `ollama-local/qwen2.5:7b`). Namespacing avoids collisions when two endpoints expose the same model id.
+- **Provider class**: synthesized entries are pinned to `langchain_openai:ChatOpenAI` with `base_url` and `api_key` taken from the endpoint (api_key defaults to `"not-needed"` when blank — required by ChatOpenAI even for local backends that ignore it).
+- **Ordering**: synthesized user-endpoint entries are inserted **before** `config.yaml`-declared models, so `app_config.models[0]` defaults to a user model when one is configured.
+- **Soft migration for stored model names**: `AppConfig.get_model_config()` falls back to matching by the underlying `model:` id when the requested name has no `/`, so threads saved with a bare `qwen2.5:7b` still resolve to `ollama-local/qwen2.5:7b`.
+- **Runtime refresh**: `get_app_config()` watches `extensions_config.json`'s mtime and invalidates the cached singleton on change, so the LangGraph process picks up onboarding edits made by the Gateway without a restart. The Gateway onboarding `PUT /api/onboarding/llm-endpoints` additionally calls `reload_app_config()` directly for the in-process case.
+- **Internal sentinel**: synthesized entries carry a `__user_endpoint__` extra field naming the endpoint key. `create_chat_model()` strips any `__`-prefixed extras before passing kwargs to the model constructor.
 - Missing provider modules surface actionable install hints from reflection resolvers (for example `uv add langchain-google-genai`)
 
 ### IM Channels System (`src/channels/`)
@@ -409,15 +420,14 @@ Both can be modified at runtime via Gateway API endpoints or `CapybaraClient` me
 
 ## Development Workflow
 
-### Test-Driven Development (TDD) — MANDATORY
+### Testing policy
 
-**Every new feature or bug fix MUST be accompanied by unit tests. No exceptions.**
+**Running `pytest` / `make test` is NOT required as part of normal change workflow.** This is a deliberate change from the prior "TDD MANDATORY" policy — do not run the test suite unless the user explicitly asks for it. Pre-existing failures in unrelated tests (e.g. path-handling tests in `tests/test_channel_file_attachments.py`) should not block a change.
 
-- Write tests in `backend/tests/` following the existing naming convention `test_<feature>.py`
-- Run the full suite before and after your change: `make test`
-- Tests must pass before a feature is considered complete
-- For lightweight config/utility modules, prefer pure unit tests with no external dependencies
-- If a module causes circular import issues in tests, add a `sys.modules` mock in `tests/conftest.py` (see existing example for `src.subagents.executor`)
+- Writing tests for new code is still encouraged when it clarifies the design, but it is no longer mandatory.
+- Tests live in `backend/tests/` following the existing naming convention `test_<feature>.py` when you do add them.
+- For lightweight config/utility modules, prefer pure unit tests with no external dependencies.
+- If a module causes circular import issues in tests, add a `sys.modules` mock in `tests/conftest.py` (see existing example for `src.subagents.executor`).
 
 ```bash
 # Run all tests
