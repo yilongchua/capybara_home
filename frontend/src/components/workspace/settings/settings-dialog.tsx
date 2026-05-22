@@ -11,6 +11,7 @@ import {
   BotIcon,
   GlobeIcon,
   ImageIcon,
+  Share2Icon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -26,6 +27,7 @@ import { AppearanceSettingsPage } from "@/components/workspace/settings/appearan
 import { AutoresearchCleanupSettingsPage } from "@/components/workspace/settings/autoresearch-cleanup-settings-page";
 import { BrowserSettingsPage } from "@/components/workspace/settings/browser-settings-page";
 import { ComfyuiSettingsPage } from "@/components/workspace/settings/comfyui-settings-page";
+import { EmbeddingSettingsPage } from "@/components/workspace/settings/embedding-settings-page";
 import { LlmSettingsPage } from "@/components/workspace/settings/llm-settings-page";
 import { MemorySettingsPage } from "@/components/workspace/settings/memory-settings-page";
 import { NotificationSettingsPage } from "@/components/workspace/settings/notification-settings-page";
@@ -42,6 +44,7 @@ type SettingsSection =
   | "tools"
   | "notification"
   | "llm"
+  | "embedding"
   | "browser"
   | "comfyui"
   | "about";
@@ -93,6 +96,11 @@ export function SettingsDialog(props: SettingsDialogProps) {
       },
       { id: "tools", label: t.settings.sections.tools, icon: WrenchIcon },
       { id: "llm", label: t.settings.sections.llm, icon: BotIcon },
+      {
+        id: "embedding",
+        label: t.settings.sections.embedding,
+        icon: Share2Icon,
+      },
       { id: "browser", label: t.settings.sections.browser, icon: GlobeIcon },
       { id: "comfyui", label: t.settings.sections.comfyui, icon: ImageIcon },
       { id: "about", label: t.settings.sections.about, icon: InfoIcon },
@@ -105,6 +113,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
       t.settings.sections.tools,
       t.settings.sections.notification,
       t.settings.sections.llm,
+      t.settings.sections.embedding,
       t.settings.sections.browser,
       t.settings.sections.comfyui,
       t.settings.sections.about,
@@ -159,6 +168,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
               {activeSection === "tools" && <ToolSettingsPage />}
               {activeSection === "notification" && <NotificationSettingsPage />}
               {activeSection === "llm" && <LlmSettingsPage />}
+              {activeSection === "embedding" && <EmbeddingSettingsPage />}
               {activeSection === "browser" && <BrowserSettingsPage />}
               {activeSection === "comfyui" && <ComfyuiSettingsPage />}
               {activeSection === "about" && <AboutSettingsPage />}

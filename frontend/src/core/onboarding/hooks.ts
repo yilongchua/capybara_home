@@ -1,14 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  loadEmbeddingEndpoints,
   loadLlmEndpoints,
+  saveEmbeddingEndpoints,
   saveLlmEndpoints,
   testComfyuiEndpoint,
+  testEmbeddingEndpoint,
   testGenericEndpoint,
   testLlmEndpoint,
 } from "./api";
 import type {
   ComfyuiTestResult,
+  EmbeddingTestResult,
   GenericTestResult,
   LlmTestResult,
   UserLlmEndpoint,
@@ -30,6 +34,9 @@ export function useSaveLlmEndpoints() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["llmEndpoints"] });
+      // /api/models is derived from user endpoints — refresh the chatbox
+      // dropdown so newly added models appear without a page reload.
+      void queryClient.invalidateQueries({ queryKey: ["models"] });
     },
   });
 }
@@ -49,5 +56,40 @@ export function useTestComfyuiEndpoint() {
 export function useTestGenericEndpoint() {
   return useMutation<GenericTestResult, Error, { url: string; timeoutSeconds?: number }>({
     mutationFn: ({ url, timeoutSeconds }) => testGenericEndpoint(url, timeoutSeconds),
+  });
+}
+
+export function useEmbeddingEndpoints() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["embeddingEndpoints"],
+    queryFn: () => loadEmbeddingEndpoints(),
+  });
+  return {
+    endpoints: data?.userEmbeddingModels ?? ({} as Record<string, UserLlmEndpoint>),
+    isLoading,
+    error,
+  };
+}
+
+export function useSaveEmbeddingEndpoints() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (userEmbeddingModels: Record<string, UserLlmEndpoint>) => {
+      await saveEmbeddingEndpoints(userEmbeddingModels);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["embeddingEndpoints"] });
+    },
+  });
+}
+
+export function useTestEmbeddingEndpoint() {
+  return useMutation<
+    EmbeddingTestResult,
+    Error,
+    { baseUrl: string; apiKey: string; model?: string }
+  >({
+    mutationFn: ({ baseUrl, apiKey, model }) =>
+      testEmbeddingEndpoint(baseUrl, apiKey, model),
   });
 }

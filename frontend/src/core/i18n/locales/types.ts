@@ -274,6 +274,7 @@ export interface Translations {
       tools: string;
       notification: string;
       llm: string;
+      embedding: string;
       browser: string;
       comfyui: string;
       about: string;
@@ -404,6 +405,11 @@ export interface Translations {
       deleteConfirm: string;
       endpointEnabled: string;
       endpointDisabled: string;
+    };
+    embedding: {
+      title: string;
+      description: string;
+      knowledgeGraphHint: string;
     };
     browser: {
       title: string;

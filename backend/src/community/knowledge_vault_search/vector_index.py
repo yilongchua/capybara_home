@@ -51,6 +51,33 @@ class OpenAICompatibleEmbedder:
         self._configured_model = str(model_name or "").strip() or None
 
     def _resolve_client_config(self) -> tuple[str | None, str | None, str | None]:
+        # Prefer user-onboarded embedding endpoints (knowledge graph tab) over
+        # generic chat models so embeddings never accidentally route to a chat
+        # backend that lacks an /embeddings handler.
+        try:
+            from src.config.extensions_config import get_extensions_config
+
+            ext = get_extensions_config()
+        except Exception:
+            ext = None
+
+        if ext is not None and getattr(ext, "user_embedding_models", None):
+            for endpoint in ext.user_embedding_models.values():
+                if not endpoint.enabled:
+                    continue
+                base_url = (endpoint.base_url or "").strip()
+                if not base_url:
+                    continue
+                api_key = (endpoint.api_key or "").strip() or None
+                model_name = (
+                    self._configured_model
+                    or endpoint.default_model
+                    or (endpoint.models[0] if endpoint.models else "")
+                ).strip()
+                if not model_name:
+                    continue
+                return base_url.rstrip("/"), api_key, model_name
+
         try:
             app_config = get_app_config()
         except Exception:

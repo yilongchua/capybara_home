@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.config.extensions_config import (
     ExtensionsConfig,
@@ -95,6 +95,7 @@ class TestGenericResponse(BaseModel):
 
 
 class LlmEndpointsMap(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     user_models: dict[str, UserLlmEndpointConfig] = Field(
         ...,
         description="Map of endpoint name to configuration",
@@ -103,10 +104,41 @@ class LlmEndpointsMap(BaseModel):
 
 
 class LlmEndpointsResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     user_models: dict[str, UserLlmEndpointConfig] = Field(
         default_factory=dict,
         alias="userModels",
     )
+
+
+class EmbeddingEndpointsMap(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    user_embedding_models: dict[str, UserLlmEndpointConfig] = Field(
+        ...,
+        description="Map of embedding endpoint name to configuration",
+        alias="userEmbeddingModels",
+    )
+
+
+class EmbeddingEndpointsResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    user_embedding_models: dict[str, UserLlmEndpointConfig] = Field(
+        default_factory=dict,
+        alias="userEmbeddingModels",
+    )
+
+
+class TestEmbeddingRequest(BaseModel):
+    base_url: str = Field(..., description="OpenAI-compatible base URL (e.g. http://localhost:11434/v1)")
+    api_key: str = Field(default="", description="Optional API key")
+    model: str | None = Field(default=None, description="Optional model id to probe with /embeddings; if omitted only /models is hit")
+
+
+class TestEmbeddingResponse(BaseModel):
+    ok: bool
+    models: list[str] = Field(default_factory=list, description="Discovered model IDs")
+    dimensions: int | None = Field(default=None, description="Embedding vector size if a probe model was provided")
+    error: str | None = None
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -144,7 +176,8 @@ def _resolve_save_path() -> Path:
 
 
 def _save_extensions_with_user_models(
-    user_models: dict[str, UserLlmEndpointConfig],
+    user_models: dict[str, UserLlmEndpointConfig] | None = None,
+    user_embedding_models: dict[str, UserLlmEndpointConfig] | None = None,
 ) -> None:
     config_path = _resolve_save_path()
     if not config_path.exists():
@@ -160,7 +193,10 @@ def _save_extensions_with_user_models(
             logger.warning("Existing extensions config is not valid JSON (%s); overwriting", exc)
             raw = {}
 
-    raw["userModels"] = {name: m.model_dump() for name, m in user_models.items()}
+    if user_models is not None:
+        raw["userModels"] = {name: m.model_dump() for name, m in user_models.items()}
+    if user_embedding_models is not None:
+        raw["userEmbeddingModels"] = {name: m.model_dump() for name, m in user_embedding_models.items()}
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
@@ -171,6 +207,18 @@ def _save_extensions_with_user_models(
     logger.info("User LLM endpoints saved to: %s", config_path)
     reload_extensions_config()
     logger.info("Extensions config reloaded after saving user models.")
+
+    # AppConfig.models is derived from user endpoints; reload so the in-process
+    # singleton (used by /api/models, create_chat_model, ModelRouter, etc.)
+    # surfaces the new entries without a restart. The LangGraph process sees
+    # the change via its own mtime check on extensions_config.json.
+    try:
+        from src.config.app_config import reload_app_config
+
+        reload_app_config()
+        logger.info("App config reloaded so new user models surface in /api/models.")
+    except Exception as exc:
+        logger.warning("Failed to reload app config after saving user models: %s", exc)
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
@@ -282,9 +330,98 @@ async def list_llm_endpoints() -> LlmEndpointsResponse:
 )
 async def save_llm_endpoints(request: LlmEndpointsMap) -> LlmEndpointsResponse:
     try:
-        _save_extensions_with_user_models(request.user_models)
+        _save_extensions_with_user_models(user_models=request.user_models)
         reloaded = get_extensions_config()
         return LlmEndpointsResponse(user_models=reloaded.user_models)
     except Exception as exc:
         logger.error("Failed to save LLM endpoints: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to save LLM endpoints: {exc}")
+
+
+@router.get(
+    "/embedding-endpoints",
+    response_model=EmbeddingEndpointsResponse,
+    summary="List User Embedding Endpoints",
+    description="Return all user-added embedding endpoints from extensions config.",
+)
+async def list_embedding_endpoints() -> EmbeddingEndpointsResponse:
+    config = _load_current_config()
+    return EmbeddingEndpointsResponse(user_embedding_models=config.user_embedding_models)
+
+
+@router.put(
+    "/embedding-endpoints",
+    response_model=EmbeddingEndpointsResponse,
+    summary="Save User Embedding Endpoints",
+    description="Save user-added embedding endpoints (used by the knowledge graph) to extensions config.",
+)
+async def save_embedding_endpoints(request: EmbeddingEndpointsMap) -> EmbeddingEndpointsResponse:
+    try:
+        _save_extensions_with_user_models(user_embedding_models=request.user_embedding_models)
+        reloaded = get_extensions_config()
+        return EmbeddingEndpointsResponse(user_embedding_models=reloaded.user_embedding_models)
+    except Exception as exc:
+        logger.error("Failed to save embedding endpoints: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to save embedding endpoints: {exc}")
+
+
+@router.post(
+    "/test-embedding",
+    response_model=TestEmbeddingResponse,
+    summary="Test Embedding Endpoint",
+    description="Hit /v1/models on an OpenAI-compatible embedding endpoint, and optionally POST /v1/embeddings with a probe model.",
+)
+async def test_embedding_endpoint(request: TestEmbeddingRequest) -> TestEmbeddingResponse:
+    base_url = request.base_url.rstrip("/")
+    base_v1 = base_url if base_url.endswith("/v1") else f"{base_url}/v1"
+    models_url = f"{base_v1}/models"
+    embeddings_url = f"{base_v1}/embeddings"
+
+    headers = {}
+    if request.api_key:
+        headers["Authorization"] = f"Bearer {request.api_key}"
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(models_url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+
+        model_ids: list[str] = []
+        models_data = data.get("data") or data.get("models") or []
+        for m in models_data:
+            if isinstance(m, dict):
+                mid = m.get("id") or m.get("name") or m.get("model")
+                if mid:
+                    model_ids.append(str(mid))
+            elif isinstance(m, str):
+                model_ids.append(m)
+
+        dimensions: int | None = None
+        if request.model:
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    probe = await client.post(
+                        embeddings_url,
+                        headers={**headers, "Content-Type": "application/json"},
+                        json={"model": request.model, "input": "capybara embedding healthcheck"},
+                    )
+                    probe.raise_for_status()
+                    payload = probe.json()
+                items = payload.get("data") if isinstance(payload, dict) else None
+                if isinstance(items, list) and items:
+                    vec = items[0].get("embedding") if isinstance(items[0], dict) else None
+                    if isinstance(vec, list):
+                        dimensions = len(vec)
+            except Exception as probe_exc:
+                return TestEmbeddingResponse(ok=False, models=model_ids, error=f"Probe failed: {probe_exc}")
+
+        return TestEmbeddingResponse(ok=True, models=model_ids, dimensions=dimensions)
+    except httpx.TimeoutException:
+        return TestEmbeddingResponse(ok=False, error="Connection timed out")
+    except httpx.ConnectError:
+        return TestEmbeddingResponse(ok=False, error="Connection refused — is the server running?")
+    except httpx.HTTPStatusError as exc:
+        return TestEmbeddingResponse(ok=False, error=f"HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+    except Exception as exc:
+        return TestEmbeddingResponse(ok=False, error=str(exc))

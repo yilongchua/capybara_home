@@ -327,6 +327,7 @@ export const enUS: Translations = {
       tools: "Tools",
       notification: "Notification",
       llm: "LLM Providers",
+      embedding: "Embedding Models",
       browser: "Browser Tool",
       comfyui: "ComfyUI",
       about: "About",
@@ -461,6 +462,11 @@ export const enUS: Translations = {
       deleteConfirm: "Are you sure you want to remove this endpoint?",
       endpointEnabled: "Enabled",
       endpointDisabled: "Disabled",
+    },
+    embedding: {
+      title: "Embedding Models",
+      description: "Add and manage OpenAI-compatible embedding endpoints used by the knowledge graph (Ollama, LM Studio, or custom).",
+      knowledgeGraphHint: "These endpoints feed the knowledge graph vector index. The first enabled embedding endpoint is used.",
     },
     browser: {
       title: "Browser Tool",

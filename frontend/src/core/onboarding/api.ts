@@ -2,6 +2,8 @@ import { getBackendBaseURL } from "@/core/config";
 
 import type {
   ComfyuiTestResult,
+  EmbeddingEndpointsData,
+  EmbeddingTestResult,
   GenericTestResult,
   LlmEndpointsData,
   LlmTestResult,
@@ -58,4 +60,41 @@ export async function saveLlmEndpoints(userModels: Record<string, UserLlmEndpoin
     },
   );
   return response.json() as Promise<LlmEndpointsData>;
+}
+
+export async function testEmbeddingEndpoint(
+  baseUrl: string,
+  apiKey: string,
+  model?: string,
+) {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/onboarding/test-embedding`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, model }),
+    },
+  );
+  return response.json() as Promise<EmbeddingTestResult>;
+}
+
+export async function loadEmbeddingEndpoints() {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/onboarding/embedding-endpoints`,
+  );
+  return response.json() as Promise<EmbeddingEndpointsData>;
+}
+
+export async function saveEmbeddingEndpoints(
+  userEmbeddingModels: Record<string, UserLlmEndpoint>,
+) {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/onboarding/embedding-endpoints`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userEmbeddingModels }),
+    },
+  );
+  return response.json() as Promise<EmbeddingEndpointsData>;
 }

@@ -14,6 +14,17 @@ export interface LlmEndpointsData {
   userModels: Record<string, UserLlmEndpoint>;
 }
 
+export interface EmbeddingEndpointsData {
+  userEmbeddingModels: Record<string, UserLlmEndpoint>;
+}
+
+export interface EmbeddingTestResult {
+  ok: boolean;
+  models: string[];
+  dimensions: number | null;
+  error: string | null;
+}
+
 export interface LlmTestResult {
   ok: boolean;
   models: string[];

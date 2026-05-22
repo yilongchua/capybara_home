@@ -24,11 +24,11 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { useI18n } from "@/core/i18n/hooks";
-import { testLlmEndpoint } from "@/core/onboarding/api";
+import { testEmbeddingEndpoint } from "@/core/onboarding/api";
 import {
-  useLlmEndpoints,
-  useSaveLlmEndpoints,
-  useTestLlmEndpoint,
+  useEmbeddingEndpoints,
+  useSaveEmbeddingEndpoints,
+  useTestEmbeddingEndpoint,
 } from "@/core/onboarding";
 import type { UserLlmEndpoint } from "@/core/onboarding/types";
 import { cn } from "@/lib/utils";
@@ -58,7 +58,7 @@ const PROVIDER_DEFAULTS: Record<
   },
 };
 
-export function LlmSettingsPage() {
+export function EmbeddingSettingsPage() {
   const { t } = useI18n();
 
   const [provider, setProvider] = useState<ProviderType>("ollama");
@@ -74,7 +74,11 @@ export function LlmSettingsPage() {
     async (key: string, ep: UserLlmEndpoint) => {
       setRowTests((s) => ({ ...s, [key]: { testing: true, ok: null } }));
       try {
-        const result = await testLlmEndpoint(ep.base_url, ep.api_key);
+        const result = await testEmbeddingEndpoint(
+          ep.base_url,
+          ep.api_key,
+          ep.default_model || ep.models[0],
+        );
         setRowTests((s) => ({
           ...s,
           [key]: { testing: false, ok: result.ok, error: result.error },
@@ -94,13 +98,17 @@ export function LlmSettingsPage() {
   );
 
   const queryClient = useQueryClient();
-  const { endpoints, isLoading: loadingEndpoints } = useLlmEndpoints();
+  const { endpoints, isLoading: loadingEndpoints } = useEmbeddingEndpoints();
   const handleRefresh = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["llmEndpoints"] });
-    void queryClient.invalidateQueries({ queryKey: ["models"] });
+    void queryClient.invalidateQueries({ queryKey: ["embeddingEndpoints"] });
   }, [queryClient]);
-  const { mutate: testEndpoint, data: testResult, isPending: testing, reset: resetTest } = useTestLlmEndpoint();
-  const { mutate: saveEndpoints, isPending: saving } = useSaveLlmEndpoints();
+  const {
+    mutate: testEndpoint,
+    data: testResult,
+    isPending: testing,
+    reset: resetTest,
+  } = useTestEmbeddingEndpoint();
+  const { mutate: saveEndpoints, isPending: saving } = useSaveEmbeddingEndpoints();
 
   function handleProviderChange(p: ProviderType) {
     setProvider(p);
@@ -124,7 +132,8 @@ export function LlmSettingsPage() {
   }
 
   function buildEndpointKey(): string {
-    const base = displayName.trim().toLowerCase().replace(/\s+/g, "-") || provider;
+    const base =
+      displayName.trim().toLowerCase().replace(/\s+/g, "-") || provider;
     if (!(base in endpoints)) return base;
     let idx = 2;
     while (`${base}-${idx}` in endpoints) {
@@ -205,15 +214,19 @@ export function LlmSettingsPage() {
   }
 
   const collidingDisplayName = displayNameCollision(displayName);
-  const canAdd = !!displayName.trim() && !!baseUrl.trim() && !collidingDisplayName;
+  const canAdd =
+    !!displayName.trim() && !!baseUrl.trim() && !collidingDisplayName;
   const isEditing = editingKey !== null;
 
   return (
     <SettingsSection
-      title={t.settings.llm.title}
-      description={t.settings.llm.description}
+      title={t.settings.embedding.title}
+      description={t.settings.embedding.description}
     >
-      {/* Existing endpoints — shown first so users always see what they have */}
+      <p className="text-muted-foreground mb-4 text-xs">
+        {t.settings.embedding.knowledgeGraphHint}
+      </p>
+
       <div className="mb-6">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-medium">
@@ -349,41 +362,45 @@ export function LlmSettingsPage() {
         </h3>
       </div>
 
-      {/* Provider selector */}
       <div className="mb-4">
         <label className="text-sm font-medium mb-2 block">
           {t.settings.llm.providerType}
         </label>
         <div className="flex gap-2">
-          {(Object.entries(PROVIDER_DEFAULTS) as [ProviderType, typeof PROVIDER_DEFAULTS[ProviderType]][]).map(
-            ([key, cfg]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => handleProviderChange(key)}
-                className={cn(
-                  "flex items-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium transition-colors",
-                  provider === key
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border hover:bg-muted text-muted-foreground",
-                )}
-              >
-                {cfg.icon}
-                {cfg.label}
-              </button>
-            ),
-          )}
+          {(
+            Object.entries(PROVIDER_DEFAULTS) as [
+              ProviderType,
+              (typeof PROVIDER_DEFAULTS)[ProviderType],
+            ][]
+          ).map(([key, cfg]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => handleProviderChange(key)}
+              className={cn(
+                "flex items-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium transition-colors",
+                provider === key
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border hover:bg-muted text-muted-foreground",
+              )}
+            >
+              {cfg.icon}
+              {cfg.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Form fields */}
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium">{t.settings.llm.displayName}</label>
+          <label className="text-sm font-medium">
+            {t.settings.llm.displayName}
+          </label>
           <input
             className={cn(
               "border-input bg-background focus-visible:ring-ring w-full rounded-md border px-3 py-1.5 text-sm focus-visible:ring-1 focus-visible:outline-none",
-              collidingDisplayName && "border-destructive focus-visible:ring-destructive",
+              collidingDisplayName &&
+                "border-destructive focus-visible:ring-destructive",
             )}
             placeholder={t.settings.llm.displayNamePlaceholder}
             value={displayName}
@@ -391,7 +408,8 @@ export function LlmSettingsPage() {
           />
           {collidingDisplayName && (
             <p className="text-destructive text-xs">
-              Display name already used by "{collidingDisplayName}". Pick a unique name.
+              Display name already used by &quot;{collidingDisplayName}&quot;.
+              Pick a unique name.
             </p>
           )}
         </div>
@@ -416,7 +434,6 @@ export function LlmSettingsPage() {
         </div>
       </div>
 
-      {/* Test + Add actions */}
       <div className="mb-4 flex items-center gap-2">
         <Button
           size="sm"
@@ -431,11 +448,7 @@ export function LlmSettingsPage() {
           )}
           {testing ? t.settings.llm.testing : t.settings.llm.testConnection}
         </Button>
-        <Button
-          size="sm"
-          disabled={!canAdd || saving}
-          onClick={handleAdd}
-        >
+        <Button size="sm" disabled={!canAdd || saving} onClick={handleAdd}>
           <PlusIcon className="size-3.5" />
           {isEditing ? t.settings.llm.saveProvider : t.settings.llm.addProvider}
         </Button>
@@ -446,7 +459,6 @@ export function LlmSettingsPage() {
         )}
       </div>
 
-      {/* Test result: discovered models */}
       {testResult && !testResult.ok && (
         <div className="text-destructive mb-3 text-sm">
           {t.settings.llm.connectionFailed}: {testResult.error}
@@ -481,7 +493,6 @@ export function LlmSettingsPage() {
           )}
         </div>
       )}
-
     </SettingsSection>
   );
 }
