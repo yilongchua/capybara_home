@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.agents.memory.summarization_hook import memory_flush_hook
 from src.agents.middlewares.summarization_middleware import (
+    DEFAULT_SUMMARY_PROMPT,
     BeforeSummarizationHook,
     CapybaraSummarizationMiddleware,
     SummarizationEvent,
@@ -43,7 +44,14 @@ def _ai_tool(path: str) -> tuple[AIMessage, ToolMessage]:
     return ai, tm
 
 
-def _make_mw(*, hooks=None, skill_count=3, skill_tokens=10_000) -> CapybaraSummarizationMiddleware:
+def _make_mw(
+    *,
+    hooks=None,
+    skill_count=3,
+    skill_tokens=10_000,
+    trigger=("messages", 1),
+    keep=("messages", 1),
+) -> CapybaraSummarizationMiddleware:
     model_mock = MagicMock()
     model_mock._llm_type = "mock"
     model_mock.profile = None
@@ -51,8 +59,8 @@ def _make_mw(*, hooks=None, skill_count=3, skill_tokens=10_000) -> CapybaraSumma
     with patch("langchain.agents.middleware.summarization.init_chat_model", return_value=model_mock):
         mw = CapybaraSummarizationMiddleware(
             model="mock-model",
-            trigger=("messages", 1),  # trigger immediately for testing
-            keep=("messages", 1),
+            trigger=trigger,
+            keep=keep,
             before_summarization=hooks or [],
             preserve_recent_skill_count=skill_count,
             preserve_recent_skill_tokens=skill_tokens,
@@ -224,6 +232,12 @@ def test_hook_protocol_satisfied():
     assert isinstance(my_hook, BeforeSummarizationHook)
 
 
+def test_default_summary_prompt_owned_by_capybara_middleware():
+    mw = _make_mw()
+
+    assert mw.summary_prompt == DEFAULT_SUMMARY_PROMPT
+
+
 def test_force_compaction_compacts_even_when_threshold_not_met():
     mw = _make_mw()
     mw._should_summarize = lambda messages, total_tokens: False  # type: ignore[method-assign]
@@ -247,6 +261,55 @@ def test_default_behavior_still_skips_when_threshold_not_met():
 
     result = mw.before_model(state, _runtime())
     assert result is None
+
+
+def test_token_compaction_defers_once_for_fresh_tool_results():
+    mw = _make_mw(trigger=("tokens", 20), keep=("tokens", 10))
+    ai, tool = _ai_tool("report.md")
+    messages = [_human("analyse"), ai, tool]
+    for i, msg in enumerate(messages):
+        msg.id = f"msg-{i}"
+    state = {"messages": messages}
+
+    result = mw.before_model(state, _runtime())
+
+    assert result == {
+        "deferred_compaction": True,
+        "deferred_compaction_message_count": len(messages),
+    }
+
+
+def test_deferred_compaction_runs_on_next_user_turn():
+    mw = _make_mw(trigger=("tokens", 20), keep=("tokens", 10))
+    messages = [_human("analyse"), AIMessage(content="done"), _human("next question")]
+    for i, msg in enumerate(messages):
+        msg.id = f"msg-{i}"
+    state = {"messages": messages, "deferred_compaction": True, "deferred_compaction_message_count": 2}
+
+    result = mw.before_model(state, _runtime())
+
+    assert result is not None
+    assert result["deferred_compaction"] is False
+    assert result["deferred_compaction_message_count"] is None
+    assert "messages" in result
+
+
+def test_deferred_compaction_grace_is_bounded():
+    mw = _make_mw(trigger=("tokens", 20), keep=("tokens", 10))
+    messages = [_human("analyse")]
+    for i in range(6):
+        _, tool = _ai_tool(f"report-{i}.md")
+        messages.append(tool)
+    for i, msg in enumerate(messages):
+        msg.id = f"msg-{i}"
+    state = {"messages": messages, "deferred_compaction": True, "deferred_compaction_message_count": 1}
+
+    result = mw.before_model(state, _runtime())
+
+    assert result is not None
+    assert result["deferred_compaction"] is False
+    assert result["deferred_compaction_message_count"] is None
+    assert "messages" in result
 
 
 def test_compaction_event_records_trigger_counts_and_summary_quality(monkeypatch):

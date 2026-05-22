@@ -84,8 +84,10 @@ from src.sandbox.middleware import SandboxMiddleware
 
 logger = logging.getLogger(__name__)
 
-_FRACTIONAL_SUMMARIZATION_PROFILE_ERROR = "Model profile information is required to use fractional token limits"
 _ALLOWED_RUNTIME_MODES = frozenset({"work", "plan"})
+_DEFAULT_COMPACTION_CONTEXT_TOKENS = 128_000
+_DEFAULT_COMPACTION_TRIGGER_FRACTION = 0.8
+_DEFAULT_COMPACTION_KEEP_TOKENS = 32_000
 
 
 def _normalize_runtime_mode(raw_mode: object) -> str:
@@ -103,25 +105,6 @@ def _normalize_runtime_mode(raw_mode: object) -> str:
     return mode
 
 
-def _contains_fraction_threshold(trigger: tuple | list[tuple] | None, keep: tuple) -> bool:
-    if keep and keep[0] == "fraction":
-        return True
-    if trigger is None:
-        return False
-    if isinstance(trigger, tuple):
-        return bool(trigger and trigger[0] == "fraction")
-    return any(t and t[0] == "fraction" for t in trigger)
-
-
-def _drop_fraction_from_trigger(trigger: tuple | list[tuple] | None) -> tuple | list[tuple] | None:
-    if trigger is None:
-        return None
-    if isinstance(trigger, tuple):
-        return None if trigger and trigger[0] == "fraction" else trigger
-    filtered = [t for t in trigger if not (t and t[0] == "fraction")]
-    return filtered or None
-
-
 def _resolve_model_name(requested_model_name: str | None = None) -> str:
     """Resolve a runtime model name safely, falling back to default if invalid."""
     app_config = get_app_config()
@@ -137,6 +120,110 @@ def _resolve_model_name(requested_model_name: str | None = None) -> str:
     return default_model_name
 
 
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value > 0:
+        return value
+    return None
+
+
+def _profile_context_tokens(model: object) -> int | None:
+    profile = getattr(model, "profile", None)
+    if profile is None:
+        return None
+    if isinstance(profile, dict):
+        return _positive_int(profile.get("max_input_tokens")) or _positive_int(profile.get("context_window"))
+    return _positive_int(getattr(profile, "max_input_tokens", None)) or _positive_int(getattr(profile, "context_window", None))
+
+
+def _model_config_context_tokens(model_name: str) -> int | None:
+    model_config = get_app_config().get_model_config(model_name)
+    if model_config is None or not model_config.model_extra:
+        return None
+    return _positive_int(model_config.model_extra.get("context_window")) or _positive_int(model_config.model_extra.get("max_input_tokens"))
+
+
+def _resolve_compaction_context_tokens(
+    *,
+    model: object,
+    model_name: str,
+    configured_max_context_tokens: int | None,
+) -> int:
+    profile_tokens = _profile_context_tokens(model)
+    if profile_tokens is not None:
+        return profile_tokens
+
+    configured_tokens = _positive_int(configured_max_context_tokens)
+    if configured_tokens is not None:
+        return configured_tokens
+
+    model_config_tokens = _model_config_context_tokens(model_name)
+    if model_config_tokens is not None:
+        return model_config_tokens
+
+    logger.warning(
+        "Summarization token-pressure trigger could not resolve model context size; falling back to %s tokens.",
+        _DEFAULT_COMPACTION_CONTEXT_TOKENS,
+    )
+    return _DEFAULT_COMPACTION_CONTEXT_TOKENS
+
+
+def _resolve_fraction_to_tokens(value: int | float, context_tokens: int) -> tuple[str, int]:
+    threshold = int(context_tokens * float(value))
+    return ("tokens", max(1, threshold))
+
+
+def _normalize_token_only_trigger(trigger: tuple | list[tuple] | None, context_tokens: int) -> tuple | list[tuple] | None:
+    if trigger is None:
+        return _resolve_fraction_to_tokens(_DEFAULT_COMPACTION_TRIGGER_FRACTION, context_tokens)
+
+    raw_triggers = [trigger] if isinstance(trigger, tuple) else list(trigger)
+    resolved: list[tuple] = []
+    for item in raw_triggers:
+        if not item or len(item) != 2:
+            continue
+        kind, value = item
+        if kind == "fraction":
+            resolved.append(_resolve_fraction_to_tokens(value, context_tokens))
+        elif kind == "tokens":
+            tokens = _positive_int(int(value))
+            if tokens is not None:
+                resolved.append(("tokens", tokens))
+        elif kind == "messages":
+            logger.warning(
+                "Ignoring deprecated summarization message-count trigger %r; compaction is now token-pressure only.",
+                item,
+            )
+
+    if not resolved:
+        logger.warning(
+            "Summarization trigger had no token-pressure threshold after normalization; using %.0f%% of %s tokens.",
+            _DEFAULT_COMPACTION_TRIGGER_FRACTION * 100,
+            context_tokens,
+        )
+        return _resolve_fraction_to_tokens(_DEFAULT_COMPACTION_TRIGGER_FRACTION, context_tokens)
+    return resolved[0] if len(resolved) == 1 else resolved
+
+
+def _normalize_token_only_keep(keep: tuple, context_tokens: int) -> tuple:
+    if not keep or len(keep) != 2:
+        return ("tokens", _DEFAULT_COMPACTION_KEEP_TOKENS)
+    kind, value = keep
+    if kind == "fraction":
+        return _resolve_fraction_to_tokens(value, context_tokens)
+    if kind == "tokens":
+        tokens = _positive_int(int(value))
+        return ("tokens", tokens or _DEFAULT_COMPACTION_KEEP_TOKENS)
+    if kind == "messages":
+        logger.warning(
+            "Replacing deprecated summarization message-count keep policy %r with keep=('tokens', %s).",
+            keep,
+            _DEFAULT_COMPACTION_KEEP_TOKENS,
+        )
+    return ("tokens", _DEFAULT_COMPACTION_KEEP_TOKENS)
+
+
 def _create_summarization_middleware(*, mode: str = "", dreamy_mode: bool = False) -> CapybaraSummarizationMiddleware | None:
     """Create and configure the summarization middleware from config."""
     config = get_summarization_config()
@@ -150,7 +237,18 @@ def _create_summarization_middleware(*, mode: str = "", dreamy_mode: bool = Fals
     legacy_mode_aliases = {"work": "fast", "plan": "pro"}
     mode_override = config.modes.get(normalized_mode) or config.modes.get(legacy_mode_aliases.get(normalized_mode, normalized_mode)) or config.modes.get("default")
 
-    # Prepare trigger parameter
+    # Prepare model parameter
+    summary_model_name = _resolve_model_name(config.model_name)
+    model = create_chat_model(name=summary_model_name, thinking_enabled=False)
+
+    max_context_tokens = mode_override.max_context_tokens if mode_override and mode_override.max_context_tokens is not None else config.max_context_tokens
+    context_tokens = _resolve_compaction_context_tokens(
+        model=model,
+        model_name=summary_model_name,
+        configured_max_context_tokens=max_context_tokens,
+    )
+
+    # Prepare token-only trigger parameter.
     trigger = None
     mode_trigger = mode_override.trigger if mode_override and mode_override.trigger is not None else config.trigger
     if mode_trigger is not None:
@@ -158,16 +256,11 @@ def _create_summarization_middleware(*, mode: str = "", dreamy_mode: bool = Fals
             trigger = [t.to_tuple() for t in mode_trigger]
         else:
             trigger = mode_trigger.to_tuple()
+    trigger = _normalize_token_only_trigger(trigger, context_tokens)
 
-    # Prepare keep parameter
+    # Prepare token-only keep parameter.
     mode_keep = mode_override.keep if mode_override and mode_override.keep is not None else config.keep
-    keep = mode_keep.to_tuple()
-
-    # Prepare model parameter
-    if config.model_name:
-        model = create_chat_model(name=config.model_name, thinking_enabled=False)
-    else:
-        model = create_chat_model(thinking_enabled=False)
+    keep = _normalize_token_only_keep(mode_keep.to_tuple(), context_tokens)
 
     # Prepare kwargs
     kwargs = {
@@ -184,58 +277,14 @@ def _create_summarization_middleware(*, mode: str = "", dreamy_mode: bool = Fals
     if summary_prompt is not None:
         kwargs["summary_prompt"] = summary_prompt
 
-    max_context_tokens = mode_override.max_context_tokens if mode_override and mode_override.max_context_tokens is not None else config.max_context_tokens
-    if max_context_tokens is not None:
-        kwargs["max_context_tokens"] = max_context_tokens
-
     hooks = [memory_flush_hook] if get_memory_config().enabled else []
     if dreamy_mode:
         hooks.append(dreamy_state_preservation_hook)
 
-    try:
-        return CapybaraSummarizationMiddleware(
-            **kwargs,
-            before_summarization=hooks,
-        )
-    except ValueError as exc:
-        # Some provider-backed chat models do not expose profile.max_input_tokens.
-        # In that case LangChain rejects any fractional trigger/keep thresholds.
-        if _FRACTIONAL_SUMMARIZATION_PROFILE_ERROR not in str(exc):
-            raise
-
-        trigger_without_fraction = _drop_fraction_from_trigger(trigger)
-        fallback_keep = keep
-        keep_was_fraction = bool(keep and keep[0] == "fraction")
-        if keep_was_fraction:
-            fallback_keep = ("messages", 20)
-
-        had_fraction = _contains_fraction_threshold(trigger, keep)
-        if not had_fraction:
-            raise
-
-        if trigger_without_fraction is None:
-            fallback_trigger_tokens = int(trim_tokens_to_summarize or 8000)
-            if fallback_trigger_tokens <= 0:
-                fallback_trigger_tokens = 8000
-            trigger_without_fraction = ("tokens", fallback_trigger_tokens)
-            logger.warning(
-                "Summarization config only had fractional thresholds but model profile is unavailable; falling back to trigger=('tokens', %s).",
-                fallback_trigger_tokens,
-            )
-        else:
-            logger.warning(
-                "Summarization config used fractional thresholds but model profile is unavailable; retrying with non-fractional trigger/keep values.",
-            )
-
-        fallback_kwargs = {
-            **kwargs,
-            "trigger": trigger_without_fraction,
-            "keep": fallback_keep,
-        }
-        return CapybaraSummarizationMiddleware(
-            **fallback_kwargs,
-            before_summarization=hooks,
-        )
+    return CapybaraSummarizationMiddleware(
+        **kwargs,
+        before_summarization=hooks,
+    )
 
 
 def _create_todo_list_middleware(is_plan_mode: bool) -> TodoMiddleware | None:

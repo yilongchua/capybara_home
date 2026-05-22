@@ -295,3 +295,4 @@ class ThreadState(AgentState):
     quality_gate: NotRequired[QualityGateState | None]
     handoff_meta: NotRequired[HandoffMetaState | None]
     deferred_compaction: NotRequired[bool]
+    deferred_compaction_message_count: NotRequired[int | None]

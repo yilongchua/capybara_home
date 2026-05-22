@@ -18,7 +18,6 @@ Two enhancements over the base SummarizationMiddleware:
 Additional enhancements (Phase A–E):
 - Degenerate summary detection guards *(Phase A)*
 - Structured markdown fallback summary *(Phase A)*
-- Idle-aware, count-only compaction deferral *(Phase B)*
 - Scaled, substantive-content anchor rescue *(Phase C)*
 - Compaction audit reports in ``.runtime/`` markdown files *(Phase D/E)*
 """
@@ -63,6 +62,40 @@ _DEGENERATE_MARKERS = (
     "no prior context",
     "no prior conversation",
 )
+
+_TOOL_COMPLETION_GRACE_MESSAGES = 4
+
+DEFAULT_SUMMARY_PROMPT = """Summarize the prior conversation compactly for future continuation.
+
+Output format (markdown headers):
+## Goal
+What was the user's core request or objective?
+
+## Files & Code
+Key file paths, functions, classes, and code areas examined or modified.
+
+## Commands Executed
+Important commands run (shell, query, etc.) with their outcomes.
+
+## Decisions
+Design choices, trade-off decisions, and user preferences established.
+
+## Artifacts Produced
+Files written or modified, with brief description.
+
+## Open Items
+Unresolved questions, pending tasks, or planned next steps.
+
+Requirements:
+- Output under 300 words.
+- Preserve exact file paths, identifiers, and command syntax.
+- Drop repetition, stylistic filler, and low-value intermediate reasoning.
+- If no information exists for a section, omit the section entirely.
+
+<messages>
+Messages to summarize:
+{messages}
+</messages>"""
 
 
 # ---------------------------------------------------------------------------
@@ -134,9 +167,9 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         preserve_recent_skill_tokens: int = 25_000,
         preserve_user_anchor_count: int = 1,
         preserve_recent_operational_count: int = 8,
-        max_context_tokens: int | None = None,
         **kwargs,
     ) -> None:
+        kwargs.setdefault("summary_prompt", DEFAULT_SUMMARY_PROMPT)
         # Capture trigger tuples before super().__init__ may raise a ValueError
         # for fractional thresholds. _detect_trigger_type reads _trigger_tuples
         # (our owned list) instead of the base-class trigger_config attribute,
@@ -156,7 +189,6 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         self._preserve_recent_skill_tokens = max(0, preserve_recent_skill_tokens)
         self._preserve_user_anchor_count = max(0, preserve_user_anchor_count)
         self._preserve_recent_operational_count = max(0, preserve_recent_operational_count)
-        self._max_context_tokens = max_context_tokens
         self._last_trigger_type: str = "manual"
         # Threshold / observed values for the most recent trigger detection,
         # captured so the compaction trajectory event can carry "why now":
@@ -188,49 +220,41 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
     async def abefore_model(self, state: AgentState, runtime: Runtime) -> dict | None:
         return await self._amaybe_summarize(state, runtime)
 
-    # ------------------------------------------------------------------
-    # Phase B — idle-aware deferral helpers
-    # ------------------------------------------------------------------
-
-    def _resolve_max_context_tokens(self) -> int | None:
-        """Resolve the model's max context tokens via a configurable fallback chain."""
-        if self._max_context_tokens is not None:
-            return self._max_context_tokens
-        try:
-            return self._get_profile_limits()
-        except Exception:
-            pass
-        try:
-            extra = getattr(getattr(self, "model", None), "model_extra", None) or {}
-            return extra.get("context_window") or extra.get("max_input_tokens")
-        except Exception:
-            pass
-        return None
-
     @staticmethod
     def _is_new_user_input(messages: list[AnyMessage]) -> bool:
-        """True when the last message is a human message (start of a new task)."""
+        """True when the next model call starts a fresh user turn."""
         if not messages:
             return False
-        return getattr(messages[-1], "type", None) == "human"
+        return getattr(messages[-1], "type", None) == "human" and not getattr(messages[-1], "name", None)
 
-    def _should_defer(self, messages: list[AnyMessage], total_tokens: int) -> bool:
-        """Decide whether compaction can be safely postponed.
-
-        Defer only when:
-        1. The trigger is *count-only* (messages), not tokens or fraction.
-        2. The system is mid‑task (not new user input).
-        3. Token usage is below 75% of the model's maximum context.
-        """
-        trigger_type = self._detect_trigger_type(messages, total_tokens)
-        if trigger_type != "messages":
+    @staticmethod
+    def _is_tool_completion_window(messages: list[AnyMessage]) -> bool:
+        """True when one more model call can naturally interpret fresh tool output."""
+        if not messages:
             return False
+        return getattr(messages[-1], "type", None) == "tool"
+
+    def _should_defer_for_tool_completion(self, state: AgentState, messages: list[AnyMessage]) -> bool:
+        """Allow a small token-threshold grace window for fresh tool results."""
         if self._is_new_user_input(messages):
             return False
-        max_tokens = self._resolve_max_context_tokens()
-        if max_tokens is not None and total_tokens < max_tokens * 0.75:
-            return True
-        return False
+        if not self._is_tool_completion_window(messages):
+            return False
+
+        deferred_at = state.get("deferred_compaction_message_count")
+        if isinstance(deferred_at, int) and deferred_at > 0:
+            return len(messages) - deferred_at <= _TOOL_COMPLETION_GRACE_MESSAGES
+        return True
+
+    @staticmethod
+    def _deferred_compaction_update(state: AgentState, messages: list[AnyMessage]) -> dict:
+        deferred_at = state.get("deferred_compaction_message_count")
+        if not isinstance(deferred_at, int) or deferred_at <= 0:
+            deferred_at = len(messages)
+        return {
+            "deferred_compaction": True,
+            "deferred_compaction_message_count": deferred_at,
+        }
 
     # ------------------------------------------------------------------
     # Core summarization flow (sync + async)
@@ -253,8 +277,8 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         elif deferred and self._is_new_user_input(messages):
             compact_now = True
         elif self._should_summarize(messages, total_tokens):
-            if self._should_defer(messages, total_tokens):
-                return {"deferred_compaction": True}
+            if self._should_defer_for_tool_completion(state, messages):
+                return self._deferred_compaction_update(state, messages)
             compact_now = True
         else:
             compact_now = False
@@ -294,6 +318,7 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         }
         if had_deferred:
             updates["deferred_compaction"] = False
+            updates["deferred_compaction_message_count"] = None
         if force:
             updates["force_compaction_once"] = False
         return updates
@@ -314,8 +339,8 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         elif deferred and self._is_new_user_input(messages):
             compact_now = True
         elif self._should_summarize(messages, total_tokens):
-            if self._should_defer(messages, total_tokens):
-                return {"deferred_compaction": True}
+            if self._should_defer_for_tool_completion(state, messages):
+                return self._deferred_compaction_update(state, messages)
             compact_now = True
         else:
             compact_now = False
@@ -354,6 +379,7 @@ class CapybaraSummarizationMiddleware(SummarizationMiddleware):
         }
         if had_deferred:
             updates["deferred_compaction"] = False
+            updates["deferred_compaction_message_count"] = None
         if force:
             updates["force_compaction_once"] = False
         return updates

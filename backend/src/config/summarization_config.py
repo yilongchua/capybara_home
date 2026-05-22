@@ -32,16 +32,14 @@ class SummarizationConfig(BaseModel):
     trigger: ContextSize | list[ContextSize] | None = Field(
         default=None,
         description="One or more thresholds that trigger summarization. When any threshold is met, summarization runs. "
-        "Examples: {'type': 'messages', 'value': 50} triggers at 50 messages, "
-        "{'type': 'tokens', 'value': 4000} triggers at 4000 tokens, "
-        "{'type': 'fraction', 'value': 0.8} triggers at 80% of model's max input tokens",
+        "Prefer {'type': 'fraction', 'value': 0.8} for token-pressure compaction at 80% of the model context window. "
+        "Legacy message-count triggers are accepted by config parsing but ignored by the lead-agent factory.",
     )
     keep: ContextSize = Field(
-        default_factory=lambda: ContextSize(type="messages", value=20),
+        default_factory=lambda: ContextSize(type="tokens", value=32000),
         description="Context retention policy after summarization. Specifies how much history to preserve. "
-        "Examples: {'type': 'messages', 'value': 20} keeps 20 messages, "
-        "{'type': 'tokens', 'value': 3000} keeps 3000 tokens, "
-        "{'type': 'fraction', 'value': 0.3} keeps 30% of model's max input tokens",
+        "Prefer token-based retention, e.g. {'type': 'tokens', 'value': 32000}. "
+        "Legacy message-count keep policies are converted to a token keep budget by the lead-agent factory.",
     )
     trim_tokens_to_summarize: int | None = Field(
         default=None,
@@ -53,7 +51,7 @@ class SummarizationConfig(BaseModel):
     )
     max_context_tokens: int | None = Field(
         default=None,
-        description="Maximum context window tokens for the model. Used by the idle-aware deferral logic to decide whether compaction can be safely postponed. Falls back to model profile -> model_extra -> default 128000.",
+        description="Maximum context window tokens for fraction-based compaction. Resolution prefers model profile -> this value -> model config -> default 128000.",
     )
     modes: dict[str, "SummarizationModeOverride"] = Field(
         default_factory=dict,
