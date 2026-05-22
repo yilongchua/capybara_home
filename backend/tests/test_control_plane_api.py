@@ -314,7 +314,10 @@ def test_pipeline_runs_support_thread_status_and_limit_filters(control_plane_cli
     assert len(limited.json()["items"]) == 1
 
 
-def test_vault_queue_approval_is_created_and_updated(control_plane_client: TestClient):
+def test_vault_queue_no_longer_creates_approval(control_plane_client: TestClient):
+    """Queue-ingest approval gating was removed: enqueueing results must not
+    create any pending approval, and Run Ingest drains directly via
+    start_vault_ingest_job(). See backend/src/control_plane/service.py."""
     service = get_control_plane_service()
     manager = service._default_vault_manager()
 
@@ -334,59 +337,18 @@ def test_vault_queue_approval_is_created_and_updated(control_plane_client: TestC
         ],
     )
 
-    first_run = service.ensure_vault_queue_ingest_approval()
-    assert first_run is not None
-    assert first_run.status == "pending_approval"
-    assert first_run.approval_request_id is not None
+    # The no-op method preserved for legacy callers must always return None.
+    assert service.ensure_vault_queue_ingest_approval() is None
 
+    # No vault-queue approval should appear in the listing.
     approvals_response = control_plane_client.get("/api/approvals")
     assert approvals_response.status_code == 200
-    approvals_payload = approvals_response.json()["items"]
-    assert len(approvals_payload) == 1
-    approval = approvals_payload[0]
-    assert "Knowledge Vault" in approval["title"]
-    assert approval["metadata"]["queued_item_count"] == 1
-
-    manager.enqueue_search_results(
-        query="maritime data quality",
-        results=[
-            {
-                "title": "AIS Enrichment Update",
-                "url": "https://example.com/ais-enrichment",
-                "snippet": "Enrichment update",
-                "extracted_content": "# AIS Enrichment\n\nAdditional extracted content.",
-                "topic_tags": ["maritime-data-quality"],
-                "concept_refs": ["ais-enrichment"],
-                "entity_refs": [],
-                "target_synthesis_refs": ["maritime-data-quality-vessel-particulars"],
-            }
-        ],
-    )
-
-    updated_run = service.ensure_vault_queue_ingest_approval()
-    assert updated_run is not None
-    assert updated_run.id == first_run.id
-
-    approvals_response = control_plane_client.get("/api/approvals")
-    updated_approvals_payload = approvals_response.json()["items"]
-    assert len(updated_approvals_payload) == 1
-    updated_approval = updated_approvals_payload[0]
-    assert updated_approval["id"] == approval["id"]
-    assert updated_approval["metadata"]["queued_item_count"] == 2
-    assert "2 items" in updated_approval["title"]
-
-    resolve_response = control_plane_client.post(
-        f"/api/approvals/{updated_approval['id']}/resolve",
-        json={"approve": True, "auto_start": True},
-    )
-    assert resolve_response.status_code == 200
-    resolved_run = resolve_response.json()
-    assert resolved_run["status"] == "completed"
-    assert {step["kind"] for step in resolved_run["steps"]} == {
-        "vault_ingest",
-        "vault_compile",
-        "vault_lint",
-    }
+    items = approvals_response.json()["items"]
+    vault_queue_items = [
+        item for item in items
+        if (item.get("metadata") or {}).get("approval_kind") == "knowledge_vault_queue_ingest"
+    ]
+    assert vault_queue_items == []
 
 
 def test_integration_services_status_shape(control_plane_client: TestClient):

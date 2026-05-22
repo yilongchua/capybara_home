@@ -990,180 +990,50 @@ class ControlPlaneService:
             )
         )
 
-    def _vault_queue_ingest_steps(self, *, queue_count: int) -> list[PipelineStepDefinition]:
-        max_queue_items = max(1, int(queue_count))
-        return [
-            PipelineStepDefinition(
-                id="queue-ingest",
-                name="Ingest queued search results",
-                kind="vault_ingest",
-                config={
-                    "source": "queue_approval",
-                    "max_queue_items": max_queue_items,
-                },
-            ),
-            PipelineStepDefinition(
-                id="queue-compile",
-                name="Compile vault indexes",
-                kind="vault_compile",
-                config={},
-            ),
-            PipelineStepDefinition(
-                id="queue-lint",
-                name="Lint vault maintenance",
-                kind="vault_lint",
-                config={"freshness_window_days": 30},
-            ),
-        ]
-
-    def _render_vault_queue_approval_description(self, *, queue_count: int, sample_titles: list[str]) -> str:
-        noun = "item" if queue_count == 1 else "items"
-        lines = [
-            f"Knowledge Vault has `{queue_count}` queued search result {noun} ready for ingestion.",
-            "Approving this will start a long-running vault job that ingests queued results, refreshes compiled pages, and runs vault lint.",
-        ]
-        if sample_titles:
-            lines.append("Pending examples:")
-            lines.extend(f"- {title}" for title in sample_titles[:5])
-        return "\n".join(lines)
-
     def ensure_vault_queue_ingest_approval(
         self,
         *,
         queue_count: int | None = None,
         sample_titles: list[str] | None = None,
     ) -> PipelineRun | None:
-        config = get_app_config()
-        if not (config.knowledge_vault.enabled and config.approvals.enabled):
-            return None
+        # Approval gating for vault queue ingestion is disabled — Run Ingest
+        # drains the queue directly. Callers keep working; this is a no-op.
+        return None
 
-        manager = self._default_vault_manager()
-        effective_queue_count = int(
-            queue_count
-            if queue_count is not None
-            else manager.get_run_summary().get("counts", {}).get("queued_search_results") or 0
-        )
-        if effective_queue_count <= 0:
-            return None
+    def _auto_resolve_vault_queue_approvals(self) -> int:
+        """Mark every pending knowledge_vault_queue_ingest approval (and its
+        companion pipeline run) resolved. Returns count cleared.
 
-        queue_items = [item for item in manager._load_queue() if str(item.get("status") or "") == "queued"]
-        titles = [
-            str(item.get("title") or item.get("url") or "").strip()
-            for item in queue_items
-            if str(item.get("title") or item.get("url") or "").strip()
-        ]
-        if sample_titles:
-            titles = [*sample_titles, *titles]
-        deduped_titles: list[str] = []
-        seen_titles: set[str] = set()
-        for title in titles:
-            normalized = title.strip()
-            if not normalized or normalized in seen_titles:
-                continue
-            seen_titles.add(normalized)
-            deduped_titles.append(normalized)
-
-        approval_title = f"Approve Knowledge Vault queue ingest ({effective_queue_count} items)"
-        approval_description = self._render_vault_queue_approval_description(
-            queue_count=effective_queue_count,
-            sample_titles=deduped_titles,
-        )
-        approval_metadata = {
-            "approval_kind": "knowledge_vault_queue_ingest",
-            "queued_item_count": effective_queue_count,
-            "sample_titles": deduped_titles[:5],
-        }
-        step_definitions = self._vault_queue_ingest_steps(queue_count=effective_queue_count)
+        Called by start_vault_ingest_job after a direct queue drain so the
+        Approvals page does not display stale gates.
+        """
         now = utcnow()
+        cleared_ids: list[str] = []
 
-        def update_existing(snapshot):
+        def _mutate(snapshot):
             for approval in snapshot.approvals.values():
                 if approval.status != "pending":
                     continue
                 if str(approval.metadata.get("approval_kind") or "") != "knowledge_vault_queue_ingest":
                     continue
+                approval.status = "approved"
+                approval.resolved_at = now
+                approval.resolution_note = "Auto-approved: queue drained directly by Run Ingest."
                 run = snapshot.runs.get(approval.pipeline_run_id)
-                if run is None or run.status != "pending_approval":
-                    continue
-                approval.title = approval_title
-                approval.description = approval_description
-                approval.requested_at = now
-                approval.metadata = {
-                    **approval.metadata,
-                    **approval_metadata,
-                }
-                run.summary = approval_description
-                run.inputs = {
-                    **run.inputs,
-                    "queued_item_count": effective_queue_count,
-                }
-                run.updated_at = now
-                run.metadata = {
-                    **run.metadata,
-                    **approval_metadata,
-                    "step_definitions": {
-                        definition.id: definition.model_dump(mode="json")
-                        for definition in step_definitions
-                    },
-                }
-                return run.id
-            return None
+                if run is not None and run.status == "pending_approval":
+                    run.status = "completed"
+                    run.updated_at = now
+                    run.alerts.append("Auto-resolved: queue drained directly via Run Ingest.")
+                cleared_ids.append(approval.id)
 
-        existing_run_id = self._store.mutate(update_existing)
-        if existing_run_id:
+        self._store.mutate(_mutate)
+        for approval_id in cleared_ids:
             self._append_audit_event(
-                "vault_queue_approval_updated",
-                f"Updated Knowledge Vault queue approval for {effective_queue_count} item(s).",
-                metadata={"run_id": existing_run_id, "queued_item_count": effective_queue_count},
+                "vault_queue_approval_auto_resolved",
+                "Auto-resolved Knowledge Vault queue approval (approval gate disabled).",
+                metadata={"approval_id": approval_id},
             )
-            return self.get_run(existing_run_id)
-
-        # If the same queue size was explicitly rejected, do not immediately
-        # recreate another identical pending approval card.
-        snapshot = self._store.read()
-        for approval in snapshot.approvals.values():
-            if approval.status != "rejected":
-                continue
-            if str(approval.metadata.get("approval_kind") or "") != "knowledge_vault_queue_ingest":
-                continue
-            rejected_count = approval.metadata.get("queued_item_count")
-            if int(rejected_count or -1) == effective_queue_count:
-                return None
-
-        run = self.create_run(
-            steps=step_definitions,
-            inputs={"queued_item_count": effective_queue_count},
-            summary=approval_description,
-            requires_approval=True,
-            metadata=approval_metadata,
-        )
-
-        def finalize_created(snapshot):
-            created_run = snapshot.runs[run.id]
-            approval_id = created_run.approval_request_id
-            if approval_id and approval_id in snapshot.approvals:
-                approval = snapshot.approvals[approval_id]
-                approval.title = approval_title
-                approval.description = approval_description
-                approval.requested_by = "vault_queue_inspector"
-                approval.metadata = {
-                    **approval.metadata,
-                    **approval_metadata,
-                }
-            created_run.summary = approval_description
-            created_run.updated_at = now
-            created_run.metadata = {
-                **created_run.metadata,
-                **approval_metadata,
-            }
-
-        self._store.mutate(finalize_created)
-        self._append_audit_event(
-            "vault_queue_approval_created",
-            f"Created Knowledge Vault queue approval for {effective_queue_count} item(s).",
-            metadata={"run_id": run.id, "queued_item_count": effective_queue_count},
-        )
-        return self.get_run(run.id)
+        return len(cleared_ids)
 
     def get_vault_status(self) -> dict[str, Any]:
         manager = self._default_vault_manager()
@@ -1438,6 +1308,86 @@ class ControlPlaneService:
             try:
                 manager = self._default_vault_manager()
 
+                # Phase 1 — drain queued search results directly. Approval gating
+                # has been removed; the UI's Run Ingest button is the trigger.
+                claimed_items: list[dict[str, Any]] = []
+                try:
+                    claimed_items = manager.claim_search_queue_items(topic="", max_items=10_000)
+                except Exception:
+                    logger_obj.exception("vault_ingest_queue_claim_failed job_id=%s", job_id)
+                    claimed_items = []
+
+                queue_total = len(claimed_items)
+                queue_ingested = 0
+                queue_skipped = 0
+                queue_rejected = 0
+                queue_status: str = ""
+
+                if claimed_items:
+                    with self._vault_ingest_lock:
+                        self._vault_ingest_job.update(
+                            {
+                                "total": queue_total,
+                                "current_title": f"Draining queue ({queue_total} item(s))",
+                                "last_status": "queue_started",
+                                "updated_at": self._utcnow_iso(),
+                            }
+                        )
+                    logger_obj.info(
+                        "vault_ingest_queue_drain_start job_id=%s claimed=%d",
+                        job_id,
+                        queue_total,
+                    )
+                    try:
+                        queue_report = manager.ingest(
+                            urls=[],
+                            source="vault_ui_run_ingest",
+                            topic="",
+                            queue_items=claimed_items,
+                        )
+                    except Exception:
+                        queue_ids = [
+                            str(item.get("queue_id") or "")
+                            for item in claimed_items
+                            if str(item.get("queue_id") or "").strip()
+                        ]
+                        manager.requeue_claimed_items(queue_ids, reason="ingest_failed_retry")
+                        raise
+                    queue_status = str(queue_report.get("status") or "")
+                    queue_ingested = int(queue_report.get("ingested_count") or 0)
+                    queue_skipped = int(queue_report.get("skipped_unchanged_count") or 0)
+                    queue_rejected = int(queue_report.get("rejected_for_trust_count") or 0) + int(
+                        queue_report.get("rejected_for_policy_count") or 0
+                    )
+                    logger_obj.info(
+                        "vault_ingest_queue_drain_done job_id=%s status=%s ingested=%d skipped=%d rejected=%d",
+                        job_id,
+                        queue_status or "ok",
+                        queue_ingested,
+                        queue_skipped,
+                        queue_rejected,
+                    )
+                else:
+                    logger_obj.info("vault_ingest_queue_drain_done job_id=%s claimed=0", job_id)
+
+                # Auto-resolve any still-pending vault-queue approval cards now that
+                # the queue has been drained without requiring approval.
+                try:
+                    cleared = self._auto_resolve_vault_queue_approvals()
+                    if cleared:
+                        logger_obj.info(
+                            "vault_ingest_auto_resolved_approvals job_id=%s count=%d",
+                            job_id,
+                            cleared,
+                        )
+                except Exception:
+                    logger_obj.exception(
+                        "vault_ingest_auto_resolve_approvals_failed job_id=%s", job_id
+                    )
+
+                # Phase 2 — re-analyze already-ingested sources to backfill
+                # entities/concepts. Progress reporting is offset by the queue
+                # phase so the UI shows a single monotonic counter.
                 def _progress(
                     index: int,
                     total: int,
@@ -1446,12 +1396,14 @@ class ControlPlaneService:
                     status: str,
                     error: str | None,
                 ) -> None:
+                    offset_total = queue_total + total
+                    offset_index = queue_total + index
                     with self._vault_ingest_lock:
                         self._vault_ingest_job.update(
                             {
-                                "total": total,
-                                "processed": index,
-                                "current_index": index,
+                                "total": offset_total,
+                                "processed": offset_index,
+                                "current_index": offset_index,
                                 "current_source_id": source_id,
                                 "current_title": title,
                                 "last_status": status,
@@ -1468,8 +1420,8 @@ class ControlPlaneService:
                     if status == "failed":
                         logger_obj.warning(
                             "vault_ingest_item index=%d/%d source_id=%s title=%r status=%s error=%s",
-                            index,
-                            total,
+                            offset_index,
+                            offset_total,
                             source_id,
                             title,
                             status,
@@ -1478,40 +1430,56 @@ class ControlPlaneService:
                     else:
                         logger_obj.info(
                             "vault_ingest_item index=%d/%d source_id=%s title=%r status=%s",
-                            index,
-                            total,
+                            offset_index,
+                            offset_total,
                             source_id,
                             title,
                             status,
                         )
+
+                # Seed the running "updated" counter from queue ingestions
+                # before reprocess starts incrementing on top of it.
+                with self._vault_ingest_lock:
+                    self._vault_ingest_job["updated"] = int(
+                        self._vault_ingest_job.get("updated", 0)
+                    ) + queue_ingested
 
                 report = manager.reprocess_existing_sources(
                     only_missing=not force_reanalyze,
                     progress_callback=_progress,
                 )
 
+                reprocess_total = int(report.get("total") or 0)
+                reprocess_processed = int(report.get("processed") or 0)
+                reprocess_updated = int(report.get("updated") or 0)
+                reprocess_skipped = int(report.get("skipped_no_raw") or 0)
+                reprocess_failed = int(report.get("failed") or 0)
+
                 with self._vault_ingest_lock:
                     self._vault_ingest_job.update(
                         {
                             "status": "success",
-                            "total": int(report.get("total") or 0),
-                            "processed": int(report.get("processed") or 0),
-                            "updated": int(report.get("updated") or 0),
-                            "skipped_no_raw": int(report.get("skipped_no_raw") or 0),
-                            "failed": int(report.get("failed") or 0),
+                            "total": queue_total + reprocess_total,
+                            "processed": queue_total + reprocess_processed,
+                            "updated": queue_ingested + reprocess_updated,
+                            "skipped_no_raw": reprocess_skipped,
+                            "failed": reprocess_failed,
                             "finished_at": self._utcnow_iso(),
                             "updated_at": self._utcnow_iso(),
                             "last_error": None,
                         }
                     )
                 logger_obj.info(
-                    "vault_ingest_done job_id=%s total=%d processed=%d updated=%d skipped_no_raw=%d failed=%d",
+                    "vault_ingest_done job_id=%s total=%d processed=%d updated=%d skipped_no_raw=%d failed=%d queue_ingested=%d queue_skipped=%d queue_rejected=%d",
                     job_id,
-                    int(report.get("total") or 0),
-                    int(report.get("processed") or 0),
-                    int(report.get("updated") or 0),
-                    int(report.get("skipped_no_raw") or 0),
-                    int(report.get("failed") or 0),
+                    queue_total + reprocess_total,
+                    queue_total + reprocess_processed,
+                    queue_ingested + reprocess_updated,
+                    reprocess_skipped,
+                    reprocess_failed,
+                    queue_ingested,
+                    queue_skipped,
+                    queue_rejected,
                 )
                 with self._vault_explorer_cache_lock:
                     self._vault_explorer_cache = {}

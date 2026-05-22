@@ -27,11 +27,6 @@ class ApprovalsService:
         self._cps = control_plane
 
     def list_approvals(self) -> list[ApprovalRequest]:
-        if get_app_config().knowledge_vault.enabled:
-            try:
-                self._cps.ensure_vault_queue_ingest_approval()
-            except Exception:
-                logger.exception("Failed to ensure Knowledge Vault queue approval during approval listing.")
         self._expire_approvals()
         snapshot = self._store.read()
         return sorted(
