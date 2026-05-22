@@ -21,7 +21,6 @@ def _runtime(*, auto_mode: bool = False, plan_behavior: str = "plan_foreground")
 
 def _planner(monkeypatch) -> PlannerMiddleware:
     middleware = PlannerMiddleware(
-        router=SimpleNamespace(resolve=lambda *_a, **_k: "test-model"),
         requested_model=None,
         max_plan_steps=8,
         dag_enabled=True,

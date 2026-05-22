@@ -36,6 +36,7 @@ from src.config.progress_guard_config import ProgressGuardConfig, load_progress_
 from src.config.prompt_config import PromptConfig, load_prompt_config_from_dict
 from src.config.quality_gate_config import QualityGateConfig, load_quality_gate_config_from_dict
 from src.config.question_generation_config import load_question_generation_config_from_dict
+from src.config.recursion_pivot_config import RecursionPivotConfig, load_recursion_pivot_config_from_dict
 from src.config.resume_config import ResumeConfig, load_resume_config_from_dict
 from src.config.retry_config import RetryConfig, load_retry_config_from_dict
 from src.config.routing_config import RoutingConfig, load_routing_config_from_dict
@@ -76,6 +77,7 @@ class AppConfig(BaseModel):
     )
     subagents: SubagentsAppConfig = Field(default_factory=SubagentsAppConfig, description="Subagent timeout and concurrency policy")
     progress_guard: ProgressGuardConfig = Field(default_factory=ProgressGuardConfig, description="Progress guard configuration")
+    recursion_pivot: RecursionPivotConfig = Field(default_factory=RecursionPivotConfig, description="Recursion-budget evaluator pivot configuration")
     quality_gate: QualityGateConfig = Field(default_factory=QualityGateConfig, description="Report quality gate configuration")
     loop_detection: LoopDetectionConfig = Field(
         default_factory=LoopDetectionConfig,
@@ -204,6 +206,7 @@ class AppConfig(BaseModel):
 
         # Load progress guard config
         load_progress_guard_config_from_dict(config_data.get("progress_guard", {}))
+        load_recursion_pivot_config_from_dict(config_data.get("recursion_pivot", {}))
         load_quality_gate_config_from_dict(config_data.get("quality_gate", {}))
         load_loop_detection_config_from_dict(config_data.get("loop_detection", {}))
 
@@ -253,6 +256,20 @@ class AppConfig(BaseModel):
         extensions_config = ExtensionsConfig.from_file()
         config_data["extensions"] = extensions_config.model_dump()
 
+        # Synthesize ModelConfig entries from user LLM endpoints and append to
+        # the configured models list. The result is a single unified registry
+        # that the agent runtime, /api/models, ModelRouter, and create_chat_model
+        # all read from. Imported here to avoid a circular import at module load.
+        from src.models.user_model_synthesis import synthesize_user_models
+
+        user_models_as_configs = synthesize_user_models(extensions_config)
+        existing_models = list(config_data.get("models") or [])
+        # User models go first so they become the default (models[0]) when
+        # config.yaml does not declare any model.
+        config_data["models"] = [
+            m.model_dump() for m in user_models_as_configs
+        ] + existing_models
+
         result = cls.model_validate(config_data)
         return result
 
@@ -290,12 +307,26 @@ class AppConfig(BaseModel):
         Returns:
             The model config if found, otherwise None.
         """
-        # Fast-path exact lookup, then fallback to case-insensitive lookup.
+        # Fast-path exact lookup, then case-insensitive, then soft-match by
+        # underlying `model:` id (for legacy thread state that stored a bare
+        # model id like "qwen2.5:7b" before namespacing as "endpoint/qwen2.5:7b").
         model = next((model for model in self.models if model.name == name), None)
         if model is not None:
             return model
         lowered = name.lower()
-        return next((model for model in self.models if model.name.lower() == lowered), None)
+        model = next((model for model in self.models if model.name.lower() == lowered), None)
+        if model is not None:
+            return model
+        # Soft-match: bare id only — never match if caller already supplied a
+        # namespaced "endpoint/model" form.
+        if "/" not in name:
+            model = next((model for model in self.models if model.model == name), None)
+            if model is not None:
+                return model
+            model = next((model for model in self.models if model.model.lower() == lowered), None)
+            if model is not None:
+                return model
+        return None
 
     def get_tool_config(self, name: str) -> ToolConfig | None:
         """Get the tool config by name.
@@ -321,6 +352,14 @@ class AppConfig(BaseModel):
 
 
 _app_config: AppConfig | None = None
+_extensions_mtime_at_load: float | None = None
+
+
+def _current_extensions_mtime() -> float | None:
+    # Lazy import keeps app_config free of cycles at module load.
+    from src.models.user_model_synthesis import extensions_config_mtime
+
+    return extensions_config_mtime()
 
 
 def get_app_config() -> AppConfig:
@@ -328,10 +367,20 @@ def get_app_config() -> AppConfig:
 
     Returns a cached singleton instance. Use `reload_app_config()` to reload
     from file, or `reset_app_config()` to clear the cache.
+
+    If `extensions_config.json` has been modified since the cached config was
+    loaded, the cache is invalidated so user-added LLM endpoints surface
+    without requiring a process restart (relevant when the gateway writes new
+    endpoints but the LangGraph server holds a separate cached singleton).
     """
-    global _app_config
+    global _app_config, _extensions_mtime_at_load
+    if _app_config is not None:
+        current_mtime = _current_extensions_mtime()
+        if current_mtime is not None and current_mtime != _extensions_mtime_at_load:
+            _app_config = None
     if _app_config is None:
         _app_config = AppConfig.from_file()
+        _extensions_mtime_at_load = _current_extensions_mtime()
     return _app_config
 
 
@@ -348,8 +397,9 @@ def reload_app_config(config_path: str | None = None) -> AppConfig:
     Returns:
         The newly loaded AppConfig instance.
     """
-    global _app_config
+    global _app_config, _extensions_mtime_at_load
     _app_config = AppConfig.from_file(config_path)
+    _extensions_mtime_at_load = _current_extensions_mtime()
     return _app_config
 
 
@@ -360,8 +410,9 @@ def reset_app_config() -> None:
     `get_app_config()` to reload from file. Useful for testing
     or when switching between different configurations.
     """
-    global _app_config
+    global _app_config, _extensions_mtime_at_load
     _app_config = None
+    _extensions_mtime_at_load = None
 
 
 def set_app_config(config: AppConfig) -> None:

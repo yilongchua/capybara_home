@@ -30,7 +30,7 @@ from langgraph.types import Command
 
 from src.agents.middlewares.runtime_events import append_runtime_event
 from src.config.web_search_summary_config import get_web_search_summary_config
-from src.models import ModelRouter, create_chat_model
+from src.models import create_chat_model, resolve_model_name
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +129,10 @@ class WebSearchSummaryMiddleware(AgentMiddleware[AgentState]):
         }
     )
 
-    def __init__(self, *, router: ModelRouter, requested_model: str | None):
+    def __init__(self, *, requested_model: str | None, router: Any = None):  # noqa: ARG002
+        # ``router`` accepted for backwards compatibility; ignored (single-model invariant).
+        del router
         super().__init__()
-        self._router = router
         self._requested_model = requested_model
         self._config = get_web_search_summary_config()
 
@@ -143,7 +144,8 @@ class WebSearchSummaryMiddleware(AgentMiddleware[AgentState]):
 
     def _build_prompt_and_model(self, query: str, content: str) -> tuple[str, str]:
         prompt = _SUMMARY_PROMPT_TEMPLATE.replace("{query}", query).replace("{raw_content}", content)
-        model_name = self._router.resolve("planner", requested_model=self._requested_model)
+        # Single-model invariant: use the chat-selected model directly.
+        model_name = resolve_model_name(self._requested_model)
         return prompt, model_name
 
     def _record_summarized(self, runtime: Any, tool_name: str, orig_chars: int, result: str, model_name: str) -> None:

@@ -27,7 +27,7 @@ from langgraph.runtime import Runtime
 from src.agents.middlewares.runtime_events import append_runtime_event
 from src.agents.middlewares.todo_dag_middleware import _legacy_todos, _materialize_ready_ids, normalize_todo_nodes
 from src.config.evaluator_config import get_evaluator_config
-from src.models import ModelRouter, create_chat_model
+from src.models import create_chat_model, resolve_model_name
 
 logger = logging.getLogger(__name__)
 
@@ -114,9 +114,10 @@ class PlanEvaluatorMiddleware(AgentMiddleware[PlanEvaluatorState]):
 
     state_schema = PlanEvaluatorState
 
-    def __init__(self, *, router: ModelRouter, requested_model: str | None, timeout_seconds: float | None = None):
+    def __init__(self, *, requested_model: str | None, timeout_seconds: float | None = None, router: Any = None):  # noqa: ARG002
+        # ``router`` accepted for backwards compatibility; ignored (single-model invariant).
+        del router
         super().__init__()
-        self._router = router
         self._requested_model = requested_model
         self._timeout_seconds = float(timeout_seconds if timeout_seconds is not None else get_evaluator_config().plan_evaluator_timeout_seconds)
 
@@ -145,7 +146,8 @@ class PlanEvaluatorMiddleware(AgentMiddleware[PlanEvaluatorState]):
         todos_formatted = _format_todos_for_eval(nodes)
 
         prompt = _PLAN_EVAL_PROMPT.replace("{title}", title).replace("{domain}", domain).replace("{summary}", summary).replace("{todos_formatted}", todos_formatted)
-        model_name = self._router.resolve("planner", requested_model=self._requested_model)
+        # Single-model invariant: use the chat-selected model directly.
+        model_name = resolve_model_name(self._requested_model)
         return prompt, model_name, nodes
 
     def _process_llm_output(self, raw: str, runtime: Runtime, model_name: str) -> dict | None:

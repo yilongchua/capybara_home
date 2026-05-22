@@ -8,6 +8,17 @@ from src.agents.lead_agent import agent as lead_agent_module
 from src.config.app_config import AppConfig
 from src.config.model_config import ModelConfig
 from src.config.sandbox_config import SandboxConfig
+from src.models import resolver as resolver_module
+
+
+def _install_app_config(monkeypatch, app_config) -> None:
+    """Patch both the lead-agent and resolver module references to the same config.
+
+    ``_resolve_model_name`` now delegates to ``src.models.resolver.resolve_model_name``,
+    so the patched ``get_app_config`` must be present in the resolver module too.
+    """
+    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
+    monkeypatch.setattr(resolver_module, "get_app_config", lambda: app_config)
 
 
 def _make_app_config(models: list[ModelConfig]) -> AppConfig:
@@ -37,13 +48,13 @@ def test_resolve_model_name_falls_back_to_default(monkeypatch, caplog):
         ]
     )
 
-    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
+    _install_app_config(monkeypatch, app_config)
 
     with caplog.at_level("WARNING"):
         resolved = lead_agent_module._resolve_model_name("missing-model")
 
     assert resolved == "default-model"
-    assert "fallback to default model 'default-model'" in caplog.text
+    assert "falling back to default 'default-model'" in caplog.text
 
 
 def test_resolve_model_name_uses_default_when_none(monkeypatch):
@@ -54,7 +65,7 @@ def test_resolve_model_name_uses_default_when_none(monkeypatch):
         ]
     )
 
-    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
+    _install_app_config(monkeypatch, app_config)
 
     resolved = lead_agent_module._resolve_model_name(None)
 
@@ -64,7 +75,7 @@ def test_resolve_model_name_uses_default_when_none(monkeypatch):
 def test_resolve_model_name_raises_when_no_models_configured(monkeypatch):
     app_config = _make_app_config([])
 
-    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
+    _install_app_config(monkeypatch, app_config)
 
     with pytest.raises(
         ValueError,
@@ -78,7 +89,7 @@ def test_make_lead_agent_disables_thinking_when_model_does_not_support_it(monkey
 
     import src.tools as tools_module
 
-    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
+    _install_app_config(monkeypatch, app_config)
     monkeypatch.setattr(tools_module, "get_available_tools", lambda **kwargs: [])
     monkeypatch.setattr(
         lead_agent_module,
@@ -129,7 +140,7 @@ def test_build_middlewares_uses_resolved_model_name_for_vision(monkeypatch):
         ]
     )
 
-    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
+    _install_app_config(monkeypatch, app_config)
     monkeypatch.setattr(lead_agent_module, "_create_summarization_middleware", lambda **kwargs: None)
     monkeypatch.setattr(lead_agent_module, "_create_todo_list_middleware", lambda is_plan_mode: None)
 

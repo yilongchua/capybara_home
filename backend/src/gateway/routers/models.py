@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from src.config import get_app_config
+from src.models.user_model_synthesis import is_user_synthesized
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["models"])
@@ -78,6 +79,9 @@ async def list_models() -> ModelsListResponse:
         ```
     """
     config = get_app_config()
+    # Only surface models that came from the onboarding flow. config.yaml-declared
+    # models still load for internal/legacy resolution but must not appear in the
+    # frontend picker — onboarding is the single source of truth for the UI.
     models = [
         ModelResponse(
             name=model.name,
@@ -88,6 +92,7 @@ async def list_models() -> ModelsListResponse:
             context_window=_resolve_context_window_from_model_extra(model),
         )
         for model in config.models
+        if is_user_synthesized(model)
     ]
     return ModelsListResponse(models=models)
 

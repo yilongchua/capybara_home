@@ -95,6 +95,11 @@ class ExtensionsConfig(BaseModel):
         description="Map of user-added LLM endpoint name to configuration",
         alias="userModels",
     )
+    user_embedding_models: dict[str, UserLlmEndpointConfig] = Field(
+        default_factory=dict,
+        description="Map of user-added embedding-model endpoint name to configuration",
+        alias="userEmbeddingModels",
+    )
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     @classmethod
@@ -231,20 +236,39 @@ class ExtensionsConfig(BaseModel):
 
 
 _extensions_config: ExtensionsConfig | None = None
+_extensions_mtime_at_load: float | None = None
+
+
+def _current_extensions_mtime() -> float | None:
+    """Best-effort mtime of the active extensions_config.json, or None if absent."""
+    try:
+        path = ExtensionsConfig.resolve_config_path()
+    except FileNotFoundError:
+        return None
+    if path is None:
+        return None
+    try:
+        return Path(path).stat().st_mtime
+    except OSError:
+        return None
 
 
 def get_extensions_config() -> ExtensionsConfig:
     """Get the extensions config instance.
 
-    Returns a cached singleton instance. Use `reload_extensions_config()` to reload
-    from file, or `reset_extensions_config()` to clear the cache.
-
-    Returns:
-        The cached ExtensionsConfig instance.
+    Returns a cached singleton instance. The cache is invalidated when the
+    on-disk extensions_config.json mtime changes, so endpoints written by any
+    path (onboarding PUT, first-time wizard, manual edit, separate process)
+    surface without a Gateway restart.
     """
-    global _extensions_config
+    global _extensions_config, _extensions_mtime_at_load
+    if _extensions_config is not None:
+        current_mtime = _current_extensions_mtime()
+        if current_mtime is not None and current_mtime != _extensions_mtime_at_load:
+            _extensions_config = None
     if _extensions_config is None:
         _extensions_config = ExtensionsConfig.from_file()
+        _extensions_mtime_at_load = _current_extensions_mtime()
     return _extensions_config
 
 
@@ -261,8 +285,9 @@ def reload_extensions_config(config_path: str | None = None) -> ExtensionsConfig
     Returns:
         The newly loaded ExtensionsConfig instance.
     """
-    global _extensions_config
+    global _extensions_config, _extensions_mtime_at_load
     _extensions_config = ExtensionsConfig.from_file(config_path)
+    _extensions_mtime_at_load = _current_extensions_mtime()
     return _extensions_config
 
 
@@ -273,8 +298,9 @@ def reset_extensions_config() -> None:
     `get_extensions_config()` to reload from file. Useful for testing
     or when switching between different configurations.
     """
-    global _extensions_config
+    global _extensions_config, _extensions_mtime_at_load
     _extensions_config = None
+    _extensions_mtime_at_load = None
 
 
 def set_extensions_config(config: ExtensionsConfig) -> None:

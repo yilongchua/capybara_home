@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from src.config.app_config import get_app_config
 from src.config.paths import get_paths
 from src.models.factory import create_chat_model
-from src.models.router import ModelRouter
+from src.models.resolver import resolve_model_name
 from src.utils.runtime_artifact_ignore import should_skip_relative_path
 
 logger = logging.getLogger(__name__)
@@ -589,8 +589,8 @@ async def _run_repo_overview_refresh_job(job_id: str, source_root: Path, docs_ro
             _persist_job(job)
             try:
                 prompt = _build_repo_overview_refresh_prompt(source_root, docs_root, analyse_root)
-                router = ModelRouter()
-                primary_model = router.resolve("planner")
+                # Single-model invariant: resolve directly without consulting stage routing.
+                primary_model = resolve_model_name(None)
                 configured_models = [m.name for m in get_app_config().models]
                 ordered_models: list[str] = []
                 if primary_model:

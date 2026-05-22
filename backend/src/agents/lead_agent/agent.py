@@ -29,6 +29,7 @@ from src.agents.middlewares.memory_middleware import MemoryMiddleware
 from src.agents.middlewares.metrics_middleware import MetricsMiddleware
 from src.agents.middlewares.model_timeout_middleware import ModelTimeoutMiddleware
 from src.agents.middlewares.permission_middleware import PermissionMiddleware
+from src.agents.middlewares.phase_tool_filter_middleware import PhaseToolFilterMiddleware
 from src.agents.middlewares.plan_evaluator_middleware import PlanEvaluatorMiddleware
 from src.agents.middlewares.plan_execution_gate_middleware import PlanExecutionGateMiddleware
 from src.agents.middlewares.plan_file_sync_middleware import PlanFileSyncMiddleware
@@ -36,6 +37,7 @@ from src.agents.middlewares.planner_middleware import PlannerMiddleware
 from src.agents.middlewares.pro_followup_middleware import PlanFollowupMiddleware
 from src.agents.middlewares.progress_guard_middleware import ProgressGuardMiddleware
 from src.agents.middlewares.question_generation_middleware import QuestionGenerationMiddleware
+from src.agents.middlewares.recursion_pivot_middleware import RecursionBudgetPivotMiddleware
 from src.agents.middlewares.resume_state_middleware import ResumeStateMiddleware
 from src.agents.middlewares.retry_policy_middleware import RetryPolicyMiddleware
 from src.agents.middlewares.scratchpad_task_memory_middleware import ScratchpadTaskMemoryMiddleware
@@ -69,6 +71,7 @@ from src.config.hooks_config import get_hooks_config
 from src.config.loop_detection_config import get_loop_detection_config
 from src.config.memory_config import get_memory_config
 from src.config.planner_config import get_planner_config
+from src.config.recursion_pivot_config import get_recursion_pivot_config
 from src.config.resume_config import get_resume_config
 from src.config.retry_config import get_retry_config
 from src.config.scratchpad_config import get_scratchpad_config
@@ -79,7 +82,7 @@ from src.config.task_memory_config import get_task_memory_config
 from src.config.todos_config import get_todos_config
 from src.config.tool_disclosure_config import get_tool_disclosure_config
 from src.config.web_search_summary_config import get_web_search_summary_config
-from src.models import ModelRouter, create_chat_model
+from src.models import ModelRouter, create_chat_model, resolve_model_name
 from src.sandbox.middleware import SandboxMiddleware
 
 logger = logging.getLogger(__name__)
@@ -106,18 +109,12 @@ def _normalize_runtime_mode(raw_mode: object) -> str:
 
 
 def _resolve_model_name(requested_model_name: str | None = None) -> str:
-    """Resolve a runtime model name safely, falling back to default if invalid."""
-    app_config = get_app_config()
-    default_model_name = app_config.models[0].name if app_config.models else None
-    if default_model_name is None:
-        raise ValueError("No chat models are configured. Please configure at least one model in config.yaml.")
+    """Resolve a runtime model name safely, falling back to default if invalid.
 
-    if requested_model_name and app_config.get_model_config(requested_model_name):
-        return requested_model_name
-
-    if requested_model_name and requested_model_name != default_model_name:
-        logger.warning(f"Model '{requested_model_name}' not found in config; fallback to default model '{default_model_name}'.")
-    return default_model_name
+    Thin wrapper around ``resolve_model_name``; kept for backwards compatibility
+    with call sites inside this module.
+    """
+    return resolve_model_name(requested_model_name)
 
 
 def _positive_int(value: object) -> int | None:
@@ -388,7 +385,6 @@ def _create_planner(ctx: _RegistryContext) -> AgentMiddleware | None:
     if not ctx.is_plan_mode or not planner_cfg.enabled:
         return None
     return PlannerMiddleware(
-        router=ctx.router,
         requested_model=ctx.model_name,
         max_plan_steps=planner_cfg.max_plan_steps,
         dag_enabled=get_todos_config().dag_enabled,
@@ -417,7 +413,6 @@ def _create_plan_evaluator(ctx: _RegistryContext) -> AgentMiddleware | None:
     if not ctx.is_plan_mode or not planner_cfg.enabled:
         return None
     return PlanEvaluatorMiddleware(
-        router=ctx.router,
         requested_model=ctx.model_name,
         timeout_seconds=evaluator_cfg.plan_evaluator_timeout_seconds,
     )
@@ -426,7 +421,7 @@ def _create_plan_evaluator(ctx: _RegistryContext) -> AgentMiddleware | None:
 def _create_web_search_summary(ctx: _RegistryContext) -> AgentMiddleware | None:
     if not get_web_search_summary_config().enabled:
         return None
-    return WebSearchSummaryMiddleware(router=ctx.router, requested_model=ctx.model_name)
+    return WebSearchSummaryMiddleware(requested_model=ctx.model_name)
 
 
 def _create_view_image(ctx: _RegistryContext) -> AgentMiddleware | None:
@@ -460,6 +455,17 @@ def _create_retry(_ctx: _RegistryContext) -> AgentMiddleware | None:
     return RetryPolicyMiddleware(retry_cfg)
 
 
+def _create_recursion_pivot(ctx: _RegistryContext) -> AgentMiddleware | None:
+    cfg = get_recursion_pivot_config()
+    if not cfg.enabled:
+        return None
+    return RecursionBudgetPivotMiddleware(
+        router=ctx.router,
+        requested_model=ctx.model_name,
+        config=cfg,
+    )
+
+
 def _create_loop_detection(_ctx: _RegistryContext) -> AgentMiddleware | None:
     cfg = get_loop_detection_config()
     if not cfg.enabled:
@@ -479,6 +485,12 @@ def _create_tool_disclosure(_ctx: _RegistryContext) -> AgentMiddleware | None:
     if not cfg.enabled:
         return None
     return ToolDisclosureMiddleware(cfg)
+
+
+def _create_phase_tool_filter(_ctx: _RegistryContext) -> AgentMiddleware | None:
+    # Always-on. Hides execution tools from the LLM while plan is draft so the
+    # LLM literally cannot call them. See phase_tool_filter_middleware.py.
+    return PhaseToolFilterMiddleware()
 
 
 def _create_scratchpad_task_memory(_ctx: _RegistryContext) -> AgentMiddleware | None:
@@ -503,7 +515,8 @@ def _create_todo_failure_retry(ctx: _RegistryContext) -> AgentMiddleware | None:
 
 
 def _create_title(ctx: _RegistryContext) -> AgentMiddleware | None:
-    return TitleMiddleware(model_name=ctx.router.resolve("title", requested_model=ctx.model_name))
+    # Single-model invariant: title generation runs on the chat-selected model.
+    return TitleMiddleware(model_name=resolve_model_name(ctx.model_name))
 
 
 def _create_memory(ctx: _RegistryContext) -> AgentMiddleware | None:
@@ -566,13 +579,17 @@ def _build_middleware_registry(
         MiddlewareSpec("dangling_tool_call", lambda: DanglingToolCallMiddleware(), after={"sandbox"}),
         MiddlewareSpec("work_mode", bind(_create_work_mode), after={"dangling_tool_call"}, before={"search_privacy"}),
         MiddlewareSpec("search_privacy", lambda: SearchPrivacyMiddleware(), after={"dangling_tool_call"}),
-        MiddlewareSpec("plan_execution_gate", lambda: PlanExecutionGateMiddleware(), after={"search_privacy"}, before={"permissions"}),
+        # Planner must run before plan_execution_gate so the gate has a plan to
+        # consult on turn 1. Otherwise the model's first-turn tool calls bypass
+        # the gate entirely. See thread-fa33b3bb investigation.
+        MiddlewareSpec("plan_execution_gate", lambda: PlanExecutionGateMiddleware(requested_model=ctx.model_name), after={"planner"}, before={"permissions"}),
         MiddlewareSpec("permissions", lambda: PermissionMiddleware(), after={"search_privacy"}),
         MiddlewareSpec("tool_disclosure", bind(_create_tool_disclosure), after={"permissions"}),
         MiddlewareSpec("hooks", bind(_create_hooks), after={"tool_disclosure"}),
         MiddlewareSpec("summarization", lambda: _create_summarization_middleware(mode=mode, dreamy_mode=dreamy_mode), after={"search_privacy"}),
         MiddlewareSpec("skill_disclosure", lambda: SkillDisclosureMiddleware(), after={"summarization"}),
-        MiddlewareSpec("planner", bind(_create_planner), after={"skill_disclosure"}),
+        MiddlewareSpec("planner", bind(_create_planner), after={"skill_disclosure", "search_privacy"}),
+        MiddlewareSpec("phase_tool_filter", bind(_create_phase_tool_filter), after={"planner"}),
         MiddlewareSpec("plan_evaluator", bind(_create_plan_evaluator), after={"planner"}),
         MiddlewareSpec("web_search_summary", bind(_create_web_search_summary), after={"tool_result_truncation"}),
         MiddlewareSpec("todo", bind(_create_todo), after={"plan_evaluator"}),
@@ -599,6 +616,11 @@ def _build_middleware_registry(
         # inspecting outputs (unchanged artifacts/todos/files), while LoopDetection detects
         # repetitive inputs (identical call-pattern hashes and per-tool-type frequency saturation).
         MiddlewareSpec("loop_detection", bind(_create_loop_detection), after={"plan_followup"}),
+        # RecursionBudgetPivotMiddleware: at configured budget thresholds, calls an evaluator LLM
+        # in before_model to inject steering. Runs after the output-focused guards so its decision
+        # sees any warnings they emitted in the prior turn. Lead-agent only — subagents are out
+        # of scope for v1 (they have their own max_turns-derived ceiling).
+        MiddlewareSpec("recursion_pivot", bind(_create_recursion_pivot), after={"loop_detection"}),
         # TrajectoryMiddleware must be the OUTERMOST wrap_*_call wrapper so it observes
         # the synthetic timeout/error responses produced by ModelTimeoutMiddleware and
         # other inner middlewares (otherwise it sees CancelledError propagating from
@@ -615,7 +637,7 @@ def _build_middleware_registry(
         MiddlewareSpec(
             "clarification",
             lambda: ClarificationMiddleware(),
-            after={"metrics", "permissions", "memory", "subagent_limit", "progress_guard", "loop_detection", "evaluator", "execution_trace", "activity_timeline"},
+            after={"metrics", "permissions", "memory", "subagent_limit", "progress_guard", "loop_detection", "recursion_pivot", "evaluator", "execution_trace", "activity_timeline"},
         ),
     ]
 

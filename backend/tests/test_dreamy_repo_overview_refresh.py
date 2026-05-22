@@ -71,7 +71,10 @@ def test_analyse_enqueues_durable_refresh_and_overwrites_repo_overview(
     _mount_thread(test_client, thread_id, mounted_dir)
 
     monkeypatch.setattr(dreamy, "create_chat_model", lambda **kwargs: _ModelSuccess())
-    monkeypatch.setattr(dreamy.ModelRouter, "resolve", lambda self, key: "fake-model")
+    # Stage routing was removed in favor of the single-model invariant —
+    # dreamy now calls ``resolve_model_name`` directly. Patch it here so the
+    # test gets a deterministic "fake-model" without touching real app_config.
+    monkeypatch.setattr(dreamy, "resolve_model_name", lambda _requested=None: "fake-model")
     monkeypatch.setattr(dreamy, "get_app_config", lambda: SimpleNamespace(models=[SimpleNamespace(name="fake-model")]))
 
     analyse_res = test_client.post(f"/api/threads/{thread_id}/analyse")
@@ -107,7 +110,7 @@ def test_refresh_retries_and_persists_failed_status(
     _mount_thread(test_client, thread_id, mounted_dir)
 
     monkeypatch.setattr(dreamy, "create_chat_model", lambda **kwargs: _ModelFailure())
-    monkeypatch.setattr(dreamy.ModelRouter, "resolve", lambda self, key: "fake-model")
+    monkeypatch.setattr(dreamy, "resolve_model_name", lambda _requested=None: "fake-model")
     monkeypatch.setattr(dreamy, "get_app_config", lambda: SimpleNamespace(models=[SimpleNamespace(name="fake-model")]))
 
     analyse_res = test_client.post(f"/api/threads/{thread_id}/analyse")

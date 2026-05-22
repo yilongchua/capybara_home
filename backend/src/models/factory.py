@@ -86,6 +86,10 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
             "supports_vision",
         },
     )
+    # Internal markers (e.g. user-endpoint synthesis tag) must not flow to the
+    # underlying chat-model constructor.
+    for k in [key for key in model_settings_from_config if key.startswith("__")]:
+        model_settings_from_config.pop(k, None)
     # Compute effective when_thinking_enabled by merging in the `thinking` shortcut field.
     # The `thinking` shortcut is equivalent to setting when_thinking_enabled["thinking"].
     has_thinking_settings = (model_config.when_thinking_enabled is not None) or (model_config.thinking is not None)
