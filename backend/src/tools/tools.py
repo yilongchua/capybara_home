@@ -4,6 +4,7 @@ from langchain.tools import BaseTool
 
 from src.community.knowledge_vault_search import query_knowledge_vault_tool, save_to_knowledge_vault_tool
 from src.community.lightrag import query_lightrag_tool
+from src.community.scope_search import scope_search_tool
 from src.community.web_search import web_search_tool
 from src.config import get_app_config
 from src.reflection import resolve_variable
@@ -17,6 +18,10 @@ BUILTIN_TOOLS = [
     recall_tool,
     write_todos_tool,
     web_search_tool,
+    # scope_search is the Plan-Mode-friendly wrapper around web_search. Both
+    # are registered; PhaseToolFilterMiddleware hides web_search while a plan
+    # is in draft so the LLM only ever sees scope_search until approval.
+    scope_search_tool,
     query_knowledge_vault_tool,
     save_to_knowledge_vault_tool,
     query_lightrag_tool,
