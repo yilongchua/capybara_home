@@ -329,6 +329,41 @@ def render_plan_md(
         todo_lines.append(f"- [{check}] **{todo_id}**: {content}")
         todo_lines.append(f"  - Status: {node_status}")
         todo_lines.append(f"  - Rationale: {rationale}")
+        # Rich todo annotations — render only when present so legacy plans
+        # without these fields stay clean. See planner_middleware._normalize_todo_steps.
+        objective_text = str(node.get("objective") or "").strip()
+        if objective_text:
+            todo_lines.append(f"  - Objective: {objective_text}")
+        steps = node.get("steps") or []
+        if isinstance(steps, list) and steps:
+            todo_lines.append("  - Steps:")
+            for idx, step in enumerate(steps, start=1):
+                if not isinstance(step, dict):
+                    continue
+                step_description = str(step.get("description") or "").strip()
+                if not step_description:
+                    continue
+                todo_lines.append(f"    {idx}. {step_description}")
+                subagents = step.get("subagent_types") or []
+                if isinstance(subagents, list) and subagents:
+                    todo_lines.append(f"       - Subagent: {', '.join(str(s) for s in subagents if s)}")
+                else:
+                    todo_lines.append("       - Subagent: lead agent")
+                tools = step.get("tools") or []
+                if isinstance(tools, list) and tools:
+                    todo_lines.append(f"       - Tools: {', '.join(str(t) for t in tools if t)}")
+                output_path = step.get("output_artifact_path")
+                if output_path:
+                    todo_lines.append(f"       - Output: `{output_path}`")
+                step_done_when = str(step.get("completion_requirement") or "").strip()
+                if step_done_when:
+                    todo_lines.append(f"       - Done when: {step_done_when}")
+        todo_done_when = str(node.get("completion_requirement") or "").strip()
+        if todo_done_when:
+            todo_lines.append(f"  - Done when: {todo_done_when}")
+        failure_fallback = str(node.get("failure_fallback") or "").strip()
+        if failure_fallback:
+            todo_lines.append(f"  - On failure: {failure_fallback}")
         if deps:
             todo_lines.append(f"  - Depends on: {', '.join(deps)}")
         status_lines.append(f"- [{node_status}] {todo_id}: {content}")

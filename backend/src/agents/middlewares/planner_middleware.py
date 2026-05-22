@@ -33,7 +33,7 @@ from src.agents.middlewares.todo_dag_middleware import _legacy_todos, normalize_
 from src.agents.middlewares.work_run_handoff import spawn_work_mode_handoff
 from src.config.handoffs_config import HandoffsConfig
 from src.config.sprint_contracts_config import SprintContractsConfig
-from src.models import ModelRouter, create_chat_model
+from src.models import create_chat_model, resolve_model_name
 from src.sandbox.path_mapping import to_virtual_path
 
 logger = logging.getLogger(__name__)
@@ -233,7 +233,15 @@ Return ONLY valid JSON matching this exact schema (no prose, no markdown fences)
       "rationale": "Why this step exists and why now (1 sentence).",
       "depends_on": [],
       "owner": "lead",
-      "subagent_type": null
+      "subagent_type": null,
+      "objective": "Phase-level outcome this todo achieves (1-2 sentences).",
+      "failure_fallback": "What to do if a step fails (e.g., return best-effort with label, ask_clarification).",
+      "steps": [
+        {
+          "description": "What this step does (action sentence)",
+          "completion_requirement": "Observable check that proves the step is done"
+        }
+      ]
     }
   ]
 }
@@ -264,6 +272,57 @@ TODO STYLE:
 - Include a rationale sentence per step.
 - Avoid jargon, nested clauses, or stacked subtasks in a single todo.
 - Maximum {max_steps} todos.
+
+RICH EXECUTION FIELDS (per todo):
+Required:
+- objective: 1-2 sentence phase-level goal — what the todo achieves overall.
+- failure_fallback: what to do if a step fails — e.g., "return best-effort
+  from prior knowledge, clearly labelled" or "call ask_clarification".
+- steps: ordered execution steps. Each step MUST include:
+    - description: short action sentence.
+    - completion_requirement: concrete check that proves the step is done
+      (e.g., "file exists with >= 10 entries", "list contains >= 10 items").
+
+Optional — include ONLY when they carry real signal, otherwise omit:
+- completion_requirement (todo-level): include only when it adds something
+  beyond the final step's done-criterion (e.g., a cross-step invariant).
+- steps[].subagent_types: from {source-researcher, docs-explorer,
+  comparison-dimension-researcher, synthesis-reviewer, general-purpose, bash}.
+  Omit when the lead agent handles the step directly. Prefer
+  ["source-researcher"] for broad web research (it has its own search budget).
+- steps[].tools: from {web_search, query_lightrag, query_knowledge_vault,
+  read_file, write_file, str_replace, bash, ls, view_image, task,
+  present_files}. Omit when the step needs no specific tool gating.
+- steps[].output_artifact_path: virtual path under /mnt/user-data/workspace,
+  but ONLY when the step's completion_requirement actually references a file.
+  Do not invent paths to fill the field.
+
+Do not pad fields with vague text ("step completes", "retry"). If a field
+would be filler, omit it.
+
+EXAMPLE rich todo for "Search top 10 restaurants":
+{
+  "id": "todo-1",
+  "content": "Identify 10 well-reviewed restaurants matching the user's criteria",
+  "rationale": "Foundational lookup that downstream filtering depends on.",
+  "depends_on": [],
+  "owner": "lead",
+  "subagent_type": "source-researcher",
+  "objective": "Produce a candidate list of restaurants with enough headroom to filter to top 10.",
+  "failure_fallback": "If web_search returns < 10 results, fall back to model's prior knowledge and label results as 'best-effort from training data'. If criteria are ambiguous, call ask_clarification.",
+  "steps": [
+    {
+      "description": "Web search for candidate restaurants",
+      "subagent_types": ["source-researcher"],
+      "output_artifact_path": "/mnt/user-data/workspace/candidates.md",
+      "completion_requirement": "candidates.md contains at least 15 entries with name + URL"
+    },
+    {
+      "description": "Filter to top 10 by review score",
+      "completion_requirement": "top10.md contains exactly 10 entries with name, URL, and score"
+    }
+  ]
+}
 """
 
 
@@ -417,6 +476,50 @@ def _looks_trivial(user_prompt: str, *, plan_mode: bool = False) -> bool:  # noq
 # ---------------------------------------------------------------------------
 
 
+def _normalize_todo_steps(raw: Any) -> list[dict[str, Any]]:
+    """Normalize rich todo ``steps`` field into a list of dicts.
+
+    Robust to:
+    - missing field (returns [])
+    - non-list field
+    - non-dict entries
+    - missing sub-fields (filled with safe defaults)
+
+    Older plans without ``steps`` simply get an empty list; rendering and
+    Work Mode dispatchers must tolerate that.
+    """
+    if not isinstance(raw, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        description = str(item.get("description") or "").strip()
+        if not description:
+            continue
+        subagent_types_raw = item.get("subagent_types")
+        subagent_types: list[str] = []
+        if isinstance(subagent_types_raw, list):
+            subagent_types = [str(s).strip() for s in subagent_types_raw if str(s).strip()]
+        tools_raw = item.get("tools")
+        tools: list[str] = []
+        if isinstance(tools_raw, list):
+            tools = [str(t).strip() for t in tools_raw if str(t).strip()]
+        output_artifact_path = item.get("output_artifact_path")
+        if output_artifact_path is not None:
+            output_artifact_path = str(output_artifact_path).strip() or None
+        normalized.append(
+            {
+                "description": description,
+                "subagent_types": subagent_types,
+                "tools": tools,
+                "output_artifact_path": output_artifact_path,
+                "completion_requirement": str(item.get("completion_requirement") or "").strip(),
+            }
+        )
+    return normalized
+
+
 def _parse_plan_response(raw: str, max_steps: int) -> PlannerOutput:
     """Parse the planner LLM JSON output into a PlannerOutput."""
     text = raw.strip()
@@ -480,6 +583,12 @@ def _parse_plan_response(raw: str, max_steps: int) -> PlannerOutput:
                 "owner": item.get("owner") or "lead",
                 "subagent_type": item.get("subagent_type"),
                 "rationale": str(item.get("rationale") or "").strip(),
+                # Rich todo annotations — optional. Missing fields default to
+                # empty so legacy plans without these fields stay valid.
+                "objective": str(item.get("objective") or "").strip(),
+                "completion_requirement": str(item.get("completion_requirement") or "").strip(),
+                "failure_fallback": str(item.get("failure_fallback") or "").strip(),
+                "steps": _normalize_todo_steps(item.get("steps")),
             }
         )
     if not todos:
@@ -544,7 +653,6 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
     def __init__(
         self,
         *,
-        router: ModelRouter,
         requested_model: str | None,
         max_plan_steps: int,
         dag_enabled: bool,
@@ -552,9 +660,14 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         sprint_contracts_config: SprintContractsConfig,
         research_fanout: bool = False,
         research_fanout_min_todos: int = 2,
+        router: Any = None,  # noqa: ARG002
     ):
+        # ``router`` is accepted for backwards compatibility with the
+        # ``router=ctx.router`` call sites that pre-date the single-model
+        # invariant. The middleware now uses ``resolve_model_name`` directly
+        # and the router argument is ignored.
+        del router
         super().__init__()
-        self._router = router
         self._requested_model = requested_model
         self._max_plan_steps = max_plan_steps
         self._dag_enabled = dag_enabled
@@ -599,8 +712,33 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
     ) -> ModelCallResult:
         return await handler(self._with_ephemeral_planner_context(request))
 
+    # Cap the number of in-place revisions we allow on a single draft plan so
+    # a confused agent (or replay loop) can't trigger unbounded planner calls.
+    _MAX_DRAFT_REVISIONS = 5
+
     def _should_plan(self, state: PlannerState, runtime: Runtime) -> bool:
-        if state.get("plan"):
+        plan = state.get("plan")
+        # Re-plan opportunity: if a draft plan already exists, the user has
+        # not answered a pending clarification, and a fresh HumanMessage has
+        # arrived since the last plan revision, run the planner again to
+        # incorporate the user's edit. The new plan reuses the same plan_id
+        # and bumps a `revision` counter — see before_model below.
+        if isinstance(plan, dict):
+            status = str(plan.get("status") or "").strip().lower()
+            if status == "draft" and not bool(plan.get("clarification_pending")):
+                if int(plan.get("revision") or 0) >= self._MAX_DRAFT_REVISIONS:
+                    append_runtime_event(
+                        runtime,
+                        {
+                            "source": "planner_middleware",
+                            "decision": "replan_capped",
+                            "plan_id": plan.get("plan_id"),
+                            "revision": plan.get("revision"),
+                        },
+                    )
+                    return False
+                if self._has_new_user_message_since_plan(state, plan):
+                    return True
             return False
         if state.get("todo_graph"):
             return False
@@ -614,8 +752,27 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
             return human_count >= 1
         return human_count >= 1 and ai_count == 0
 
+    @staticmethod
+    def _has_new_user_message_since_plan(state: PlannerState, plan: dict[str, Any]) -> bool:
+        """Detect a fresh user message that warrants a draft re-plan.
+
+        We compare HumanMessage count against the recorded baseline at plan
+        creation time. If we don't have a baseline yet (legacy plans), allow
+        a single revision when at least two human messages exist (initial +
+        edit). The baseline is set in ``before_model`` after a successful plan.
+        """
+        baseline_raw = plan.get("human_messages_at_plan")
+        baseline = int(baseline_raw) if isinstance(baseline_raw, int) else None
+        messages = state.get("messages") or []
+        human_count = sum(1 for msg in messages if getattr(msg, "type", None) == "human")
+        if baseline is None:
+            return human_count >= 2
+        return human_count > baseline
+
     def _invoke_planner(self, user_prompt: str) -> tuple[PlannerOutput, str]:
-        model_name = self._router.resolve("planner", requested_model=self._requested_model)
+        # Single-model invariant: honor the user's chat-selected model directly
+        # rather than consulting stage-based routing. See src/models/resolver.py.
+        model_name = resolve_model_name(self._requested_model)
         model = create_chat_model(name=model_name, thinking_enabled=False)
         prompt = PLANNER_SYSTEM_PROMPT.replace("{max_steps}", str(self._max_plan_steps))
         full_prompt = f"{prompt}\n\nUser request:\n{user_prompt}"
@@ -740,7 +897,21 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         artifact_paths: list[str] = []
         plan_path: str | None = None
         latest_alias_path: str | None = None
-        plan_id = f"plan-{uuid4().hex[:10]}"
+        # Plan-edit reuse: if a draft plan already exists and the user is
+        # refining it, preserve plan_id and bump revision. This keeps plan.md
+        # history coherent and lets the frontend update the same popup in place.
+        existing_plan = state.get("plan") if isinstance(state.get("plan"), dict) else None
+        is_replan = (
+            isinstance(existing_plan, dict)
+            and str(existing_plan.get("status") or "").strip().lower() == "draft"
+            and not bool(existing_plan.get("clarification_pending"))
+        )
+        if is_replan:
+            plan_id = str(existing_plan.get("plan_id") or "").strip() or f"plan-{uuid4().hex[:10]}"
+            revision = int(existing_plan.get("revision") or 0) + 1
+        else:
+            plan_id = f"plan-{uuid4().hex[:10]}"
+            revision = 0
         auto_mode = _auto_mode_enabled(runtime, state)
         plan_status = "approved" if auto_mode and not clarification_pending else "draft"
         approved_at = _utc_now_iso() if plan_status == "approved" else None
@@ -849,6 +1020,24 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                 }
             )
 
+        # Serialize clarifications once so both the SSE event and the persisted
+        # plan dict carry the same payload — the frontend popup needs the full
+        # list to render the inline clarification panel.
+        clarifications_payload = [
+            {
+                "question": clarification.question,
+                "options": [
+                    {
+                        "label": option.label,
+                        "recommended": option.recommended,
+                        "description": option.description,
+                    }
+                    for option in clarification.options
+                ],
+            }
+            for clarification in clarifications
+        ]
+
         # Emit plan_created with inline first_todos — no async fetch needed on frontend
         try:
             writer = get_stream_writer()
@@ -865,6 +1054,13 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                 "first_todos": [n.get("content", "") for n in nodes[:5]],
                 "plan_path": plan_path,
                 "clarification_pending": clarification_pending,
+                # Inline clarification panel: the frontend Execute Plan popup
+                # renders options directly so the user can answer without an
+                # `ask_clarification` round-trip. POST to /plan/clarify advances.
+                "clarifications": clarifications_payload,
+                "clarification_index": 0,
+                # Revision counter for in-place plan edits; 0 = brand new.
+                "revision": revision,
             })
         except Exception:
             logger.exception("Failed to emit plan_created SSE")
@@ -896,26 +1092,22 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                 "todo_ids": [node["id"] for node in nodes],
                 "plan_path": plan_path,
                 "latest_alias_path": latest_alias_path,
-                "clarifications": [
-                    {
-                        "question": clarification.question,
-                        "options": [
-                            {
-                                "label": option.label,
-                                "recommended": option.recommended,
-                                "description": option.description,
-                            }
-                            for option in clarification.options
-                        ],
-                    }
-                    for clarification in clarifications
-                ],
+                "clarifications": clarifications_payload,
                 "clarification_pending": clarification_pending,
-                "clarification_index": 0 if clarification_pending else 0,
+                "clarification_index": 0,
                 "clarification_answers": [],
                 "clarification_resolved": not clarification_pending,
                 "clarification_question": primary_clarification.question if primary_clarification else None,
                 "created_at": created_at,
+                # Plan editing bookkeeping: revision starts at 0 for new plans
+                # and is bumped on each in-place re-plan. human_messages_at_plan
+                # records the HumanMessage count at this revision so future
+                # re-plan checks can detect a fresh user turn (see _should_plan).
+                "revision": revision,
+                "human_messages_at_plan": sum(
+                    1 for msg in (state.get("messages") or []) if getattr(msg, "type", None) == "human"
+                ),
+                "updated_at": _utc_now_iso(),
             }
         if approved_at:
             plan_dict["approved_at"] = approved_at

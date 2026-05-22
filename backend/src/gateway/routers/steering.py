@@ -9,11 +9,13 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
+from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
 from src.agents.memory.compaction_archive import append_compaction_entry
 from src.agents.middlewares.plan_execution import (
     apply_clarification_progress,
+    build_clarification_prompt_message,
     execute_plan_should_duplicate,
     mark_handoff_requested,
     resolve_auto_mode,
@@ -80,6 +82,36 @@ class ExecutePlanResponse(BaseModel):
     plan_id: str | None = None
     plan_status: str | None = None
     status: Literal["accepted", "duplicate", "conflict", "failed"]
+
+
+class ClarifyPlanRequest(BaseModel):
+    """Answer a single pending clarification on a draft plan.
+
+    The frontend Execute Plan popup renders clarification options inline; when
+    the user picks one, this endpoint records the answer and advances the plan
+    (either to the next clarification or out of clarification-pending state).
+    """
+
+    clarification_index: int = Field(
+        ...,
+        ge=0,
+        description="Index of the clarification being answered. Must match plan.clarification_index.",
+    )
+    selected_option_label: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="Label of the option the user selected (must exactly match one of the clarification's options).",
+    )
+
+
+class ClarifyPlanResponse(BaseModel):
+    thread_id: str
+    acknowledged: bool
+    plan_id: str | None = None
+    clarification_pending: bool = False
+    clarification_index: int = 0
+    status: Literal["accepted", "conflict", "failed"]
 
 
 class CompactThreadResponse(BaseModel):
@@ -509,6 +541,156 @@ async def execute_plan(thread_id: str, request: ExecutePlanRequest) -> ExecutePl
         raise HTTPException(
             status_code=502,
             detail=_detail_with_status("failed", f"Failed to execute plan: {exc}"),
+        ) from exc
+
+
+def _normalize_clarification_options(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for option in raw:
+        if not isinstance(option, dict):
+            continue
+        label = str(option.get("label") or "").strip()
+        if not label:
+            continue
+        normalized.append(
+            {
+                "label": label,
+                "recommended": bool(option.get("recommended", False)),
+                "description": option.get("description"),
+            }
+        )
+    return normalized
+
+
+@router.post(
+    "/threads/{thread_id}/plan/clarify",
+    response_model=ClarifyPlanResponse,
+    summary="Answer Pending Plan Clarification",
+    description=(
+        "Record a user-selected clarification answer for a draft plan and advance "
+        "the clarification index. When all clarifications are resolved the plan "
+        "remains in draft until the user calls /plan/execute."
+    ),
+)
+async def clarify_plan(thread_id: str, request: ClarifyPlanRequest) -> ClarifyPlanResponse:
+    try:
+        from langgraph_sdk import get_client
+
+        client = get_client(url=_langgraph_url())
+        state = await client.threads.get_state(thread_id)
+        values = _extract_state_values(state)
+        plan = _as_plan(values.get("plan"))
+        if not plan:
+            return ClarifyPlanResponse(
+                thread_id=thread_id,
+                acknowledged=False,
+                plan_id=None,
+                status="conflict",
+            )
+
+        plan_id = str(plan.get("plan_id") or "").strip() or None
+        clarifications = plan.get("clarifications")
+        if not isinstance(clarifications, list) or not clarifications:
+            return ClarifyPlanResponse(
+                thread_id=thread_id,
+                acknowledged=False,
+                plan_id=plan_id,
+                status="conflict",
+            )
+
+        current_index = int(plan.get("clarification_index") or 0)
+        # Reject answers out of order — the popup advances strictly by index
+        # so any drift indicates a stale UI submission.
+        if request.clarification_index != current_index:
+            return ClarifyPlanResponse(
+                thread_id=thread_id,
+                acknowledged=False,
+                plan_id=plan_id,
+                clarification_pending=bool(plan.get("clarification_pending")),
+                clarification_index=current_index,
+                status="conflict",
+            )
+
+        if current_index >= len(clarifications):
+            return ClarifyPlanResponse(
+                thread_id=thread_id,
+                acknowledged=False,
+                plan_id=plan_id,
+                clarification_pending=False,
+                clarification_index=current_index,
+                status="conflict",
+            )
+
+        clarification = clarifications[current_index] if isinstance(clarifications[current_index], dict) else {}
+        options = _normalize_clarification_options(clarification.get("options"))
+        if not any(option["label"] == request.selected_option_label for option in options):
+            return ClarifyPlanResponse(
+                thread_id=thread_id,
+                acknowledged=False,
+                plan_id=plan_id,
+                clarification_pending=bool(plan.get("clarification_pending")),
+                clarification_index=current_index,
+                status="conflict",
+            )
+
+        # Synthesize a HumanMessage that satisfies apply_clarification_progress.
+        # It expects the message to follow the clarification prompt marker, with
+        # the user's selected label as the answer body.
+        question_text = str(clarification.get("question") or "").strip()
+        prompt_message = build_clarification_prompt_message(
+            {"question": question_text, "options": options}
+        )
+        answer_message = HumanMessage(content=request.selected_option_label)
+
+        existing_messages = values.get("messages")
+        message_list = existing_messages if isinstance(existing_messages, list) else []
+        # Pass the existing transcript PLUS the synthetic prompt + answer pair
+        # to apply_clarification_progress so it can detect the answer-after-prompt
+        # sequence and advance the plan.
+        progress = apply_clarification_progress(plan, [*message_list, prompt_message, answer_message])
+        if progress is None:
+            return ClarifyPlanResponse(
+                thread_id=thread_id,
+                acknowledged=False,
+                plan_id=plan_id,
+                clarification_pending=bool(plan.get("clarification_pending")),
+                clarification_index=current_index,
+                status="conflict",
+            )
+
+        resolved_plan = dict(progress["plan"])
+        update_payload: dict[str, Any] = {
+            "plan": resolved_plan,
+            # Persist the synthetic answer in the thread so future planner runs
+            # and replay state include it. The synthetic prompt is not stored —
+            # apply_clarification_progress only needs the answer alongside the
+            # existing transcript.
+            "messages": [answer_message, *progress.get("messages", [])],
+        }
+        await client.threads.update_state(thread_id, update_payload)
+
+        return ClarifyPlanResponse(
+            thread_id=thread_id,
+            acknowledged=True,
+            plan_id=plan_id,
+            clarification_pending=bool(resolved_plan.get("clarification_pending")),
+            clarification_index=int(resolved_plan.get("clarification_index") or 0),
+            status="accepted",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        status_code = _extract_status_code(exc)
+        if status_code == 404:
+            raise HTTPException(
+                status_code=404,
+                detail=_detail_with_status("failed", f"Thread '{thread_id}' not found."),
+            ) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=_detail_with_status("failed", f"Failed to record clarification: {exc}"),
         ) from exc
 
 
