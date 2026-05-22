@@ -264,6 +264,7 @@ class ThreadState(AgentState):
     uploaded_files: NotRequired[list[dict] | None]
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]  # image_path -> {base64, mime_type}
     progress_guard: NotRequired[ProgressGuardRuntimeState | None]
+    recursion_pivot: NotRequired[dict | None]
     trajectory: NotRequired[TrajectoryRuntimeState | None]
     skill_disclosure: NotRequired[SkillDisclosureState | None]
     plan: NotRequired[PlanState | None]
