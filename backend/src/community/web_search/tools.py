@@ -415,10 +415,6 @@ async def web_search_tool(query: str, max_results: int = 5) -> str:
 
                 manager = get_control_plane_service()._default_vault_manager()
                 queue_report = manager.enqueue_search_results(query=query, results=queue_results)
-                if int(queue_report.get("appended_count") or 0) > 0:
-                    get_control_plane_service().ensure_vault_queue_ingest_approval(
-                        sample_titles=[str(item.get("title") or item.get("url") or "") for item in queue_results],
-                    )
         except Exception:
             logger.exception("web_search queue append failed")
 
