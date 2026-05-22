@@ -7,6 +7,7 @@ import { api } from "@/core/dreamy/api";
 import { REFRESH_INTERVAL_ACTIVE, REFRESH_INTERVAL_IDLE } from "@/core/dreamy/constants";
 import {
   publishWorkspaceRefresh,
+  useDocumentVisible,
   useWorkspaceRefreshQuery,
 } from "@/core/workspace-refresh";
 
@@ -18,7 +19,7 @@ type WorkflowFetchResult = {
   notFound: boolean;
 };
 
-async function fetchWorkflowJson(threadId: string): Promise<WorkflowFetchResult> {
+export async function fetchWorkflowJson(threadId: string): Promise<WorkflowFetchResult> {
   const res = await fetch(`${getBackendBaseURL()}${api.threads.dreamy.workflow(threadId)}`);
   if (res.status === 404) {
     return { workflow: null, notFound: true };
@@ -42,11 +43,15 @@ export async function saveWorkflowJson(threadId: string, workflow: WorkflowJson)
 export function useWorkflowJson(threadId: string) {
   const { setWorkflowJson } = useDreamy();
   const [notFoundStreak, setNotFoundStreak] = useState(0);
+  const isVisible = useDocumentVisible();
   const { data } = useWorkspaceRefreshQuery<WorkflowFetchResult>({
     queryKey: ["dreamy-workflow", threadId],
     queryFn: () => fetchWorkflowJson(threadId),
     enabled: Boolean(threadId && threadId !== "new") && notFoundStreak < 3,
-    refetchInterval: (query) => (query.state.data?.workflow ? REFRESH_INTERVAL_ACTIVE : REFRESH_INTERVAL_IDLE),
+    refetchInterval: (query) => {
+      if (!isVisible) return false;
+      return query.state.data?.workflow ? REFRESH_INTERVAL_ACTIVE : REFRESH_INTERVAL_IDLE;
+    },
     staleTime: 0,
     retry: false,
     refreshDomains: threadId ? [`dreamy:${threadId}`, `thread:${threadId}`] : [],

@@ -70,7 +70,7 @@ export function useRunningRun(
     void pollRunningRun(true);
     const interval = window.setInterval(() => {
       void pollRunningRun(false);
-    }, 3000);
+    }, 15000);
     const onFocus = () => {
       void pollRunningRun(false);
     };

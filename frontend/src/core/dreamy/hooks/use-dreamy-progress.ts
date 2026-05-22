@@ -7,7 +7,7 @@ import type { DreamyPhase } from "@/core/dreamy/types";
 import { useDreamy } from "../context";
 
 import { useCheckpoint } from "./use-checkpoint";
-import { EXECUTOR_ACTIVE_STATES, useProgress } from "./use-progress";
+import { EXECUTOR_PROGRESS_STATES, useProgress } from "./use-progress";
 
 export interface DreamyProgress {
   completedRows: number;
@@ -35,7 +35,7 @@ export function useDreamyProgress(threadId?: string): DreamyProgress {
     if (!workflowJson) return empty;
 
     const { execution_state, steps } = workflowJson;
-    const executorActive = Boolean(progress && EXECUTOR_ACTIVE_STATES.has(progress.state));
+    const executorActive = Boolean(progress && EXECUTOR_PROGRESS_STATES.has(progress.state));
 
     // Prefer executor progress.json (compact, always current) for large runs;
     // fall back to checkpoint.json then workflow.json for small LLM-driven runs.

@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import {
   publishWorkspaceRefresh,
+  useDocumentVisible,
   useWorkspaceRefreshQuery,
 } from "../workspace-refresh";
 
@@ -94,6 +95,7 @@ export function usePipelineRuns(options?: {
   const threadId = options?.threadId?.trim();
   const statuses = options?.statuses ?? [];
   const limit = options?.limit;
+  const isVisible = useDocumentVisible();
   const { data, isLoading, error } = useWorkspaceRefreshQuery({
     queryKey: ["control-plane", "runs", threadId ?? "", statuses.join(","), limit ?? ""],
     queryFn: () =>
@@ -103,6 +105,7 @@ export function usePipelineRuns(options?: {
         limit,
       }),
     refetchInterval: (query) => {
+      if (!isVisible) return false;
       if (typeof options?.refetchInterval === "number") {
         return options.refetchInterval;
       }
@@ -118,10 +121,11 @@ export function usePipelineRuns(options?: {
 }
 
 export function useAutoresearchObjectives(options?: { refetchInterval?: number }) {
+  const isVisible = useDocumentVisible();
   const { data, isLoading, error } = useWorkspaceRefreshQuery<AutoresearchObjective[]>({
     queryKey: ["control-plane", "autoresearch-objectives"],
     queryFn: () => listAutoresearchObjectives(),
-    refetchInterval: options?.refetchInterval ?? 20_000,
+    refetchInterval: isVisible ? (options?.refetchInterval ?? 20_000) : false,
     refreshDomains: ["vault", "runs"],
   });
   return { objectives: data ?? [], isLoading, error };
@@ -154,10 +158,11 @@ export function usePipelineRunArtifactContent(
 }
 
 export function useVaultStatus(options?: { refetchInterval?: number }) {
+  const isVisible = useDocumentVisible();
   const { data, isLoading, error } = useWorkspaceRefreshQuery<VaultStatusResponse>({
     queryKey: ["control-plane", "vault-status"],
     queryFn: () => getVaultStatus(),
-    refetchInterval: options?.refetchInterval ?? 20_000,
+    refetchInterval: isVisible ? (options?.refetchInterval ?? 20_000) : false,
     refreshDomains: ["vault", "runs"],
   });
   return { vaultStatus: data ?? null, isLoading, error };
@@ -174,20 +179,22 @@ export function useVaultSearch(query: string, options?: { enabled?: boolean; lim
 }
 
 export function useVaultActionItems(options?: { refetchInterval?: number; limit?: number }) {
+  const isVisible = useDocumentVisible();
   const { data, isLoading, error } = useWorkspaceRefreshQuery<VaultActionItemsResponse>({
     queryKey: ["control-plane", "vault-action-items", options?.limit ?? 100],
     queryFn: () => getVaultActionItems(options?.limit ?? 100),
-    refetchInterval: options?.refetchInterval ?? 20_000,
+    refetchInterval: isVisible ? (options?.refetchInterval ?? 20_000) : false,
     refreshDomains: ["vault", "runs"],
   });
   return { actionItems: data ?? null, isLoading, error };
 }
 
 export function useVaultGraph(options?: { refetchInterval?: number; limit?: number }) {
+  const isVisible = useDocumentVisible();
   const { data, isLoading, error } = useWorkspaceRefreshQuery<VaultGraphResponse>({
     queryKey: ["control-plane", "vault-graph", options?.limit ?? 200],
     queryFn: () => getVaultGraph(options?.limit ?? 200),
-    refetchInterval: options?.refetchInterval ?? 20_000,
+    refetchInterval: isVisible ? (options?.refetchInterval ?? 20_000) : false,
     refreshDomains: ["vault"],
   });
   return { vaultGraph: data ?? null, isLoading, error };
@@ -225,11 +232,13 @@ export function useRefreshVaultExplorer() {
 }
 
 export function useVaultIngestStatus(options?: { refetchInterval?: number; enabled?: boolean }) {
+  const isVisible = useDocumentVisible();
   const { data, isLoading, error } = useWorkspaceRefreshQuery<VaultIngestStatusResponse>({
     queryKey: ["control-plane", "vault-ingest-status"],
     queryFn: () => getVaultIngestStatus(),
     enabled: options?.enabled ?? true,
     refetchInterval: (query) => {
+      if (!isVisible) return false;
       if (typeof options?.refetchInterval === "number") {
         return options.refetchInterval;
       }
@@ -353,10 +362,11 @@ export function useCleanupAutoresearch() {
 }
 
 export function useApprovals(options?: { refetchInterval?: number }) {
+  const isVisible = useDocumentVisible();
   const { data, isLoading, error } = useWorkspaceRefreshQuery({
     queryKey: ["control-plane", "approvals"],
     queryFn: () => listApprovals(),
-    refetchInterval: options?.refetchInterval,
+    refetchInterval: isVisible ? (options?.refetchInterval ?? false) : false,
     refreshDomains: ["approvals", "runs"],
   });
   return { approvals: data ?? [], isLoading, error };
@@ -381,10 +391,11 @@ export function useResolveApproval() {
 }
 
 export function useProposalApprovals(options?: { refetchInterval?: number }) {
+  const isVisible = useDocumentVisible();
   const { data, isLoading, error } = useWorkspaceRefreshQuery({
     queryKey: ["control-plane", "proposal-approvals"],
     queryFn: () => listProposalApprovals(),
-    refetchInterval: options?.refetchInterval,
+    refetchInterval: isVisible ? (options?.refetchInterval ?? false) : false,
     refreshDomains: ["approvals", "runs"],
   });
   return { proposals: data ?? [], isLoading, error };
@@ -434,20 +445,22 @@ export function useCreateFeedback() {
 }
 
 export function useIntegrationStatus() {
+  const isVisible = useDocumentVisible();
   const { data, isLoading, error } = useWorkspaceRefreshQuery({
     queryKey: ["control-plane", "integrations"],
     queryFn: () => getIntegrationStatus(),
-    refetchInterval: 30_000,
+    refetchInterval: isVisible ? 30_000 : false,
     refreshDomains: ["integrations", "runs", "vault"],
   });
   return { integrationStatus: data ?? null, isLoading, error };
 }
 
 export function useIntegrationServicesStatus() {
+  const isVisible = useDocumentVisible();
   const { data, isLoading, error } = useWorkspaceRefreshQuery({
     queryKey: ["control-plane", "integration-services"],
     queryFn: () => getIntegrationServicesStatus(),
-    refetchInterval: 30_000,
+    refetchInterval: isVisible ? 30_000 : false,
     refreshDomains: ["integrations"],
   });
   return { servicesStatus: data ?? null, isLoading, error };

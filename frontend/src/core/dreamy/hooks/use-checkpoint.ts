@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { getBackendBaseURL } from "@/core/config";
 import { api } from "@/core/dreamy/api";
 import { REFRESH_INTERVAL_ACTIVE, REFRESH_INTERVAL_IDLE } from "@/core/dreamy/constants";
+import { useDocumentVisible } from "@/core/workspace-refresh";
 
 export interface CheckpointData {
   total: number;
@@ -29,13 +30,16 @@ async function fetchCheckpoint(threadId: string): Promise<CheckpointFetchResult>
 
 export function useCheckpoint(threadId: string, enabled = true) {
   const [notFoundStreak, setNotFoundStreak] = useState(0);
+  const isVisible = useDocumentVisible();
   const query = useQuery<CheckpointFetchResult>({
     queryKey: ["dreamy-checkpoint", threadId],
     queryFn: () => fetchCheckpoint(threadId),
     enabled:
       enabled && Boolean(threadId && threadId !== "new") && notFoundStreak < 3,
-    refetchInterval: (query) =>
-      query.state.data?.checkpoint ? REFRESH_INTERVAL_ACTIVE : REFRESH_INTERVAL_IDLE,
+    refetchInterval: (query) => {
+      if (!isVisible) return false;
+      return query.state.data?.checkpoint ? REFRESH_INTERVAL_ACTIVE : REFRESH_INTERVAL_IDLE;
+    },
     staleTime: 0,
     retry: false,
   });

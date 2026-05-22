@@ -105,6 +105,33 @@ function notifyListeners(event: WorkspaceRefreshEvent) {
   }
 }
 
+const CROSS_TAB_THROTTLE_MS = 10_000;
+const _lastCrossTabInvalidatedAt = new Map<string, number>();
+
+function isCrossTabThrottled(
+  domains: WorkspaceRefreshDomain[],
+  originTabId: string,
+  currentTabId: string,
+): boolean {
+  if (originTabId === currentTabId) return false;
+  const now = Date.now();
+  for (const domain of domains) {
+    const last = _lastCrossTabInvalidatedAt.get(domain) ?? 0;
+    if (now - last < CROSS_TAB_THROTTLE_MS) return true;
+  }
+  for (const domain of domains) {
+    _lastCrossTabInvalidatedAt.set(domain, now);
+  }
+  return false;
+}
+
+function notifyCrossTabListeners(event: WorkspaceRefreshEvent) {
+  if (isCrossTabThrottled(event.domains, event.originTabId, getTabId())) {
+    return;
+  }
+  notifyListeners(event);
+}
+
 function initWorkspaceRefreshListeners() {
   if (listenersInitialized || typeof window === "undefined") {
     return;
@@ -115,7 +142,7 @@ function initWorkspaceRefreshListeners() {
     broadcastChannel = new BroadcastChannel(CHANNEL_NAME);
     broadcastChannel.addEventListener("message", (message) => {
       if (isWorkspaceRefreshEvent(message.data)) {
-        notifyListeners(message.data);
+        notifyCrossTabListeners(message.data);
       }
     });
   }
@@ -127,7 +154,7 @@ function initWorkspaceRefreshListeners() {
     try {
       const parsed = JSON.parse(event.newValue) as unknown;
       if (isWorkspaceRefreshEvent(parsed)) {
-        notifyListeners(parsed);
+        notifyCrossTabListeners(parsed);
       }
     } catch {
       // Ignore malformed storage events.
@@ -361,3 +388,5 @@ export function useWorkspaceRefreshQuery<
 
   return query;
 }
+
+export { isDocumentVisible, useDocumentVisible } from "./polling-governor";

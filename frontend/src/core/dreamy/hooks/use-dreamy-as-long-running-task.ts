@@ -3,26 +3,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
-import { getBackendBaseURL } from "@/core/config";
-import { api } from "@/core/dreamy/api";
 import { REFRESH_INTERVAL_LRT } from "@/core/dreamy/constants";
 import type { LongRunningTask, LongRunningTaskStatus } from "@/core/long-running/types";
-
-import type { WorkflowJson } from "../types";
+import { useDocumentVisible } from "@/core/workspace-refresh";
 
 import { useCheckpoint } from "./use-checkpoint";
-
-type WorkflowFetchResult = {
-  workflow: WorkflowJson | null;
-  notFound: boolean;
-};
-
-async function fetchWorkflowJsonRaw(threadId: string): Promise<WorkflowFetchResult> {
-  const res = await fetch(`${getBackendBaseURL()}${api.threads.dreamy.workflow(threadId)}`);
-  if (res.status === 404) return { workflow: null, notFound: true };
-  if (!res.ok) return { workflow: null, notFound: false };
-  return { workflow: (await res.json()) as WorkflowJson, notFound: false };
-}
+import { fetchWorkflowJson } from "./use-workflow-json";
 
 function phaseToStatus(phase: string): LongRunningTaskStatus | null {
   switch (phase) {
@@ -48,14 +34,15 @@ export function useDreamyAsLongRunningTask(
   enabledOverride = true,
 ): LongRunningTask | null {
   const [notFoundStreak, setNotFoundStreak] = useState(0);
+  const isVisible = useDocumentVisible();
   const enabled =
     enabledOverride && Boolean(threadId && threadId !== "new") && notFoundStreak < 3;
 
-  const { data } = useQuery<WorkflowFetchResult>({
-    queryKey: ["dreamy-workflow-lrt", threadId],
-    queryFn: () => fetchWorkflowJsonRaw(threadId),
+  const { data } = useQuery({
+    queryKey: ["dreamy-workflow", threadId],
+    queryFn: () => fetchWorkflowJson(threadId),
     enabled,
-    refetchInterval: REFRESH_INTERVAL_LRT,
+    refetchInterval: isVisible ? REFRESH_INTERVAL_LRT : false,
     staleTime: 0,
     retry: false,
   });

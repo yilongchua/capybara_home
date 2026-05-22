@@ -8,6 +8,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { WorkspaceSidebar } from "@/components/workspace/workspace-sidebar";
 import { getLocalSettings, useLocalSettings } from "@/core/settings";
 import { createWorkspaceQueryClient } from "@/core/workspace-refresh";
+import { PollingGovernorProvider } from "@/core/workspace-refresh/polling-governor";
 
 export default function WorkspaceLayout({
   children,
@@ -31,15 +32,17 @@ export default function WorkspaceLayout({
   );
   return (
     <QueryClientProvider client={queryClient}>
-      <SidebarProvider
-        className="h-screen"
-        open={open}
-        onOpenChange={handleOpenChange}
-      >
-        <WorkspaceSidebar />
-        <SidebarInset className="min-w-0">{children}</SidebarInset>
-      </SidebarProvider>
-      <Toaster position="top-center" />
+      <PollingGovernorProvider>
+        <SidebarProvider
+          className="h-screen"
+          open={open}
+          onOpenChange={handleOpenChange}
+        >
+          <WorkspaceSidebar />
+          <SidebarInset className="min-w-0">{children}</SidebarInset>
+        </SidebarProvider>
+        <Toaster position="top-center" />
+      </PollingGovernorProvider>
     </QueryClientProvider>
   );
 }

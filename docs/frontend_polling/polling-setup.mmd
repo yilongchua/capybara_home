@@ -1,0 +1,47 @@
+flowchart TD
+  A[Workspace UI] --> B[QueryClientProvider]
+  B --> C[PollingGovernorProvider]
+  C --> D{Document visible?}
+
+  D -- Hidden --> E[Most polling returns false]
+  E --> F[No interval polling while hidden]
+
+  D -- Visible --> G[Polling hooks active]
+
+  G --> H[Thread running-run hook]
+  H --> H1[Poll every 15s]
+  H1 --> LG1[LangGraph runs.list status=running]
+
+  G --> I[Dreamy workflow hooks]
+  I --> I1[workflow.json: 2s if exists, 30s idle]
+  I --> I2[checkpoint: 2s if exists, 30s idle]
+  I --> I3[executor progress: 2s active, 30s idle]
+  I1 --> BE1[Gateway Dreamy workflow API]
+  I2 --> BE2[Gateway checkpoint API]
+  I3 --> BE3[Gateway executor status API]
+
+  G --> J[Control plane hooks]
+  J --> J1[Pipeline runs: 5s active, 20s idle]
+  J --> J2[Vault, objectives, graph, action items: usually 20s]
+  J --> J3[Vault ingest: 2s running, 15s idle]
+  J --> J4[Integrations: 30s]
+  J --> BE4[Gateway control-plane APIs]
+
+  G --> K[Long-running task hooks]
+  K --> K1[Generation and pipeline task polling]
+  K1 --> BE5[Gateway generation and pipeline APIs]
+
+  A --> L[Workspace refresh events]
+  L --> M[Same-tab immediate refresh]
+  L --> N[Cross-tab BroadcastChannel or localStorage]
+  N --> O[10s domain throttle before fan-out]
+  O --> P[Invalidate matching React Query caches]
+  P --> G
+
+  A --> R[Resume paused run]
+  R --> S[POST /api/threads/:thread/runs/:run/resume]
+  S --> T[Gateway calls LangGraph runs.create]
+  T --> U[202 Accepted and new run_id]
+  U --> V[Client can poll resume-status or use stream/SSE]
+  V --> W[GET /resume-status]
+  W --> X[Gateway calls LangGraph runs.get]
