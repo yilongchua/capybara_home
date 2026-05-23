@@ -123,11 +123,6 @@ export const enUS: Translations = {
     reasoningEffortHigh: "High",
     reasoningEffortHighDescription:
       "Full-dimensional Logic Deduction + Multi-path Verification + Backward Check",
-    searchPrivacy: "Privacy Lock",
-    searchPrivacyDescription:
-      "When enabled, Capybara Home anonymizes each web search query before sending it to SearXNG for this workspace.",
-    searchPrivacyEnabled: "Privacy lock is on",
-    searchPrivacyDisabled: "Privacy lock is off",
     searchModels: "Search models...",
     surpriseMe: "Surprise",
     surpriseMePrompt: "Surprise me",

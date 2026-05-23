@@ -46,8 +46,6 @@ def test_registry_sorted_with_clarification_last(monkeypatch):
     assert names.index("thread_data") < names.index("dreamy_intent")
     assert names.index("dreamy_intent") < names.index("dreamy_bootstrap")
     assert names.index("dreamy_bootstrap") < names.index("sandbox")
-    assert names.index("search_privacy") < names.index("permissions")
-    assert names.index("search_privacy") < names.index("plan_execution_gate")
     assert names.index("plan_execution_gate") < names.index("permissions")
     assert names.index("metrics") < names.index("clarification")
 

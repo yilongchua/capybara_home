@@ -109,10 +109,6 @@ export interface Translations {
     reasoningEffortMediumDescription: string;
     reasoningEffortHigh: string;
     reasoningEffortHighDescription: string;
-    searchPrivacy: string;
-    searchPrivacyDescription: string;
-    searchPrivacyEnabled: string;
-    searchPrivacyDisabled: string;
     searchModels: string;
     surpriseMe: string;
     surpriseMePrompt: string;

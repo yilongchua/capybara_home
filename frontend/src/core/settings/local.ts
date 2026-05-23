@@ -9,7 +9,6 @@ export const DEFAULT_LOCAL_SETTINGS: LocalSettings = {
     model_name: undefined,
     mode: undefined,
     reasoning_effort: undefined,
-    mask_sensitive_search: false,
   },
   layout: {
     sidebar_collapsed: false,
