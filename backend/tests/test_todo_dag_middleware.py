@@ -12,8 +12,11 @@ from src.agents.middlewares.todo_dag_middleware import TodoDagMiddleware, normal
 from src.tools.builtins.write_todos_tool import write_todos_tool
 
 
-def _runtime(state: dict | None = None):
-    return SimpleNamespace(context={"thread_id": "thread-1"}, state=state or {})
+def _runtime(state: dict | None = None, *, mode: str | None = None):
+    context: dict[str, str] = {"thread_id": "thread-1"}
+    if mode is not None:
+        context["mode"] = mode
+    return SimpleNamespace(context=context, state=state or {})
 
 
 def test_normalize_todos_rejects_cycles():
@@ -69,7 +72,7 @@ def test_write_todos_patches_by_id_and_preserves_untouched_nodes():
     assert by_id["todo-4"]["status"] == "pending"
 
 
-def test_write_todos_blocks_completed_while_plan_draft():
+def test_write_todos_blocks_completed_while_plan_draft_in_plan_mode():
     runtime = _runtime(
         {
             "plan": {
@@ -80,7 +83,8 @@ def test_write_todos_blocks_completed_while_plan_draft():
             "todo_graph": {
                 "nodes": [{"id": "a", "content": "Research", "status": "pending", "depends_on": []}],
             },
-        }
+        },
+        mode="plan",
     )
     result = write_todos_tool.func(
         runtime=runtime,
@@ -89,6 +93,29 @@ def test_write_todos_blocks_completed_while_plan_draft():
     )
     message = result.update["messages"][0]
     assert "[todo_update_rejected:draft_completion_blocked]" in message.content
+
+
+def test_write_todos_allows_completed_while_plan_draft_in_work_mode():
+    runtime = _runtime(
+        {
+            "plan": {
+                "title": "Plan Title",
+                "summary": "Plan Summary",
+                "status": "draft",
+            },
+            "todo_graph": {
+                "nodes": [{"id": "a", "content": "Research", "status": "pending", "depends_on": []}],
+            },
+        },
+        mode="work",
+    )
+    result = write_todos_tool.func(
+        runtime=runtime,
+        todos=[{"id": "a", "content": "Research", "status": "completed"}],
+        tool_call_id="tc-draft-work",
+    )
+    nodes = result.update["todo_graph"]["nodes"]
+    assert nodes[0]["status"] == "completed"
 
 
 def test_write_todos_allows_completed_while_plan_executing():

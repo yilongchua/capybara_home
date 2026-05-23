@@ -10,8 +10,15 @@ _SYNTHETIC_HUMAN_NAMES = {
     "task_deferred",
     "work_mode_instruction",
     "todo_reminder",
+    "todo_failure_recovery",
     "plan_followup_prompt",
+    "work_mode_plan_rerun",
+    "active_skills",
 }
+# Keep this set in sync with `SYNTHETIC_HUMAN_MESSAGE_NAMES` in
+# `frontend/src/core/messages/utils.ts` — both halves of the rendering contract
+# must agree on which `HumanMessage(name=...)` values are agent-internal and
+# should be hidden from the chat timeline.
 
 _SYNTHETIC_REQUEST_PATTERNS = (
     "generate a detailed structured plan for the previous user request",

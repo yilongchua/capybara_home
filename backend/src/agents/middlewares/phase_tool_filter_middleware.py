@@ -87,11 +87,30 @@ def _should_filter(state: dict[str, Any], runtime: Runtime | None) -> bool:
         # If a plan is explicitly approved/executing/completed, do not filter.
         if status in {"approved", "executing", "completed"}:
             return False
-    # No plan yet but we are in Plan Mode — filter to keep the agent honest
-    # until the planner emits a plan. Once the planner runs (it now runs
-    # before this middleware on every turn), `plan` will be populated and the
-    # status check above takes over.
-    return _is_plan_mode(runtime)
+        # Unknown/empty status on an existing plan dict — treat as draft.
+        return True
+
+    # No plan dict yet. Plan Mode filters unconditionally.
+    if _is_plan_mode(runtime):
+        return True
+
+    # Work Mode with no plan: this is the pre-classification window before the
+    # planner (if enabled) has had a chance to create a draft plan. Without
+    # this branch, turn 1 of a complex work-mode query exposes the full
+    # execution toolset to the LLM, which then fires `web_search` / `task` /
+    # `query_knowledge_vault` before `PlanExecutionGateMiddleware` can react —
+    # the gate then blocks the calls after the fact, wasting a model round-
+    # trip. Match the gate's conservative default by hiding execution tools
+    # on the very first turn (no AI messages yet). From turn 2 onward, either
+    # a plan exists (handled above) or the planner has decided this is a
+    # simple query — let the full catalog through.
+    if isinstance(state, dict):
+        messages = state.get("messages")
+        if isinstance(messages, list):
+            has_ai_messages = any(getattr(m, "type", None) == "ai" for m in messages)
+            if not has_ai_messages:
+                return True
+    return False
 
 
 def _filter_tools(tools: list[Any], blocked: frozenset[str]) -> tuple[list[Any], list[str]]:

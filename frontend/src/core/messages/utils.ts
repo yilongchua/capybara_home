@@ -18,10 +18,22 @@ interface AssistantClarificationGroup extends GenericMessageGroup<"assistant:cla
 
 interface AssistantSubagentGroup extends GenericMessageGroup<"assistant:subagent"> {}
 
+// Keep this set in sync with `_SYNTHETIC_HUMAN_NAMES` in
+// `backend/src/agents/middlewares/message_selection.py`. These names mark
+// HumanMessages that middlewares inject as agent-internal context — they must
+// not render as user chat bubbles.
 const SYNTHETIC_HUMAN_MESSAGE_NAMES = new Set([
-  "todo_reminder",
   "planner_handoff",
   "planner_clarification_required",
+  "system_reminder",
+  "evaluator_feedback",
+  "task_deferred",
+  "work_mode_instruction",
+  "todo_reminder",
+  "todo_failure_recovery",
+  "plan_followup_prompt",
+  "work_mode_plan_rerun",
+  "active_skills",
 ]);
 
 type MessageGroup =

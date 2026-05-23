@@ -210,7 +210,11 @@ def write_todos_tool(
             message="Plan is completed and todo mutations are frozen. Start an explicit re-plan to modify todos.",
         )
 
-    if plan_status == "draft":
+    # Work Mode is allowed to progress a draft plan — including marking todos
+    # completed — so the agent can iterate on plan.md without being blocked by
+    # the Execute Plan UI gate. The block remains in Plan Mode, where the user
+    # is reviewing a frozen proposal before approval.
+    if plan_status == "draft" and mode == "plan":
         blocked_completed = [str(item.get("id") or "").strip() for item in todos if str(item.get("status") or "").strip().lower() == "completed"]
         blocked_completed = [todo_id for todo_id in blocked_completed if todo_id]
         if blocked_completed:
