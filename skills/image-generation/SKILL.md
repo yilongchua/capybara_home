@@ -129,7 +129,7 @@ Read the following template file only when matching the user request.
 After submission:
 
 - The script returns quickly with a `job_id`
-- Background poller completes generation and copies the final file into `/mnt/user-data/workspace/capybara/` (or thread output location)
+- Background poller completes generation and copies the final file into `/mnt/user-data/workspace/capyhome/` (or thread output location)
 - Completion appears in chat automatically with output path
 - You can still iterate by submitting another job
 

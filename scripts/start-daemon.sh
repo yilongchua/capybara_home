@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# start-daemon.sh - Start all Capybara Home development services in daemon mode
+# start-daemon.sh - Start all CapyHome development services in daemon mode
 #
-# This script starts Capybara Home services in the background without keeping
+# This script starts CapyHome services in the background without keeping
 # the terminal connection. Logs are written to separate files.
 #
 # Must be run from the repo root directory.
@@ -21,14 +21,14 @@ pkill -f "next dev" 2>/dev/null || true
 nginx -c "$REPO_ROOT/docker/nginx/nginx.local.conf" -p "$REPO_ROOT" -s quit 2>/dev/null || true
 sleep 1
 pkill -9 nginx 2>/dev/null || true
-./scripts/cleanup-containers.sh capybara-home-sandbox 2>/dev/null || true
+./scripts/cleanup-containers.sh capyhome-sandbox 2>/dev/null || true
 sleep 1
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 
 echo ""
 echo "=========================================="
-echo " Starting Capybara Home in Daemon Mode"
+echo " Starting CapyHome in Daemon Mode"
 echo "=========================================="
 echo ""
 
@@ -39,7 +39,7 @@ if ! { \
         [ -f backend/config.yaml ] || \
         [ -f config.yaml ]; \
     }; then
-    echo "✗ No Capybara Home config file found."
+    echo "✗ No CapyHome config file found."
     echo "  Checked these locations:"
     echo "    - $CAPYBARA_HOME_CONFIG_PATH (when CAPYBARA_HOME_CONFIG_PATH is set)"
     echo "    - backend/config.yaml"
@@ -112,7 +112,7 @@ echo "✓ Nginx started on localhost:2026"
 
 echo ""
 echo "=========================================="
-echo " Capybara Home is running in daemon mode!"
+echo " CapyHome is running in daemon mode!"
 echo "=========================================="
 echo ""
 echo " 🌐 Application: http://localhost:2026"

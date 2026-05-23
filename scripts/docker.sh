@@ -13,7 +13,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DOCKER_DIR="$PROJECT_ROOT/docker"
 
 # Docker Compose command with project name
-COMPOSE_CMD="docker compose -p capybara-home-dev -f docker-compose-dev.yaml"
+COMPOSE_CMD="docker compose -p capyhome-dev -f docker-compose-dev.yaml"
 
 detect_sandbox_mode() {
     local config_file="$PROJECT_ROOT/config.yaml"
@@ -73,7 +73,7 @@ trap cleanup INT TERM
 # Initialize: pre-pull the sandbox image so first Pod startup is fast
 init() {
     echo "=========================================="
-    echo "  Capybara Home Init — Pull Sandbox Image"
+    echo "  CapyHome Init — Pull Sandbox Image"
     echo "=========================================="
     echo ""
 
@@ -98,7 +98,7 @@ start() {
     local services
 
     echo "=========================================="
-    echo "  Starting Capybara Home Docker Development"
+    echo "  Starting CapyHome Docker Development"
     echo "=========================================="
     echo ""
 
@@ -133,7 +133,7 @@ start() {
             echo -e "${YELLOW}============================================================${NC}"
             echo -e "${YELLOW}  config.yaml has been created from config.example.yaml.${NC}"
             echo -e "${YELLOW}  Please edit config.yaml to set your API keys and model   ${NC}"
-            echo -e "${YELLOW}  configuration before starting Capybara Home.                  ${NC}"
+            echo -e "${YELLOW}  configuration before starting CapyHome.                  ${NC}"
             echo -e "${YELLOW}============================================================${NC}"
             echo ""
             echo -e "${YELLOW}  Edit the file:  $PROJECT_ROOT/config.yaml${NC}"
@@ -162,7 +162,7 @@ start() {
     cd "$DOCKER_DIR" && $COMPOSE_CMD up --build -d --remove-orphans $services
     echo ""
     echo "=========================================="
-    echo "  Capybara Home Docker is starting!"
+    echo "  CapyHome Docker is starting!"
     echo "=========================================="
     echo ""
     echo "  🌐 Application: http://localhost:2026"
@@ -218,14 +218,14 @@ stop() {
     echo "Stopping Docker development services..."
     cd "$DOCKER_DIR" && $COMPOSE_CMD down
     echo "Cleaning up sandbox containers..."
-    "$SCRIPT_DIR/cleanup-containers.sh" capybara-home-sandbox 2>/dev/null || true
+    "$SCRIPT_DIR/cleanup-containers.sh" capyhome-sandbox 2>/dev/null || true
     echo -e "${GREEN}✓ Docker services stopped${NC}"
 }
 
 # Restart Docker development environment
 restart() {
     echo "========================================"
-    echo "  Restarting Capybara Home Docker Services"
+    echo "  Restarting CapyHome Docker Services"
     echo "========================================"
     echo ""
     echo -e "${BLUE}Restarting containers...${NC}"
@@ -240,7 +240,7 @@ restart() {
 
 # Show help
 help() {
-    echo "Capybara Home Docker Management Script"
+    echo "CapyHome Docker Management Script"
     echo ""
     echo "Usage: $0 <command> [options]"
     echo ""

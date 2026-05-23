@@ -1,4 +1,4 @@
-# Capybara Home Development Environment
+# CapyHome Development Environment
 # Usage: docker-compose -f docker-compose-dev.yaml up --build
 #
 # Services:
@@ -24,18 +24,18 @@ services:
     build:
       context: ./provisioner
       dockerfile: Dockerfile
-    container_name: capybara-home-provisioner
+    container_name: capyhome-provisioner
     volumes:
       - ~/.kube/config:/root/.kube/config:ro
     environment:
-      - K8S_NAMESPACE=capybara-home
+      - K8S_NAMESPACE=CapyHome
       - SANDBOX_IMAGE=enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
       # Host paths for K8s HostPath volumes (must be absolute paths accessible by K8s node)
       # On Docker Desktop/OrbStack, use your actual host paths like /Users/username/...
       # Set these in your shell before running docker-compose:
-      #   export CAPYBARA_HOME_ROOT=/absolute/path/to/capybara-home
+      #   export CAPYBARA_HOME_ROOT=/absolute/path/to/CapyHome
       - SKILLS_HOST_PATH=${CAPYBARA_HOME_ROOT}/skills
-      - THREADS_HOST_PATH=${CAPYBARA_HOME_ROOT}/backend/.capybara-home/threads
+      - THREADS_HOST_PATH=${CAPYBARA_HOME_ROOT}/backend/.capyhome/threads
       - KUBECONFIG_PATH=/root/.kube/config
       - NODE_HOST=host.docker.internal
       # Override K8S API server URL since kubeconfig uses 127.0.0.1
@@ -46,7 +46,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
-      - capybara-home-dev
+      - capyhome-dev
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
@@ -62,7 +62,7 @@ services:
   # - nginx.conf: includes provisioner route (provisioner mode)
   nginx:
     image: nginx:alpine
-    container_name: capybara-home-nginx
+    container_name: capyhome-nginx
     ports:
       - "2026:2026"
     volumes:
@@ -72,7 +72,7 @@ services:
       - gateway
       - langgraph
     networks:
-      - capybara-home-dev
+      - capyhome-dev
     restart: unless-stopped
 
   # Frontend - Next.js Development Server
@@ -82,7 +82,7 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         PNPM_STORE_PATH: ${PNPM_STORE_PATH:-/root/.local/share/pnpm/store}
-    container_name: capybara-home-frontend
+    container_name: capyhome-frontend
     command: sh -c "cd frontend && pnpm run dev > /app/logs/frontend.log 2>&1"
     volumes:
       - ../frontend/src:/app/frontend/src
@@ -99,7 +99,7 @@ services:
     env_file:
       - ../frontend/.env
     networks:
-      - capybara-home-dev
+      - capyhome-dev
     restart: unless-stopped
 
   # Backend - Gateway API
@@ -108,7 +108,7 @@ services:
       context: ../
       dockerfile: backend/Dockerfile
       # cache_from disabled - requires manual setup: mkdir -p /tmp/docker-cache-gateway
-    container_name: capybara-home-gateway
+    container_name: capyhome-gateway
     command: sh -c "cd backend && uv run uvicorn src.gateway.app:app --host 0.0.0.0 --port 8001 --reload --reload-include='*.yaml .env' > /app/logs/gateway.log 2>&1"
     volumes:
       - ../backend/:/app/backend/
@@ -126,7 +126,7 @@ services:
     working_dir: /app
     environment:
       - CI=true
-      - CAPYBARA_HOME_HOST_BASE_DIR=${CAPYBARA_HOME_ROOT}/backend/.capybara-home
+      - CAPYBARA_HOME_HOST_BASE_DIR=${CAPYBARA_HOME_ROOT}/backend/.capyhome
       - CAPYBARA_HOME_HOST_SKILLS_PATH=${CAPYBARA_HOME_ROOT}/skills
       - CAPYBARA_HOME_SANDBOX_HOST=host.docker.internal
     env_file:
@@ -135,7 +135,7 @@ services:
       # For Linux: map host.docker.internal to host gateway
       - "host.docker.internal:host-gateway"
     networks:
-      - capybara-home-dev
+      - capyhome-dev
     restart: unless-stopped
 
   # Backend - LangGraph Server
@@ -144,7 +144,7 @@ services:
       context: ../
       dockerfile: backend/Dockerfile
       # cache_from disabled - requires manual setup: mkdir -p /tmp/docker-cache-langgraph
-    container_name: capybara-home-langgraph
+    container_name: capyhome-langgraph
     command: sh -c "cd backend && uv run langgraph dev --no-browser --allow-blocking --host 0.0.0.0 --port 2024 > /app/logs/langgraph.log 2>&1"
     volumes:
       - ../backend/:/app/backend/
@@ -162,7 +162,7 @@ services:
     working_dir: /app
     environment:
       - CI=true
-      - CAPYBARA_HOME_HOST_BASE_DIR=${CAPYBARA_HOME_ROOT}/backend/.capybara-home
+      - CAPYBARA_HOME_HOST_BASE_DIR=${CAPYBARA_HOME_ROOT}/backend/.capyhome
       - CAPYBARA_HOME_HOST_SKILLS_PATH=${CAPYBARA_HOME_ROOT}/skills
       - CAPYBARA_HOME_SANDBOX_HOST=host.docker.internal
     env_file:
@@ -171,7 +171,7 @@ services:
       # For Linux: map host.docker.internal to host gateway
       - "host.docker.internal:host-gateway"
     networks:
-      - capybara-home-dev
+      - capyhome-dev
     restart: unless-stopped
 
 volumes:
@@ -181,7 +181,7 @@ volumes:
   langgraph-venv:
 
 networks:
-  capybara-home-dev:
+  capyhome-dev:
     driver: bridge
     ipam:
       config:
