@@ -1,12 +1,12 @@
-# DeerFlow → Capybara-Home: Comparative Analysis & Implementation Plan
+# DeerFlow → CapyHome: Comparative Analysis & Implementation Plan
 
 ## Core Objective
 
-**Everything must be local.** Capybara-home runs fully locally with local LM providers (llama.cpp, vLLM, Ollama, or any OpenAI-compatible endpoint). External integrations (SearXNG, Docker-based tools) are user-controlled via the Integrations tab — not bundled as fallbacks. All recommendations are scoped to this local-first constraint.
+**Everything must be local.** CapyHome-home runs fully locally with local LM providers (llama.cpp, vLLM, Ollama, or any OpenAI-compatible endpoint). External integrations (SearXNG, Docker-based tools) are user-controlled via the Integrations tab — not bundled as fallbacks. All recommendations are scoped to this local-first constraint.
 
 ## Executive Summary
 
-Both systems share the same DNA — LangGraph-based harness, middleware chains, LLM routing, persistent memory, skill injection. **Capybara-home is considerably more feature-rich** in planning, evaluation, sandboxing, trajectory, and control-plane operations. DeerFlow's meaningful advantages that remain relevant for a local deployment are: **deferred tool discovery, per-agent personality injection, and optional content guardrails.**
+Both systems share the same DNA — LangGraph-based harness, middleware chains, LLM routing, persistent memory, skill injection. **CapyHome-home is considerably more feature-rich** in planning, evaluation, sandboxing, trajectory, and control-plane operations. DeerFlow's meaningful advantages that remain relevant for a local deployment are: **deferred tool discovery, per-agent personality injection, and optional content guardrails.**
 
 > The four improvements already implemented (memory-summarization coupling, skill rescue, loop detection, todo exit enforcement) are confirmed live — they should **not** be re-implemented.
 
@@ -14,37 +14,37 @@ Both systems share the same DNA — LangGraph-based harness, middleware chains, 
 
 ## Side-by-Side Comparison
 
-| Dimension | Capybara-Home | DeerFlow | Gap |
+| Dimension | CapyHome | DeerFlow | Gap |
 |---|---|---|---|
-| **Agent Runtime** | LangGraph + 25 middleware | LangGraph + 14 middleware | Capybara ahead |
-| **Middleware orchestration** | Topological sort, 25 layers | Ordered list, 14 layers | Capybara ahead |
+| **Agent Runtime** | LangGraph + 25 middleware | LangGraph + 14 middleware | CapyHome ahead |
+| **Middleware orchestration** | Topological sort, 25 layers | Ordered list, 14 layers | CapyHome ahead |
 | **Tool loading** | All MCP tools loaded eagerly | Deferred registry + `tool_search` tool | **DeerFlow ahead** |
-| **Planning** | PlannerMiddleware + DAG todos + sprint contracts | TodoMiddleware (flat list) | Capybara ahead |
-| **Evaluation** | EvaluatorMiddleware + deterministic pre-checks | None | Capybara ahead |
+| **Planning** | PlannerMiddleware + DAG todos + sprint contracts | TodoMiddleware (flat list) | CapyHome ahead |
+| **Evaluation** | EvaluatorMiddleware + deterministic pre-checks | None | CapyHome ahead |
 | **Memory** | JSON + LLM extraction, debounced 30s, versioned | JSON + LLM extraction, debounced 2s, per-agent | Roughly equal |
-| **Context summarization** | SummarizationMiddleware + memory flush hook | SummarizationMiddleware | Capybara ahead |
+| **Context summarization** | SummarizationMiddleware + memory flush hook | SummarizationMiddleware | CapyHome ahead |
 | **Loop detection** | LoopDetectionMiddleware + ProgressGuard | LoopDetectionMiddleware | Roughly equal |
 | **Per-agent personality** | Per-agent config.yaml only | Per-agent `SOUL.md` injected into prompt | **DeerFlow ahead** |
-| **Skills** | Progressive disclosure, matcher, body injection | Static injection into prompt | Capybara ahead |
-| **Sandbox** | Abstract (local/docker/k8s), virtual paths | Abstract (local/docker) | Capybara ahead |
-| **RAG / Knowledge** | BM25 vault search + LightRAG + MCP | Community search APIs only | Capybara ahead |
-| **Web search** | SearXNG + crawl4ai (Docker `websearch` instance, full extraction pipeline) | External APIs (Exa, Tavily, etc.) | Capybara ahead |
-| **IM channels** | Slack + Telegram | None | Capybara ahead |
+| **Skills** | Progressive disclosure, matcher, body injection | Static injection into prompt | CapyHome ahead |
+| **Sandbox** | Abstract (local/docker/k8s), virtual paths | Abstract (local/docker) | CapyHome ahead |
+| **RAG / Knowledge** | BM25 vault search + LightRAG + MCP | Community search APIs only | CapyHome ahead |
+| **Web search** | SearXNG + crawl4ai (Docker `websearch` instance, full extraction pipeline) | External APIs (Exa, Tavily, etc.) | CapyHome ahead |
+| **IM channels** | Slack + Telegram | None | CapyHome ahead |
 | **Guardrails** | None | Optional GuardrailsMiddleware | **DeerFlow ahead** |
 | **Subagents** | Executor + 3 concurrent + deferred queue | Executor + 3 concurrent | Roughly equal |
-| **Trajectory/audit** | JSONL trajectory, MetricsMiddleware | None | Capybara ahead |
-| **Resume/checkpoints** | ResumeStateMiddleware + Command(resume) | LangGraph checkpointer only | Capybara ahead |
-| **Control plane** | Autoresearch scheduler, vault pipeline | None | Capybara ahead |
+| **Trajectory/audit** | JSONL trajectory, MetricsMiddleware | None | CapyHome ahead |
+| **Resume/checkpoints** | ResumeStateMiddleware + Command(resume) | LangGraph checkpointer only | CapyHome ahead |
+| **Control plane** | Autoresearch scheduler, vault pipeline | None | CapyHome ahead |
 
 ---
 
-## Gap Analysis: What DeerFlow Has That Capybara Should Adopt
+## Gap Analysis: What DeerFlow Has That CapyHome Should Adopt
 
 ### Gap 1 — Deferred Tool Search *(High impact)*
 
 **DeerFlow pattern:** Large MCP tool sets go into a `DeferredToolRegistry`. Only a lightweight `tool_search(query)` tool is exposed in the agent's live schema. When the agent needs a specific capability, it calls `tool_search`, gets back a ranked list of matching tool names, and the middleware activates those tools for subsequent calls.
 
-**Capybara problem:** All MCP tools are loaded eagerly and injected into the tool schema on every turn. As MCP servers grow (any number via `extensions_config.json`), the schema can balloon to thousands of tokens — especially damaging for local models that have smaller context windows and are more sensitive to schema noise than cloud models.
+**CapyHome problem:** All MCP tools are loaded eagerly and injected into the tool schema on every turn. As MCP servers grow (any number via `extensions_config.json`), the schema can balloon to thousands of tokens — especially damaging for local models that have smaller context windows and are more sensitive to schema noise than cloud models.
 
 **Relevant files:**
 - `src/tools/tools.py`
@@ -57,7 +57,7 @@ Both systems share the same DNA — LangGraph-based harness, middleware chains, 
 
 **DeerFlow pattern:** Each named agent can have `agents/{agent_name}/SOUL.md` — a freeform markdown file injected verbatim into the system prompt after base instructions. Gives agents distinct voices, values, and behavioural constraints without modifying code.
 
-**Capybara problem:** Per-agent config exists (`agents/{name}/config.yaml`) but only controls model/tool selection. There is no mechanism to give an agent a distinct personality or behavioural framing beyond skills. For a local deployment with multiple specialised agents (research, coding, analysis), per-agent prompt tuning matters especially because local models respond more strongly to explicit role framing.
+**CapyHome problem:** Per-agent config exists (`agents/{name}/config.yaml`) but only controls model/tool selection. There is no mechanism to give an agent a distinct personality or behavioural framing beyond skills. For a local deployment with multiple specialised agents (research, coding, analysis), per-agent prompt tuning matters especially because local models respond more strongly to explicit role framing.
 
 **Relevant files:**
 - `src/agents/lead_agent/agent.py`
@@ -69,7 +69,7 @@ Both systems share the same DNA — LangGraph-based harness, middleware chains, 
 
 **DeerFlow pattern:** Optional middleware positioned before the LLM call. Validates both input (user messages) and output (model response) against configurable policies. Can be backed by regex patterns, keyword lists, or a local LLM call for semantic validation — fully local.
 
-**Capybara problem:** No equivalent. `PermissionMiddleware` handles tool-call authorisation but does not validate the content of messages or model outputs. For local deployments serving multiple users or sensitive domains, local content policy enforcement adds a useful safety layer.
+**CapyHome problem:** No equivalent. `PermissionMiddleware` handles tool-call authorisation but does not validate the content of messages or model outputs. For local deployments serving multiple users or sensitive domains, local content policy enforcement adds a useful safety layer.
 
 **Relevant files:**
 - `src/agents/lead_agent/agent.py`
@@ -176,8 +176,8 @@ Priority 2 is a quick win with no risk — ship it first. Priority 1 is the most
 | Claude OAuth credential discovery | No cloud LM connections — not applicable |
 | Auto-thinking budget (80% of max_tokens) | Local models have no thinking budget constraints |
 | Prompt cache block control | Local models do not use Anthropic cache control |
-| Web search diversity (Exa, Tavily, Jina, DDGS) | Capybara's `websearch` Docker instance (SearXNG + crawl4ai) is a more complete local extraction pipeline than any of DeerFlow's external API tools |
-| `LoopDetectionMiddleware` | Already live — capybara's version plus `ProgressGuard` layered on top |
-| `TodoMiddleware` (flat list) | Capybara's `TodoDagMiddleware` (DAG-based) is strictly more capable |
-| Memory debounce (2s) | Capybara's 30s is intentional to allow batching; 2s would thrash a local LLM |
-| DeerFlow's model provider classes | Capybara uses the langchain ecosystem which covers all local providers |
+| Web search diversity (Exa, Tavily, Jina, DDGS) | CapyHome's `websearch` Docker instance (SearXNG + crawl4ai) is a more complete local extraction pipeline than any of DeerFlow's external API tools |
+| `LoopDetectionMiddleware` | Already live — capyhome's version plus `ProgressGuard` layered on top |
+| `TodoMiddleware` (flat list) | CapyHome's `TodoDagMiddleware` (DAG-based) is strictly more capable |
+| Memory debounce (2s) | CapyHome's 30s is intentional to allow batching; 2s would thrash a local LLM |
+| DeerFlow's model provider classes | CapyHome uses the langchain ecosystem which covers all local providers |

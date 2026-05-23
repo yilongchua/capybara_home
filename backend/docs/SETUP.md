@@ -1,16 +1,16 @@
 # Setup Guide
 
-Quick setup instructions for Capybara Home.
+Quick setup instructions for CapyHome.
 
 ## Configuration Setup
 
-Capybara Home uses a YAML configuration file that should be placed in the **project root directory**.
+CapyHome uses a YAML configuration file that should be placed in the **project root directory**.
 
 ### Steps
 
 1. **Navigate to project root**:
    ```bash
-   cd /path/to/capybara-home
+   cd /path/to/CapyHome
    ```
 
 2. **Copy example configuration**:
@@ -35,7 +35,7 @@ Capybara Home uses a YAML configuration file that should be placed in the **proj
 
 ## Important Notes
 
-- **Location**: `config.yaml` should be in `capybara-home/` (project root), not `capybara-home/backend/`
+- **Location**: `config.yaml` should be in `CapyHome/` (project root), not `CapyHome/backend/`
 - **Git**: `config.yaml` is automatically ignored by git (contains secrets)
 - **Priority**: If both `backend/config.yaml` and `../config.yaml` exist, backend version takes precedence
 
@@ -45,9 +45,9 @@ The backend searches for `config.yaml` in this order:
 
 1. `CAPYBARA_HOME_CONFIG_PATH` environment variable (if set)
 2. `backend/config.yaml` (current directory when running from backend/)
-3. `capybara-home/config.yaml` (parent directory - **recommended location**)
+3. `CapyHome/config.yaml` (parent directory - **recommended location**)
 
-**Recommended**: Place `config.yaml` in project root (`capybara-home/config.yaml`).
+**Recommended**: Place `config.yaml` in project root (`CapyHome/config.yaml`).
 
 ## Sandbox Setup (Optional but Recommended)
 
@@ -71,7 +71,7 @@ If you skip this step, the image will be automatically pulled on first agent exe
 
 ```bash
 # Check where the backend is looking
-cd capybara-home/backend
+cd CapyHome/backend
 python -c "from src.config.app_config import AppConfig; print(AppConfig.resolve_config_path())"
 ```
 

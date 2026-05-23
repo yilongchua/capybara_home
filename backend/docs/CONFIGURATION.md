@@ -1,6 +1,6 @@
 # Configuration Guide
 
-This guide explains how to configure Capybara Home for your environment.
+This guide explains how to configure CapyHome for your environment.
 
 ## Configuration Sections
 
@@ -96,7 +96,7 @@ tools:
 
 ### Sandbox
 
-Capybara Home supports multiple sandbox execution modes. Configure your preferred mode in `config.yaml`:
+CapyHome supports multiple sandbox execution modes. Configure your preferred mode in `config.yaml`:
 
 **Local Execution** (runs sandbox code directly on the host machine):
 ```yaml
@@ -120,7 +120,7 @@ sandbox:
    provisioner_url: http://provisioner:8002
 ```
 
-When using Docker development (`make docker-start`), Capybara Home starts the `provisioner` service only if this provisioner mode is configured. In local or plain Docker sandbox modes, `provisioner` is skipped.
+When using Docker development (`make docker-start`), CapyHome starts the `provisioner` service only if this provisioner mode is configured. In local or plain Docker sandbox modes, `provisioner` is skipped.
 
 See [Provisioner Setup Guide](docker/provisioner/README.md) for detailed configuration, prerequisites, and troubleshooting.
 
@@ -138,7 +138,7 @@ sandbox:
   use: src.community.aio_sandbox:AioSandboxProvider
   port: 8080
   auto_start: true
-  container_prefix: capybara-home-sandbox
+  container_prefix: capyhome-sandbox
 
   # Optional: Additional mounts
   mounts:
@@ -161,7 +161,7 @@ skills:
 ```
 
 **How Skills Work**:
-- Skills are stored in `capybara-home/skills/{public,custom}/`
+- Skills are stored in `CapyHome/skills/{public,custom}/`
 - Each skill has a `SKILL.md` file with metadata
 - Skills are automatically discovered and loaded
 - Available in both local and Docker sandbox via path mapping
@@ -180,7 +180,7 @@ title:
 
 ## Environment Variables
 
-Capybara Home supports environment variable substitution using the `$` prefix:
+CapyHome supports environment variable substitution using the `$` prefix:
 
 ```yaml
 models:
@@ -197,16 +197,16 @@ models:
 
 ## Configuration Location
 
-The configuration file should be placed in the **project root directory** (`capybara-home/config.yaml`), not in the backend directory.
+The configuration file should be placed in the **project root directory** (`CapyHome/config.yaml`), not in the backend directory.
 
 ## Configuration Priority
 
-Capybara Home searches for configuration in this order:
+CapyHome searches for configuration in this order:
 
 1. Path specified in code via `config_path` argument
 2. Path from `CAPYBARA_HOME_CONFIG_PATH` environment variable
 3. `config.yaml` in current working directory (typically `backend/` when running)
-4. `config.yaml` in parent directory (project root: `capybara-home/`)
+4. `config.yaml` in parent directory (project root: `CapyHome/`)
 
 ## Best Practices
 
@@ -220,7 +220,7 @@ Capybara Home searches for configuration in this order:
 ## Troubleshooting
 
 ### "Config file not found"
-- Ensure `config.yaml` exists in the **project root** directory (`capybara-home/config.yaml`)
+- Ensure `config.yaml` exists in the **project root** directory (`CapyHome/config.yaml`)
 - The backend searches parent directory by default, so root location is preferred
 - Alternatively, set `CAPYBARA_HOME_CONFIG_PATH` environment variable to custom location
 
@@ -229,7 +229,7 @@ Capybara Home searches for configuration in this order:
 - Check that `$` prefix is used for env var references
 
 ### "Skills not loading"
-- Check that `capybara-home/skills/` directory exists
+- Check that `CapyHome/skills/` directory exists
 - Verify skills have valid `SKILL.md` files
 - Check `skills.path` configuration if using custom path
 

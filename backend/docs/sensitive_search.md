@@ -47,7 +47,7 @@ to its UX cost:
 - **Most queries are inquiries, not disclosures.** Searching "Microsoft AI
   strategy" or "Project Stargate OpenAI" is research *into* something, not
   exposure *of* it. Upstream engines see billions of such queries; one more
-  Capybara user adds no actionable signal.
+  CapyHome user adds no actionable signal.
 - **Named individual + role + figure** ("Julie Sweet $43M",
   "Clement Kok HSBC Independent Director") is indistinguishable from the kind
   of public-figure research that any analyst, journalist, or curious user
@@ -442,7 +442,7 @@ assert names.index("search_privacy") < names.index("plan_execution_gate")
 ```ts
 searchPrivacy: "Privacy Lock",
 searchPrivacyDescription:
-  "When enabled, Capybara Home anonymizes each web search query before sending it to SearXNG for this workspace.",
+  "When enabled, CapyHome anonymizes each web search query before sending it to SearXNG for this workspace.",
 searchPrivacyEnabled: "Privacy lock is on",
 searchPrivacyDisabled: "Privacy lock is off",
 ```
