@@ -211,11 +211,19 @@ export default function VaultPage() {
     const byId = new Map(dedupedNodes.map((node) => [node.id, node] as const));
     const connectedEdges = rawEdges.filter((edge) => byId.has(edge.source) && byId.has(edge.target));
 
-    const conceptSeeds = dedupedNodes
-      .filter((node) => normalizeGraphKind(node.kind || "other") === "concept")
-      .slice(0, Math.min(MAX_CONCEPT_SEEDS, deferredGraphNodeLimit));
+    const seedBudget = Math.min(MAX_CONCEPT_SEEDS, deferredGraphNodeLimit);
+    const conceptSeeds = dedupedNodes.filter((node) => normalizeGraphKind(node.kind || "other") === "concept");
+    const entitySeeds = dedupedNodes.filter((node) => normalizeGraphKind(node.kind || "other") === "entity");
+    const interleavedSeeds: typeof dedupedNodes = [];
+    const seedCursor = Math.max(conceptSeeds.length, entitySeeds.length);
+    for (let i = 0; i < seedCursor && interleavedSeeds.length < seedBudget; i += 1) {
+      const c = conceptSeeds[i];
+      if (c && interleavedSeeds.length < seedBudget) interleavedSeeds.push(c);
+      const e = entitySeeds[i];
+      if (e && interleavedSeeds.length < seedBudget) interleavedSeeds.push(e);
+    }
 
-    const selectedNodeIds = new Set<string>(conceptSeeds.map((node) => node.id));
+    const selectedNodeIds = new Set<string>(interleavedSeeds.map((node) => node.id));
     if (selectedNodeIds.size > 0) {
       const neighborScore = new Map<string, number>();
       for (const edge of connectedEdges) {
@@ -325,7 +333,7 @@ export default function VaultPage() {
       { kind: "concept", label: "Concept", color: "#1d4ed8" },
       { kind: "entity", label: "Entity", color: "#7c3aed" },
       { kind: "source", label: "Source", color: "#0f766e" },
-      { kind: "other", label: "Other", color: "#64748b" },
+      { kind: "other", label: "Other (syntheses / queries)", color: "#64748b" },
     ],
     [],
   );
