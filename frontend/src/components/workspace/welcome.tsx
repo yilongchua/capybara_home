@@ -1,33 +1,14 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
-
-import { useI18n } from "@/core/i18n/hooks";
 import { cn } from "@/lib/utils";
-
-import { AuroraText } from "../ui/aurora-text";
-
-let waved = false;
 
 export function Welcome({
   className,
-  mode,
+  mode: _mode,
 }: {
   className?: string;
   mode?: "work" | "plan";
-
 }) {
-  const { t } = useI18n();
-  const isPlan = useMemo(() => mode === "plan", [mode]);
-  const colors = useMemo(() => {
-    if (isPlan) {
-      return ["#efefbb", "#e9c665", "#e3a812"];
-    }
-    return ["var(--color-foreground)"];
-  }, [isPlan]);
-  useEffect(() => {
-    waved = true;
-  }, []);
   return (
     <div
       className={cn(
@@ -37,18 +18,15 @@ export function Welcome({
     >
       <div className="text-2xl font-bold">
         <div className="flex items-center gap-2">
-          <div className={cn("inline-block", !waved ? "animate-wave" : "")}>
-            {isPlan ? "🗺️" : "👋"}
-          </div>
-          <AuroraText colors={colors}>{t.welcome.greeting}</AuroraText>
+          <img src="/Logo.webp" alt="Capy Hub logo" className="size-8" />
+          <span>Welcome to Capy Hub!</span>
         </div>
       </div>
       <div className="text-muted-foreground text-sm">
-        {t.welcome.description.includes("\n") ? (
-          <pre className="whitespace-pre">{t.welcome.description}</pre>
-        ) : (
-          <p>{t.welcome.description}</p>
-        )}
+        <p>
+          Think less, create more. Capy Hub handles the hard stuff while you
+          focus on what matters 🚀
+        </p>
       </div>
 
     </div>

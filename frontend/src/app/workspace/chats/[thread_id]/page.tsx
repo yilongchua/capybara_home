@@ -800,7 +800,11 @@ function ChatPageContent({
                           settings.context.mode === "plan"
                             ? "url('/plan-mode-chat.webp')"
                             : "url('/work-mode-chat.webp')",
-                        backgroundSize: "100% 100%",
+                        backgroundSize: "cover",
+                        backgroundPosition:
+                          settings.context.mode === "plan"
+                            ? "center 68%"
+                            : "center bottom",
                       }
                     : undefined
                 }
@@ -848,7 +852,7 @@ function ChatPageContent({
               <div
                 className={cn(
                   "relative w-full",
-                  isNewThread && "-translate-y-[calc(50vh-96px)]",
+                  isNewThread && "-translate-y-[calc(50vh-40px)]",
                   isNewThread
                     ? "max-w-[50vw]"
                     : "max-w-(--container-width-md)",
