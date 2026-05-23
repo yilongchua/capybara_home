@@ -978,6 +978,18 @@ class ControlPlaneService:
             search_results_max_queue_items=int(
                 definition.config.get("search_results_max_queue_items") or vault_cfg.search_results_max_queue_items
             ),
+            search_results_terminal_retention_hours=int(
+                definition.config.get("search_results_terminal_retention_hours")
+                or getattr(vault_cfg, "search_results_terminal_retention_hours", 168)
+            ),
+            claim_lease_seconds=int(
+                definition.config.get("claim_lease_seconds")
+                or getattr(vault_cfg, "claim_lease_seconds", 900)
+            ),
+            max_ingest_attempts=int(
+                definition.config.get("max_ingest_attempts")
+                or getattr(vault_cfg, "max_ingest_attempts", 5)
+            ),
         )
 
     def _default_vault_manager(self) -> VaultLearningManager:
@@ -1088,6 +1100,64 @@ class ControlPlaneService:
     def get_vault_source(self, source_id: str) -> dict[str, Any]:
         manager = self._default_vault_manager()
         return manager.get_source(source_id)
+
+    def get_vault_entity_browser(
+        self,
+        *,
+        top_n: int = 15,
+        bottom_n: int = 10,
+        critical_max_degree: int = 2,
+    ) -> dict[str, Any]:
+        manager = self._default_vault_manager()
+        return manager.get_entity_browser(
+            top_n=top_n,
+            bottom_n=bottom_n,
+            critical_max_degree=critical_max_degree,
+        )
+
+    def list_vault_entity_dismissals(self) -> list[dict[str, Any]]:
+        manager = self._default_vault_manager()
+        return manager.list_entity_dismissals()
+
+    def dismiss_vault_entity(
+        self,
+        *,
+        slug: str,
+        reason: str = "",
+        alias_for: str | None = None,
+    ) -> dict[str, Any]:
+        manager = self._default_vault_manager()
+        result = manager.dismiss_entity(slug=slug, reason=reason, alias_for=alias_for)
+        # Invalidate explorer cache so the graph view reflects the change immediately.
+        with self._vault_explorer_cache_lock:
+            self._vault_explorer_cache = {}
+        return result
+
+    def restore_vault_entity_dismissal(self, *, slug: str) -> dict[str, Any]:
+        manager = self._default_vault_manager()
+        result = manager.restore_entity_dismissal(slug=slug)
+        with self._vault_explorer_cache_lock:
+            self._vault_explorer_cache = {}
+        return result
+
+    def start_vault_entity_autoresearch(
+        self,
+        *,
+        slug: str,
+        label: str = "",
+        endpoint_goal: str = "",
+    ) -> dict[str, Any]:
+        """Trigger autoresearch on an entity. Topic = entity label; goal is editable."""
+        entity_label = (label or "").strip() or slug.replace("-", " ").title()
+        goal = (endpoint_goal or "").strip() or (
+            f"Expand vault coverage of {entity_label} with diverse, high-quality sources."
+        )
+        return self.start_autoresearch_objective(
+            topic=entity_label,
+            endpoint_goal=goal,
+            bootstrap=True,
+            summary=f"Autoresearch (entity): {entity_label}",
+        )
 
     def get_vault_explorer(self, *, force_refresh: bool = False) -> dict[str, Any]:
         manager = self._default_vault_manager()

@@ -123,6 +123,24 @@ class KnowledgeVaultConfig(BaseModel):
         le=50000,
         description="Maximum queue entries retained before older terminal records are trimmed",
     )
+    search_results_terminal_retention_hours: int = Field(
+        default=168,
+        ge=1,
+        le=8760,
+        description="How long terminal queue records (ingested/rejected) are retained before age-based trim",
+    )
+    claim_lease_seconds: int = Field(
+        default=900,
+        ge=60,
+        le=86400,
+        description="Lease window for a claimed queue item. Expired claims can be stolen by another ingest runner.",
+    )
+    max_ingest_attempts: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        description="Maximum number of times a queued item may be claimed before it is rejected permanently.",
+    )
     graph_limit: int = Field(
         default=400,
         ge=1,
