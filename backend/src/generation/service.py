@@ -57,7 +57,7 @@ class GenerationService:
         return Path(self._config().comfy_output_dir).expanduser().resolve()
 
     def _prefix_root(self) -> str:
-        return self._config().filename_prefix_root.strip("/") or "capybara"
+        return self._config().filename_prefix_root.strip("/") or "capyhome"
 
     @staticmethod
     def _parse_aspect_ratio(aspect_ratio: str) -> tuple[int, int]:

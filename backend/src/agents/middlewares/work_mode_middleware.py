@@ -192,11 +192,11 @@ def _run_plan_mode_rerun(
     same thread (LangGraph serialises runs per thread via the checkpoint lock).
     """
     from src.agents.middlewares.daemon_agent_invoke import invoke_client_agent_async
-    from src.client import CapybaraClient
+    from src.client import CapyHomeClient
 
     time.sleep(2.0)
     try:
-        client = CapybaraClient(
+        client = CapyHomeClient(
             model_name=requested_model_name,
             thinking_enabled=True,
             subagent_enabled=True,

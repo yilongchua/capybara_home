@@ -13,7 +13,7 @@ from src.control_plane.models import (
 
 
 class PipelinesConfig(BaseModel):
-    enabled: bool = Field(default=True, description="Whether the Capybara Home pipeline control plane is enabled")
+    enabled: bool = Field(default=True, description="Whether the CapyHome pipeline control plane is enabled")
     storage_dir: str = Field(default="control-plane", description="Relative directory under CAPYBARA_HOME used for pipeline state")
     default_requires_approval: bool = Field(default=True, description="Whether ad-hoc pipeline runs require approval by default")
     audit_log_max_entries: int = Field(default=200, description="Maximum number of audit events to retain")
@@ -87,7 +87,7 @@ class GenerationAsyncConfig(BaseModel):
         default="/Users/ryan_chua/Desktop/comfyUI/output",
         description="ComfyUI output directory on host",
     )
-    filename_prefix_root: str = Field(default="capybara", description="Required filename prefix root under ComfyUI output")
+    filename_prefix_root: str = Field(default="capyhome", description="Required filename prefix root under ComfyUI output")
     model_config = ConfigDict(extra="allow")
 
 

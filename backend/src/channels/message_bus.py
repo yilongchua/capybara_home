@@ -37,9 +37,9 @@ class InboundMessage:
         text: The message text.
         msg_type: Whether this is a regular chat message or a command.
         thread_ts: Optional platform thread identifier (for threaded replies).
-        topic_id: Conversation topic identifier used to map to a Capybara Home thread.
+        topic_id: Conversation topic identifier used to map to a CapyHome thread.
             Messages sharing the same ``topic_id`` within a ``chat_id`` will
-            reuse the same Capybara Home thread.  When ``None``, each message
+            reuse the same CapyHome thread.  When ``None``, each message
             creates a new thread (one-shot Q&A).
         files: Optional list of file attachments (platform-specific dicts).
         metadata: Arbitrary extra data from the channel.
@@ -86,7 +86,7 @@ class OutboundMessage:
     Attributes:
         channel_name: Target channel name (used for routing).
         chat_id: Target chat/conversation identifier.
-        thread_id: Capybara Home thread ID that produced this response.
+        thread_id: CapyHome thread ID that produced this response.
         text: The response text.
         artifacts: List of artifact paths produced by the agent.
         is_final: Whether this is the final message in the response stream.

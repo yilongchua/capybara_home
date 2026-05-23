@@ -10,7 +10,7 @@ _SAFE_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
 class Paths:
     """
-    Centralized path configuration for Capybara Home application data.
+    Centralized path configuration for CapyHome application data.
 
     Directory layout (host side):
         {base_dir}/
@@ -31,8 +31,8 @@ class Paths:
     BaseDir resolution (in priority order):
         1. Constructor argument `base_dir`
         2. CAPYBARA_HOME environment variable
-        3. Local dev fallback: cwd/.capybara-home  (when cwd is the backend/ dir)
-        4. Default: $HOME/.capybara-home
+        3. Local dev fallback: cwd/.capyhome  (when cwd is the backend/ dir)
+        4. Default: $HOME/.capyhome
     """
 
     def __init__(self, base_dir: str | Path | None = None) -> None:
@@ -64,9 +64,9 @@ class Paths:
 
         cwd = Path.cwd()
         if cwd.name == "backend" or (cwd / "pyproject.toml").exists():
-            return cwd / ".capybara-home"
+            return cwd / ".capyhome"
 
-        return Path.home() / ".capybara-home"
+        return Path.home() / ".capyhome"
 
     @property
     def memory_file(self) -> Path:

@@ -1,7 +1,7 @@
-"""IM Channel integration for Capybara Home.
+"""IM Channel integration for CapyHome.
 
 Provides a pluggable channel system that connects external messaging platforms
-(Slack, Telegram) to the Capybara Home agent via the ChannelManager,
+(Slack, Telegram) to the CapyHome agent via the ChannelManager,
 which uses ``langgraph-sdk`` to communicate with the underlying LangGraph Server.
 """
 

@@ -1,8 +1,8 @@
 """Activity timeline schema + helpers.
 
 This module powers user-facing activity updates such as:
-- Capybara is thinking...
-- Capybara is working on ...
+- CapyHome is thinking...
+- CapyHome is working on ...
 - Baby Capy is working on ...
 """
 
@@ -27,7 +27,7 @@ class ActivityEvent(TypedDict, total=False):
     run_id: str
     seq: int
     timestamp: float
-    actor: Literal["capybara", "baby_capy", "system"]
+    actor: Literal["capyhome", "baby_capy", "system"]
     kind: str
     line: str
     task_id: str | None
@@ -97,7 +97,7 @@ def _next_seq(runtime: Any) -> int:
 def create_activity_event(
     runtime: Any,
     *,
-    actor: Literal["capybara", "baby_capy", "system"],
+    actor: Literal["capyhome", "baby_capy", "system"],
     kind: str,
     line: str,
     task_id: str | None = None,

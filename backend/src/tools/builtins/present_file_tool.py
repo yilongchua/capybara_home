@@ -21,7 +21,7 @@ def _normalize_presented_filepath(
     Accepts either:
     - A virtual sandbox path such as `/mnt/user-data/workspace/report.md`
     - A host-side thread workspace path such as
-      `/app/backend/.capybara-home/threads/<thread>/user-data/workspace/report.md`
+      `/app/backend/.capyhome/threads/<thread>/user-data/workspace/report.md`
 
     Returns:
         The normalized virtual path.

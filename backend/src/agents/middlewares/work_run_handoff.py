@@ -114,7 +114,7 @@ def _run_work_mode_handoff(
         mark_handoff_failed,
         mark_handoff_succeeded,
     )
-    from src.client import CapybaraClient
+    from src.client import CapyHomeClient
 
     time.sleep(delay_seconds)
     values: dict[str, Any] = {}
@@ -133,7 +133,7 @@ def _run_work_mode_handoff(
     # Ensure the thread has a visible title before work execution begins.
     spawn_title_handoff_if_missing(thread_id=thread_id, thread_name_suffix="-pre-work")
     try:
-        client = CapybaraClient(
+        client = CapyHomeClient(
             model_name=requested_model_name,
             thinking_enabled=True,
             subagent_enabled=True,

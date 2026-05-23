@@ -1,12 +1,12 @@
-"""CapybaraClient — Embedded Python client for Capybara Home agent system.
+"""CapyHomeClient — Embedded Python client for CapyHome agent system.
 
-Provides direct programmatic access to Capybara Home's agent capabilities
+Provides direct programmatic access to CapyHome's agent capabilities
 without requiring LangGraph Server or Gateway API processes.
 
 Usage:
-    from src.client import CapybaraClient
+    from src.client import CapyHomeClient
 
-    client = CapybaraClient()
+    client = CapyHomeClient()
     response = client.chat("Analyze this paper for me", thread_id="my-thread")
     print(response)
 
@@ -65,10 +65,10 @@ class StreamEvent:
     data: dict[str, Any] = field(default_factory=dict)
 
 
-class CapybaraClient:
-    """Embedded Python client for Capybara Home agent system.
+class CapyHomeClient:
+    """Embedded Python client for CapyHome agent system.
 
-    Provides direct programmatic access to Capybara Home's agent capabilities
+    Provides direct programmatic access to CapyHome's agent capabilities
     without requiring LangGraph Server or Gateway API processes.
 
     Note:
@@ -83,9 +83,9 @@ class CapybaraClient:
 
     Example::
 
-        from src.client import CapybaraClient
+        from src.client import CapyHomeClient
 
-        client = CapybaraClient()
+        client = CapyHomeClient()
 
         # Simple one-shot
         print(client.chat("hello"))

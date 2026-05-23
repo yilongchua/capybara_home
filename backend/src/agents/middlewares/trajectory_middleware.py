@@ -91,7 +91,7 @@ class TrajectoryMiddleware(AgentMiddleware[TrajectoryMiddlewareState]):
         thread_part = thread_id or "unknown-thread"
         # Prefer LangGraph's native run_id so trajectory files are cross-referenced
         # with Gateway `/runs/{run_id}/resume`. Fall back to a synthetic uuid when
-        # the runtime does not expose one (e.g., embedded CapybaraClient paths).
+        # the runtime does not expose one (e.g., embedded CapyHomeClient paths).
         native_run_id = context.get("run_id") if isinstance(context, dict) else None
         run_id = str(native_run_id) if isinstance(native_run_id, str) and native_run_id else f"run-{uuid.uuid4().hex[:10]}"
         base_dir = get_paths().base_dir / "threads" / thread_part / "logs" / "trajectory"

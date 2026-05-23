@@ -59,7 +59,7 @@ load_dotenv()
 
 
 class AppConfig(BaseModel):
-    """Config for the Capybara Home application"""
+    """Config for the CapyHome application"""
 
     models: list[ModelConfig] = Field(default_factory=list, description="Available models")
     sandbox: SandboxConfig = Field(description="Sandbox configuration")
@@ -363,7 +363,7 @@ def _current_extensions_mtime() -> float | None:
 
 
 def get_app_config() -> AppConfig:
-    """Get the Capybara Home config instance.
+    """Get the CapyHome config instance.
 
     Returns a cached singleton instance. Use `reload_app_config()` to reload
     from file, or `reset_app_config()` to clear the cache.

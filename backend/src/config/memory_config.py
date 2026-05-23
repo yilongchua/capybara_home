@@ -18,8 +18,8 @@ class MemoryConfig(BaseModel):
             "Absolute paths are used as-is. "
             "Relative paths are resolved against `Paths.base_dir` "
             "(not the backend working directory). "
-            "Note: if you previously set this to `.capybara-home/memory.json`, "
-            "the file will now be resolved as `{base_dir}/.capybara-home/memory.json`; "
+            "Note: if you previously set this to `.capyhome/memory.json`, "
+            "the file will now be resolved as `{base_dir}/.capyhome/memory.json`; "
             "migrate existing data or use an absolute path to preserve the old location."
         ),
     )

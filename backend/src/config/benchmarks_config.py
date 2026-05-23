@@ -8,7 +8,7 @@ class BenchmarksConfig(BaseModel):
 
     enabled: bool = Field(default=False, description="Enable benchmark suite execution helpers.")
     suite: str = Field(default="coding", description="Default benchmark suite name.")
-    report_dir: str = Field(default=".capybara-home/benchmarks", description="Directory for benchmark reports.")
+    report_dir: str = Field(default=".capyhome/benchmarks", description="Directory for benchmark reports.")
     fail_on_regression: bool = Field(default=False, description="Whether benchmark regression should fail gates.")
     regression_threshold: float = Field(default=0.02, ge=0.0, le=1.0, description="Allowed score regression before marking failure.")
 

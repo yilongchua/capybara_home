@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api", tags=["generation"])
 class GenerationSubmitRequest(BaseModel):
     kind: Literal["image", "video"]
     prompt: str = Field(..., min_length=1, description="Prompt text to inject into workflow")
-    output_name: str = Field(..., min_length=1, description="Output basename used for capybara/{output_name} prefix")
+    output_name: str = Field(..., min_length=1, description="Output basename used for capyhome/{output_name} prefix")
     aspect_ratio: str = Field(default="16:9", description="Aspect ratio for image generation")
 
 

@@ -4,7 +4,7 @@ The lead agent is given ``scope_search`` (instead of ``web_search``) while a
 plan is in draft. This shapes behavior at the prompt level: the LLM literally
 cannot call ``web_search`` because the tool is hidden from its catalog by
 ``PhaseToolFilterMiddleware``. ``scope_search`` exposes the same underlying
-SearXNG/Capybara backend with a smaller result cap and a different description
+SearXNG/CapyHome backend with a smaller result cap and a different description
 that frames the call as scope-discovery only — narrowing sub-topics, identifying
 sources, definitions, or scope dimensions BEFORE the user approves the plan.
 

@@ -8,7 +8,7 @@ class MemoryVersioningConfig(BaseModel):
 
     enabled: bool = Field(default=False, description="Enable append-only memory versioning.")
     storage_dir: str = Field(
-        default=".capybara-home/memory_versions",
+        default=".capyhome/memory_versions",
         description="Directory used for version records (relative to backend base_dir unless absolute).",
     )
     require_expected_sha: bool = Field(

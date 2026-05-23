@@ -63,7 +63,7 @@ async def update_harness_configuration(request: HarnessConfigUpdateRequest) -> H
         path = write_harness_sidecar(new_config)
         set_harness_config(new_config)
 
-        # Embedded CapybaraClient instances include get_harness_config().enabled
+        # Embedded CapyHomeClient instances include get_harness_config().enabled
         # in their agent cache key, so the toggle auto-invalidates any cached
         # agent on the next invoke. The LangGraph Server (separate process)
         # picks up the change through the sidecar mtime refresh in

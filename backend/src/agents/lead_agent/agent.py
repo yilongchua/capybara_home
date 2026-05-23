@@ -44,7 +44,7 @@ from src.agents.middlewares.scratchpad_task_memory_middleware import ScratchpadT
 from src.agents.middlewares.skill_disclosure_middleware import SkillDisclosureMiddleware
 from src.agents.middlewares.steering_middleware import SteeringMiddleware
 from src.agents.middlewares.subagent_limit_middleware import SubagentLimitMiddleware
-from src.agents.middlewares.summarization_middleware import CapybaraSummarizationMiddleware
+from src.agents.middlewares.summarization_middleware import CapyHomeSummarizationMiddleware
 from src.agents.middlewares.thread_data_middleware import ThreadDataMiddleware
 from src.agents.middlewares.title_middleware import TitleMiddleware
 from src.agents.middlewares.todo_dag_middleware import TodoDagMiddleware
@@ -220,7 +220,7 @@ def _normalize_token_only_keep(keep: tuple, context_tokens: int) -> tuple:
     return ("tokens", _DEFAULT_COMPACTION_KEEP_TOKENS)
 
 
-def _create_summarization_middleware(*, mode: str = "", dreamy_mode: bool = False) -> CapybaraSummarizationMiddleware | None:
+def _create_summarization_middleware(*, mode: str = "", dreamy_mode: bool = False) -> CapyHomeSummarizationMiddleware | None:
     """Create and configure the summarization middleware from config."""
     config = get_summarization_config()
 
@@ -277,7 +277,7 @@ def _create_summarization_middleware(*, mode: str = "", dreamy_mode: bool = Fals
     if dreamy_mode:
         hooks.append(dreamy_state_preservation_hook)
 
-    return CapybaraSummarizationMiddleware(
+    return CapyHomeSummarizationMiddleware(
         **kwargs,
         before_summarization=hooks,
     )

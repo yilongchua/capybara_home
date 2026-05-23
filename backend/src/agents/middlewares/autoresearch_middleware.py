@@ -123,7 +123,7 @@ class AutoresearchMiddleware(AgentMiddleware[AgentState]):
         if template_id not in templates:
             message = (
                 "Autoresearch is unavailable because the knowledge vault templates are disabled. "
-                "Set `knowledge_vault.enabled: true` in config and restart Capybara Home."
+                "Set `knowledge_vault.enabled: true` in config and restart CapyHome."
             )
             return ModelResponse(result=[AIMessage(content=message)])
 
