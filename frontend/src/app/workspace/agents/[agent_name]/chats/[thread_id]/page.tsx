@@ -252,6 +252,7 @@ function AgentChatPageContent({
     <ThreadContext.Provider value={{ thread, forkDraft, setForkDraft }}>
       <ChatBox
         threadId={threadId}
+        isNewThread={isNewThread}
         extraDirectoryFiles={generationArtifacts}
         onSubmitPlanRevision={handleSubmitPlanRevision}
       >
@@ -318,7 +319,7 @@ function AgentChatPageContent({
                   "relative w-full",
                   isNewThread && "-translate-y-[calc(50vh-96px)]",
                   isNewThread
-                    ? "max-w-(--container-width-sm)"
+                    ? "max-w-[50vw]"
                     : "max-w-(--container-width-md)",
                 )}
               >
