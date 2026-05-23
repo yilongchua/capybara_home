@@ -573,6 +573,8 @@ export function InputBox({
   const autoModeEnabled = context.auto_mode === true;
   const isPlanMode = context.mode === "plan";
   const isDreamyThread = [dreamy, dreamyActive].some(Boolean);
+  const toolbarIconButtonClass =
+    "rounded-md border border-border/60 bg-muted/70 hover:bg-muted text-foreground";
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1458,8 +1460,8 @@ export function InputBox({
       <PromptInput
         className={cn(
           "bg-background/85 rounded-2xl backdrop-blur-sm transition-all duration-300 ease-out *:data-[slot='input-group']:rounded-2xl",
-          isPlanMode &&
-            "[&>[data-slot='input-group']]:border-destructive [&>[data-slot='input-group']]:shadow-[0_0_0_1px_hsl(var(--destructive)/0.45)] [&>[data-slot='input-group']]:has-[[data-slot=input-group-control]:focus-visible]:ring-destructive/30",
+          isNewThread &&
+            "*:data-[slot='input-group']:border-2 *:data-[slot='input-group']:border-solid *:data-[slot='input-group']:border-[#4a2d1a] *:data-[slot='input-group']:bg-background/95 *:data-[slot='input-group']:shadow-none",
           className,
         )}
         disabled={disabled}
@@ -1509,13 +1511,14 @@ export function InputBox({
           />
         </PromptInputBody>
 
-        <PromptInputFooter className="flex">
-          <PromptInputTools>
+        <PromptInputFooter className="flex w-full min-w-0 flex-wrap items-center gap-2">
+          <PromptInputTools className="min-w-0 flex-wrap">
             <AttachmentPopup
               triggerId={attachmentMenuTriggerId}
               onAttachFiles={() => attachments.openFileDialog()}
               onMountFolder={() => void handleMountFolder()}
               isPicking={isPicking}
+              className={toolbarIconButtonClass}
             />
             {!dreamy && (
               <PrivacyAndAutoMenu
@@ -1524,6 +1527,7 @@ export function InputBox({
                 onTogglePlanMode={handleTogglePlanMode}
                 onToggleAutoMode={handleToggleAutoMode}
                 triggerId={privacyMenuTriggerId}
+                triggerClassName={toolbarIconButtonClass}
               />
             )}
             <ReasoningEffortMenu
@@ -1531,9 +1535,10 @@ export function InputBox({
               reasoningEffort={context.reasoning_effort}
               onSelect={handleReasoningEffortSelect}
               triggerId={reasoningMenuTriggerId}
+              triggerClassName={toolbarIconButtonClass}
             />
           </PromptInputTools>
-          <PromptInputTools>
+          <PromptInputTools className="ml-auto min-w-0 flex-wrap justify-end">
             {!dreamy && isPlanMode ? (
               <div className="rounded-full border border-yellow-300 bg-yellow-100 px-2 py-1 text-[11px] font-medium text-yellow-700 dark:border-yellow-600/70 dark:bg-yellow-900/35 dark:text-yellow-300">
                 Plan mode
@@ -1558,9 +1563,10 @@ export function InputBox({
                 <PromptInputButton
                   id={modelSelectorTriggerId}
                   aria-controls={modelSelectorDialogId}
+                  className={toolbarIconButtonClass}
                   disabled={models.length === 0}
                 >
-                  <ModelSelectorName className="text-xs font-normal">
+                  <ModelSelectorName className="max-w-[8.5rem] truncate text-xs font-normal sm:max-w-[12rem]">
                     {selectedModel?.display_name ?? selectedModel?.name ?? "Select model"}
                   </ModelSelectorName>
                 </PromptInputButton>
@@ -1588,7 +1594,7 @@ export function InputBox({
             {status === "streaming" && (
               <PromptInputButton
                 type="button"
-                className="gap-1 px-2"
+                className={cn("gap-1 px-2", toolbarIconButtonClass)}
                 onClick={onStop}
                 aria-label="Stop current response"
               >
