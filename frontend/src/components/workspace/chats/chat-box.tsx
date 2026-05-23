@@ -227,17 +227,6 @@ const ChatBox: React.FC<{
         orientation="horizontal"
         id="workspace-chat-panel-group"
       >
-        <ResizablePanel className="relative" defaultSize={66} minSize={40} id="chat">
-          {children}
-        </ResizablePanel>
-        <ResizableHandle
-          id="workspace-chat-panel-separator"
-          withHandle
-          className={cn(
-            "w-2 bg-muted/85 opacity-100 transition-colors hover:bg-muted",
-            isPanelCollapsed && "pointer-events-none opacity-0",
-          )}
-        />
         <ResizablePanel
           panelRef={panelRef}
           defaultSize={isNewThread ? 0 : 34}
@@ -283,7 +272,7 @@ const ChatBox: React.FC<{
                 <RefreshCwIcon className="size-4" />
               </Button>
               <Button size="icon-sm" variant="ghost" onClick={handleCollapse}>
-                <ChevronRightIcon className="size-4" />
+                <ChevronLeftIcon className="size-4" />
               </Button>
             </div>
 
@@ -345,10 +334,21 @@ const ChatBox: React.FC<{
             </TabsContent>
           </Tabs>
         </ResizablePanel>
+        <ResizableHandle
+          id="workspace-chat-panel-separator"
+          withHandle
+          className={cn(
+            "w-2 bg-muted/85 opacity-100 transition-colors hover:bg-muted",
+            isPanelCollapsed && "pointer-events-none opacity-0",
+          )}
+        />
+        <ResizablePanel className="relative" defaultSize={66} minSize={40} id="chat">
+          {children}
+        </ResizablePanel>
       </ResizablePanelGroup>
 
       {isPanelCollapsed && (
-        <div className="absolute top-2 right-2 z-30">
+        <div className="absolute top-2 left-2 z-30">
           <Button
             variant="secondary"
             size="icon-sm"
@@ -356,7 +356,7 @@ const ChatBox: React.FC<{
             onClick={handleExpand}
             aria-label="Open activity panel"
           >
-            <ChevronLeftIcon className="size-4" />
+            <ChevronRightIcon className="size-4" />
           </Button>
         </div>
       )}
