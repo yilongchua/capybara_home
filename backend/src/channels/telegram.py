@@ -222,7 +222,7 @@ class TelegramChannel(Channel):
         """Handle /start command."""
         if not self._check_user(update.effective_user.id):
             return
-        await update.message.reply_text("Welcome to Capybara Home! Send me a message to start a conversation.\nType /help for available commands.")
+        await update.message.reply_text("Welcome to CapyHome! Send me a message to start a conversation.\nType /help for available commands.")
 
     async def _cmd_generic(self, update, context) -> None:
         """Forward slash commands to the channel manager."""

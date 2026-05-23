@@ -19,7 +19,7 @@ class SandboxConfig(BaseModel):
         image: Docker image to use (default: enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest)
         port: Base port for sandbox containers (default: 8080)
         replicas: Maximum number of concurrent sandbox containers (default: 3). When the limit is reached the least-recently-used sandbox is evicted to make room.
-        container_prefix: Prefix for container names (default: capybara-home-sandbox)
+        container_prefix: Prefix for container names (default: capyhome-sandbox)
         idle_timeout: Idle timeout in seconds before sandbox is released (default: 600 = 10 minutes). Set to 0 to disable.
         mounts: List of volume mounts to share directories with the container
         environment: Environment variables to inject into the container (values starting with $ are resolved from host env)

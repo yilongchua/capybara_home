@@ -64,7 +64,7 @@ def get_tracing_config() -> TracingConfig:
     Priority order:
         enabled  : LANGSMITH_TRACING > LANGCHAIN_TRACING_V2 > LANGCHAIN_TRACING
         api_key  : LANGSMITH_API_KEY  > LANGCHAIN_API_KEY
-        project  : LANGSMITH_PROJECT  > LANGCHAIN_PROJECT   (default: "capybara-home")
+        project  : LANGSMITH_PROJECT  > LANGCHAIN_PROJECT   (default: "CapyHome")
         endpoint : LANGSMITH_ENDPOINT > LANGCHAIN_ENDPOINT  (default: https://api.smith.langchain.com)
 
     Returns:
@@ -80,7 +80,7 @@ def get_tracing_config() -> TracingConfig:
             # Keep compatibility with both legacy LANGCHAIN_* and newer LANGSMITH_* variables.
             enabled=_env_flag_preferred("LANGSMITH_TRACING", "LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING"),
             api_key=_first_env_value("LANGSMITH_API_KEY", "LANGCHAIN_API_KEY"),
-            project=_first_env_value("LANGSMITH_PROJECT", "LANGCHAIN_PROJECT") or "capybara-home",
+            project=_first_env_value("LANGSMITH_PROJECT", "LANGCHAIN_PROJECT") or "CapyHome",
             endpoint=_first_env_value("LANGSMITH_ENDPOINT", "LANGCHAIN_ENDPOINT") or "https://api.smith.langchain.com",
         )
         return _tracing_config

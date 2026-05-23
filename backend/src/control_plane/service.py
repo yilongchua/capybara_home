@@ -1478,7 +1478,7 @@ class ControlPlaneService:
         }
 
     def _vault_ingest_log_path(self) -> Path:
-        # base_dir is typically `<repo>/backend/.capybara-home`; logs live at `<repo>/logs/`.
+        # base_dir is typically `<repo>/backend/.capyhome`; logs live at `<repo>/logs/`.
         base_dir = get_paths().base_dir
         logs_dir = base_dir.parent.parent / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -1487,7 +1487,7 @@ class ControlPlaneService:
     def _get_vault_ingest_logger(self) -> logging.Logger:
         if self._vault_ingest_logger is not None:
             return self._vault_ingest_logger
-        logger_obj = logging.getLogger("capybara.vault_ingest")
+        logger_obj = logging.getLogger("capyhome.vault_ingest")
         logger_obj.setLevel(logging.INFO)
         logger_obj.propagate = False
         log_path = self._vault_ingest_log_path()

@@ -315,20 +315,20 @@ async def web_search_tool(query: str, max_results: int = 5) -> str:
         if not effective_query:
             effective_query = query.strip()
 
-        # Capybara local websearch backend expects JSON body:
+        # CapyHome local websearch backend expects JSON body:
         # {"query": "...", "max_results": N}
-        capybara_payload: dict[str, Any] = {
+        capyhome_payload: dict[str, Any] = {
             "query": effective_query,
             "max_results": effective_max_results,
             "write_markdown_package": True,
             "package_name": effective_query,
         }
         if cfg["engines"]:
-            capybara_payload["engines"] = cfg["engines"]
+            capyhome_payload["engines"] = cfg["engines"]
         if cfg["language"]:
-            capybara_payload["language"] = str(cfg["language"])
+            capyhome_payload["language"] = str(cfg["language"])
         if cfg["secret_key"]:
-            capybara_payload["secret_key"] = cfg["secret_key"]
+            capyhome_payload["secret_key"] = cfg["secret_key"]
 
         # SearXNG-style compatibility payload.
         searx_payload: dict[str, Any] = {
@@ -345,7 +345,7 @@ async def web_search_tool(query: str, max_results: int = 5) -> str:
             searx_payload["language"] = str(cfg["language"])
 
         body: dict[str, Any] = {}
-        capybara_error: Exception | None = None
+        capyhome_error: Exception | None = None
 
         sem, queue_wait_ms = await _acquire_web_search_slot(
             int(cfg["max_concurrent_requests"]),
@@ -353,22 +353,22 @@ async def web_search_tool(query: str, max_results: int = 5) -> str:
         )
         try:
             async with httpx.AsyncClient(timeout=cfg["timeout_seconds"]) as client:
-                # Prefer capybara JSON API, with optional searxng fallback for compatibility.
-                if cfg["api_style"] in {"auto", "capybara"}:
+                # Prefer capyhome JSON API, with optional searxng fallback for compatibility.
+                if cfg["api_style"] in {"auto", "capyhome"}:
                     try:
-                        capybara_headers = {"Content-Type": "application/json", **cfg["headers"]}
+                        capyhome_headers = {"Content-Type": "application/json", **cfg["headers"]}
                         body = await _request_json_with_retry(
                             client=client,
                             request_kwargs={
                                 "method": "POST",
                                 "url": endpoint,
-                                "headers": capybara_headers,
-                                "json": capybara_payload,
+                                "headers": capyhome_headers,
+                                "json": capyhome_payload,
                             },
                         )
                     except Exception as exc:
-                        capybara_error = exc
-                        if cfg["api_style"] == "capybara":
+                        capyhome_error = exc
+                        if cfg["api_style"] == "capyhome":
                             raise
 
                 if cfg["api_style"] == "searxng" or (cfg["api_style"] == "auto" and not body):
@@ -385,8 +385,8 @@ async def web_search_tool(query: str, max_results: int = 5) -> str:
         finally:
             sem.release()
 
-        if not body and capybara_error is not None:
-            raise capybara_error
+        if not body and capyhome_error is not None:
+            raise capyhome_error
 
         raw_results = body.get("results", []) if isinstance(body, dict) else []
         results = _normalize_results(raw_results, effective_max_results)

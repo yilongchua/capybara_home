@@ -61,7 +61,7 @@ def _health_payload(app: FastAPI) -> dict[str, object]:
     overall_status = "degraded" if degraded_components else "healthy"
     return {
         "status": overall_status,
-        "service": "capybara-home-gateway",
+        "service": "capyhome-gateway",
         "components": status_map,
     }
 
@@ -171,11 +171,11 @@ def create_app() -> FastAPI:
     gateway_config = get_gateway_config()
 
     app = FastAPI(
-        title="Capybara Home API Gateway",
+        title="CapyHome API Gateway",
         description="""
-## Capybara Home API Gateway
+## CapyHome API Gateway
 
-API Gateway for Capybara Home - A LangGraph-based AI agent backend with sandbox execution capabilities.
+API Gateway for CapyHome - A LangGraph-based AI agent backend with sandbox execution capabilities.
 
 ### Features
 

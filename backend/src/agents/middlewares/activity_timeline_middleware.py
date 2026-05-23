@@ -142,7 +142,7 @@ def _to_activity_event(runtime: Runtime, runtime_event: dict[str, Any]) -> Activ
     description = _as_str(payload.get("description"))
     group_role: str | None = None
 
-    actor = "capybara"
+    actor = "capyhome"
     kind = event_type or "event"
     line: str | None = None
 
@@ -172,9 +172,9 @@ def _to_activity_event(runtime: Runtime, runtime_event: dict[str, Any]) -> Activ
         if isinstance(tool_calls_count, int) and tool_calls_count > 0:
             return None
         else:
-            line = "Capybara is working on finalizing the response..."
+            line = "CapyHome is working on finalizing the response..."
     elif event_type in {"plan_created", "skipped_trivial", "llm_classified_trivial", "parse_failed_fallback"}:
-        line = "Capybara is working on creating the implementation plan..."
+        line = "CapyHome is working on creating the implementation plan..."
     elif event_type == "plan_auto_approved":
         line = "Plan auto-approved — starting execution"
     elif event_type == "task_started":
@@ -210,17 +210,17 @@ def _to_activity_event(runtime: Runtime, runtime_event: dict[str, Any]) -> Activ
         group_role = "terminal"
         line = f"Baby Capy - {subagent_type} hit an issue while working on {description}"
     elif event_type == "context_tokens":
-        line = "Capybara is thinking..."
+        line = "CapyHome is thinking..."
     elif event_type == "compaction":
-        line = "Capybara is working on compressing context..."
+        line = "CapyHome is working on compressing context..."
     elif event_type == "rule_fail":
-        line = "Capybara is working on correcting the previous output..."
+        line = "CapyHome is working on correcting the previous output..."
     elif event_type == "llm_verdict":
-        line = "Capybara is thinking..."
+        line = "CapyHome is thinking..."
     elif event_type == "background_followup_started":
-        line = "Capybara is working on deeper background analysis..."
+        line = "CapyHome is working on deeper background analysis..."
     elif event_type == "planning_started":
-        line = "Capybara is thinking..."
+        line = "CapyHome is thinking..."
 
     if line is None:
         # Best-effort fallback only for harness/runtime events we still want visible.
@@ -235,7 +235,7 @@ def _to_activity_event(runtime: Runtime, runtime_event: dict[str, Any]) -> Activ
             "dangling_tool_call_middleware",
             "work_mode_middleware",
         }:
-            line = "Capybara is working on the next step..."
+            line = "CapyHome is working on the next step..."
         else:
             return None
 
@@ -328,9 +328,9 @@ class ActivityTimelineMiddleware(AgentMiddleware[ActivityTimelineMiddlewareState
     def before_agent(self, state: ActivityTimelineMiddlewareState, runtime: Runtime) -> dict | None:
         event = create_activity_event(
             runtime,
-            actor="capybara",
+            actor="capyhome",
             kind="run_started",
-            line="Capybara is thinking...",
+            line="CapyHome is thinking...",
             payload={"message_count": len(state.get("messages", []) or [])},
         )
         stream_activity_event(event)
@@ -362,9 +362,9 @@ class ActivityTimelineMiddleware(AgentMiddleware[ActivityTimelineMiddlewareState
                 updates.append(
                     create_activity_event(
                         runtime,
-                        actor="capybara",
+                        actor="capyhome",
                         kind="thinking",
-                        line="Capybara is thinking...",
+                        line="CapyHome is thinking...",
                         assistant_message_id=assistant_message_id,
                         payload={"reasoning_preview": reasoning[:280]},
                     )
@@ -381,9 +381,9 @@ class ActivityTimelineMiddleware(AgentMiddleware[ActivityTimelineMiddlewareState
                 updates.append(
                     create_activity_event(
                         runtime,
-                        actor="capybara",
+                        actor="capyhome",
                         kind="model_response",
-                        line="Capybara is working on choosing the next actions...",
+                        line="CapyHome is working on choosing the next actions...",
                         assistant_message_id=assistant_message_id,
                         payload={"tool_names": tool_names, "tool_calls_count": len(tool_calls)},
                     )
@@ -392,9 +392,9 @@ class ActivityTimelineMiddleware(AgentMiddleware[ActivityTimelineMiddlewareState
                 updates.append(
                     create_activity_event(
                         runtime,
-                        actor="capybara",
+                        actor="capyhome",
                         kind="model_response",
-                        line="Capybara is working on finalizing the response...",
+                        line="CapyHome is working on finalizing the response...",
                         assistant_message_id=assistant_message_id,
                     )
                 )

@@ -41,10 +41,10 @@ def _run_background_followup(
     summary_prompt: str,
 ) -> None:
     from src.agents.middlewares.daemon_agent_invoke import invoke_client_agent_async
-    from src.client import CapybaraClient
+    from src.client import CapyHomeClient
 
     time.sleep(2.0)
-    client = CapybaraClient(
+    client = CapyHomeClient(
         model_name=requested_model_name,
         thinking_enabled=True,
         subagent_enabled=True,

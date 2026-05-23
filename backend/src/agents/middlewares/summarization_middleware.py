@@ -156,7 +156,7 @@ def _resolve_agent_name(runtime: Runtime) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-class CapybaraSummarizationMiddleware(SummarizationMiddleware):
+class CapyHomeSummarizationMiddleware(SummarizationMiddleware):
     """SummarizationMiddleware extended with hook dispatch and skill-message rescue."""
 
     def __init__(

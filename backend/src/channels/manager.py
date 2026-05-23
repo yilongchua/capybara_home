@@ -1,4 +1,4 @@
-"""ChannelManager — consumes inbound messages and dispatches them to the Capybara Home agent via LangGraph Server."""
+"""ChannelManager — consumes inbound messages and dispatches them to the CapyHome agent via LangGraph Server."""
 
 from __future__ import annotations
 
@@ -186,7 +186,7 @@ def _resolve_attachments(thread_id: str, artifacts: list[str]) -> list[ResolvedA
 
 
 class ChannelManager:
-    """Core dispatcher that bridges IM channels to the Capybara Home agent.
+    """Core dispatcher that bridges IM channels to the CapyHome agent.
 
     It reads from the MessageBus inbound queue, creates/reuses threads on
     the LangGraph Server, sends messages via ``runs.wait``, and publishes
@@ -351,7 +351,7 @@ class ChannelManager:
     async def _handle_chat(self, msg: InboundMessage) -> None:
         client = self._get_client()
 
-        # Look up existing Capybara Home thread by topic_id (if present)
+        # Look up existing CapyHome thread by topic_id (if present)
         thread_id = None
         if msg.topic_id:
             thread_id = self.store.get_thread_id(msg.channel_name, msg.chat_id, topic_id=msg.topic_id)

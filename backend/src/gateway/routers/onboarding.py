@@ -404,7 +404,7 @@ async def test_embedding_endpoint(request: TestEmbeddingRequest) -> TestEmbeddin
                     probe = await client.post(
                         embeddings_url,
                         headers={**headers, "Content-Type": "application/json"},
-                        json={"model": request.model, "input": "capybara embedding healthcheck"},
+                        json={"model": request.model, "input": "capyhome embedding healthcheck"},
                     )
                     probe.raise_for_status()
                     payload = probe.json()

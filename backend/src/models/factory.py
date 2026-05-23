@@ -113,7 +113,7 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
     if not model_config.supports_reasoning_effort and "reasoning_effort" in kwargs:
         del kwargs["reasoning_effort"]
 
-    # 'endpoints' is a Capybara-specific list of base URLs for round-robin load
+    # 'endpoints' is a CapyHome-specific list of base URLs for round-robin load
     # balancing across multiple local inference backends. It is not a recognised
     # ChatOpenAI constructor kwarg; pop it here and derive base_url from it so it
     # never reaches AsyncCompletions.create().
