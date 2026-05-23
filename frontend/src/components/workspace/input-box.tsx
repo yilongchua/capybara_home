@@ -276,7 +276,6 @@ export function InputBox({
   > & {
     mode: "work" | "plan" | undefined;
     reasoning_effort?: "minimal" | "low" | "medium" | "high";
-    mask_sensitive_search?: boolean;
   };
   extraHeader?: React.ReactNode;
   isNewThread?: boolean;
@@ -290,7 +289,6 @@ export function InputBox({
     > & {
       mode: "work" | "plan" | undefined;
       reasoning_effort?: "minimal" | "low" | "medium" | "high";
-      mask_sensitive_search?: boolean;
     },
   ) => void;
   onSubmit?: (
@@ -572,13 +570,6 @@ export function InputBox({
     },
     [onContextChange, context],
   );
-
-  const handleToggleSearchPrivacy = useCallback(() => {
-    onContextChange?.({
-      ...context,
-      mask_sensitive_search: !context.mask_sensitive_search,
-    });
-  }, [onContextChange, context]);
 
   const handleToggleAutoMode = useCallback(() => {
     onContextChange?.({
@@ -1522,11 +1513,9 @@ export function InputBox({
               <PrivacyAndAutoMenu
                 mode={context.mode}
                 autoModeEnabled={autoModeEnabled}
-                maskSensitiveSearch={context.mask_sensitive_search}
                 canStartAutoresearch={canStartAutoresearch}
                 onTogglePlanMode={handleTogglePlanMode}
                 onToggleAutoMode={handleToggleAutoMode}
-                onToggleSearchPrivacy={handleToggleSearchPrivacy}
                 onOpenAutoresearch={handleOpenAutoresearch}
                 triggerId={privacyMenuTriggerId}
               />

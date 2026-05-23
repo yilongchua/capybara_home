@@ -4,7 +4,6 @@ import {
   BotIcon,
   CheckIcon,
   LightbulbIcon,
-  LockIcon,
   SparklesIcon,
   WorkflowIcon,
   ZapIcon,
@@ -132,21 +131,17 @@ export function ModeSelectorMenu({
 export function PrivacyAndAutoMenu({
   mode,
   autoModeEnabled,
-  maskSensitiveSearch,
   canStartAutoresearch,
   onTogglePlanMode,
   onToggleAutoMode,
-  onToggleSearchPrivacy,
   onOpenAutoresearch,
   triggerId,
 }: {
   mode: InputMode | undefined;
   autoModeEnabled: boolean;
-  maskSensitiveSearch: boolean | undefined;
   canStartAutoresearch: boolean;
   onTogglePlanMode: () => void;
   onToggleAutoMode: () => void;
-  onToggleSearchPrivacy: () => void;
   onOpenAutoresearch: () => void;
   triggerId: string;
 }) {
@@ -158,17 +153,16 @@ export function PrivacyAndAutoMenu({
       <DropdownMenuTrigger asChild>
         <PromptInputButton
           id={triggerId}
-          aria-label="Auto mode, privacy and autoresearch tools"
+          aria-label="Auto mode and autoresearch tools"
           className="gap-1 px-2"
         >
           <BotIcon className="size-3" />
-          <LockIcon className="size-3" />
           <LightbulbIcon className="size-3" />
         </PromptInputButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-72">
         <DropdownMenuLabel className="text-muted-foreground text-xs">
-          Auto Mode, Privacy & Autoresearch
+          Auto Mode & Autoresearch
         </DropdownMenuLabel>
         <DropdownMenuItem
           aria-label={`Toggle ${t.inputBox.planMode} mode`}
@@ -207,22 +201,6 @@ export function PrivacyAndAutoMenu({
             onCheckedChange={() => onToggleAutoMode()}
             aria-label="Auto mode"
           />
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          aria-label={t.inputBox.searchPrivacy}
-          onSelect={onToggleSearchPrivacy}
-          className={cn(
-            "flex items-center justify-between gap-2",
-            maskSensitiveSearch && "text-accent-foreground",
-          )}
-        >
-          <span>{t.inputBox.searchPrivacy}</span>
-          <span className="text-muted-foreground text-xs">
-            {maskSensitiveSearch
-              ? t.inputBox.searchPrivacyEnabled
-              : t.inputBox.searchPrivacyDisabled}
-          </span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem

@@ -41,7 +41,6 @@ from src.agents.middlewares.recursion_pivot_middleware import RecursionBudgetPiv
 from src.agents.middlewares.resume_state_middleware import ResumeStateMiddleware
 from src.agents.middlewares.retry_policy_middleware import RetryPolicyMiddleware
 from src.agents.middlewares.scratchpad_task_memory_middleware import ScratchpadTaskMemoryMiddleware
-from src.agents.middlewares.search_privacy_middleware import SearchPrivacyMiddleware
 from src.agents.middlewares.skill_disclosure_middleware import SkillDisclosureMiddleware
 from src.agents.middlewares.steering_middleware import SteeringMiddleware
 from src.agents.middlewares.subagent_limit_middleware import SubagentLimitMiddleware
@@ -577,18 +576,17 @@ def _build_middleware_registry(
         MiddlewareSpec("autoresearch", lambda: AutoresearchMiddleware(), after={"sandbox"}),
         MiddlewareSpec("write_file_artifact", lambda: WriteFileArtifactMiddleware(), after={"sandbox"}),
         MiddlewareSpec("dangling_tool_call", lambda: DanglingToolCallMiddleware(), after={"sandbox"}),
-        MiddlewareSpec("work_mode", bind(_create_work_mode), after={"dangling_tool_call"}, before={"search_privacy"}),
-        MiddlewareSpec("search_privacy", lambda: SearchPrivacyMiddleware(), after={"dangling_tool_call"}),
+        MiddlewareSpec("work_mode", bind(_create_work_mode), after={"dangling_tool_call"}),
         # Planner must run before plan_execution_gate so the gate has a plan to
         # consult on turn 1. Otherwise the model's first-turn tool calls bypass
         # the gate entirely. See thread-fa33b3bb investigation.
         MiddlewareSpec("plan_execution_gate", lambda: PlanExecutionGateMiddleware(requested_model=ctx.model_name), after={"planner"}, before={"permissions"}),
-        MiddlewareSpec("permissions", lambda: PermissionMiddleware(), after={"search_privacy"}),
+        MiddlewareSpec("permissions", lambda: PermissionMiddleware(), after={"dangling_tool_call"}),
         MiddlewareSpec("tool_disclosure", bind(_create_tool_disclosure), after={"permissions"}),
         MiddlewareSpec("hooks", bind(_create_hooks), after={"tool_disclosure"}),
-        MiddlewareSpec("summarization", lambda: _create_summarization_middleware(mode=mode, dreamy_mode=dreamy_mode), after={"search_privacy"}),
+        MiddlewareSpec("summarization", lambda: _create_summarization_middleware(mode=mode, dreamy_mode=dreamy_mode), after={"dangling_tool_call"}),
         MiddlewareSpec("skill_disclosure", lambda: SkillDisclosureMiddleware(), after={"summarization"}),
-        MiddlewareSpec("planner", bind(_create_planner), after={"skill_disclosure", "search_privacy"}),
+        MiddlewareSpec("planner", bind(_create_planner), after={"skill_disclosure"}),
         MiddlewareSpec("phase_tool_filter", bind(_create_phase_tool_filter), after={"planner"}),
         MiddlewareSpec("plan_evaluator", bind(_create_plan_evaluator), after={"planner"}),
         MiddlewareSpec("web_search_summary", bind(_create_web_search_summary), after={"tool_result_truncation"}),

@@ -133,7 +133,6 @@ export interface AgentThreadContext extends Record<string, unknown> {
   subagent_enabled: boolean;
   dreamy_mode?: boolean;
   reasoning_effort?: "minimal" | "low" | "medium" | "high";
-  mask_sensitive_search?: boolean;
   agent_name?: string;
   auto_mode?: boolean;
   execute_approved_plan?: boolean;
