@@ -1472,13 +1472,15 @@ class ControlPlaneService:
                     queue_rejected = int(queue_report.get("rejected_for_trust_count") or 0) + int(
                         queue_report.get("rejected_for_policy_count") or 0
                     )
+                    queue_retried = int(queue_report.get("fetch_failed_count") or 0)
                     logger_obj.info(
-                        "vault_ingest_queue_drain_done job_id=%s status=%s ingested=%d skipped=%d rejected=%d",
+                        "vault_ingest_queue_drain_done job_id=%s status=%s ingested=%d skipped=%d rejected=%d retried=%d",
                         job_id,
                         queue_status or "ok",
                         queue_ingested,
                         queue_skipped,
                         queue_rejected,
+                        queue_retried,
                     )
                 else:
                     logger_obj.info("vault_ingest_queue_drain_done job_id=%s claimed=0", job_id)
