@@ -46,9 +46,9 @@ export const enUS: Translations = {
 
   // Welcome
   welcome: {
-    greeting: "Welcome to Capybara Home!",
+    greeting: "Welcome to CapyHome!",
     description:
-      "Welcome to Capybara, an open source super agent. Capybara helps you search on the web, analyze data, and generate artifacts like slides, web pages and do almost anything while you sip on coffee",
+      "Welcome to CapyHome, an open source super agent. CapyHome helps you search on the web, analyze data, and generate artifacts like slides, web pages and do almost anything while you sip on coffee",
   },
 
 
@@ -81,9 +81,9 @@ export const enUS: Translations = {
       noFilesFound: "No files found",
       noFolderMounted: "Mount a folder to reference files",
     },
-    capybaraRunner: {
-      thinking: "Capybara is thinking",
-      workingOn: "Capybara is working on",
+    capyHomeRunner: {
+      thinking: "CapyHome is thinking",
+      workingOn: "CapyHome is working on",
       babyThinking: "Baby Capy is working on",
       babyWorkingOn: "Baby Capy is working on",
     },
@@ -258,7 +258,7 @@ export const enUS: Translations = {
 
   // Page titles (document title)
   pages: {
-    appName: "Capybara Home",
+    appName: "CapyHome",
     chats: "Chats",
     newChat: "Chat with Capy",
     untitled: "Untitled",
@@ -286,7 +286,7 @@ export const enUS: Translations = {
     writeFile: "Write file",
     clickToViewContent: "Click to view file content",
     writeTodos: "Update to-do list",
-    skillInstallTooltip: "Install skill and make it available to Capybara Home",
+    skillInstallTooltip: "Install skill and make it available to CapyHome",
   },
 
   // Subtasks
@@ -307,7 +307,7 @@ export const enUS: Translations = {
   // Settings
   settings: {
     title: "Settings",
-    description: "Adjust how Capybara Home looks and behaves for you.",
+    description: "Adjust how CapyHome looks and behaves for you.",
     sections: {
       appearance: "Appearance",
       memory: "Memory",
@@ -326,7 +326,7 @@ export const enUS: Translations = {
     memory: {
       title: "Memory",
       description:
-        "Capybara Home automatically learns from your conversations in the background. These memories help Capybara Home understand you better and deliver a more personalized experience.",
+        "CapyHome automatically learns from your conversations in the background. These memories help CapyHome understand you better and deliver a more personalized experience.",
       empty: "No memory data to display.",
       rawJson: "Raw JSON",
       markdown: {
@@ -368,8 +368,8 @@ export const enUS: Translations = {
       systemDescription: "Match the operating system preference automatically.",
       lightDescription: "Bright palette with higher contrast for daytime.",
       darkDescription: "Dim palette that reduces glare for focus.",
-      capybara: "Capybara",
-      capybaraDescription: "Warm earthy browns inspired by the capybara.",
+      capyhome: "CapyHome",
+      capyHomeDescription: "Warm earthy browns inspired by the capyhome.",
       languageTitle: "Language",
       languageDescription: "Switch between languages.",
     },
@@ -419,12 +419,12 @@ export const enUS: Translations = {
     notification: {
       title: "Notification",
       description:
-        "Capybara Home only sends a completion notification when the window is not active. This is especially useful for long-running tasks so you can switch to other work and get notified when done.",
+        "CapyHome only sends a completion notification when the window is not active. This is especially useful for long-running tasks so you can switch to other work and get notified when done.",
       requestPermission: "Request notification permission",
       deniedHint:
         "Notification permission was denied. You can enable it in your browser's site settings to receive completion alerts.",
       testButton: "Send test notification",
-      testTitle: "Capybara Home",
+      testTitle: "CapyHome",
       testBody: "This is a test notification.",
       notSupported: "Your browser does not support notifications.",
       disableNotification: "Disable notification",
@@ -480,7 +480,7 @@ export const enUS: Translations = {
     browserExtension: {
       title: "Browser Extension",
       description:
-        "Install the Knowledge Vault Clipper to save articles, selections, or full pages from your browser straight into Capybara Home's vault.",
+        "Install the Knowledge Vault Clipper to save articles, selections, or full pages from your browser straight into CapyHome's vault.",
       aboutTitle: "Knowledge Vault Clipper",
       aboutDescription:
         "A Chrome/Chromium extension that captures the current page as Markdown and enqueues it into your vault ingestion pipeline. Works with Article, Selection, or Full Page modes — plus a hands-free auto-clip mode.",
@@ -508,7 +508,7 @@ export const enUS: Translations = {
         "In the top-right corner of the extensions page, switch Developer mode on. This unlocks the Load unpacked button you'll need next.",
       step3Title: "Load unpacked from the repo",
       step3Description:
-        "Click Load unpacked and select the knowledge-vault-clipper folder inside this repository. The Capybara icon should appear in your toolbar — pin it for quick access.",
+        "Click Load unpacked and select the knowledge-vault-clipper folder inside this repository. The CapyHome icon should appear in your toolbar — pin it for quick access.",
       step4Title: "Verify the API base",
       step4Description:
         "Open the extension popup and confirm the API Base matches the backend you're running (default: http://127.0.0.1:8001). Auto-clip will start working on the next eligible page you visit.",

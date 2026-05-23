@@ -16,11 +16,11 @@ export function CommunitySection() {
           Join the Community
         </AuroraText>
       }
-      subtitle="Contribute brilliant ideas to shape the future of Capybara Home. Collaborate, innovate, and make impacts."
+      subtitle="Contribute brilliant ideas to shape the future of CapyHome. Collaborate, innovate, and make impacts."
     >
       <div className="flex justify-center">
         <Button className="text-xl" size="lg" asChild>
-          <Link href="https://github.com/capybara-home/capybara-home" target="_blank">
+          <Link href="https://github.com/CapyHome/CapyHome" target="_blank">
             <GitHubLogoIcon />
             Contribute Now
           </Link>

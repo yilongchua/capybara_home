@@ -70,7 +70,7 @@ export interface Translations {
       noFilesFound: string;
       noFolderMounted: string;
     };
-    capybaraRunner: {
+    capyHomeRunner: {
       thinking: string;
       workingOn: string;
       babyThinking: string;
@@ -314,8 +314,8 @@ export interface Translations {
       systemDescription: string;
       lightDescription: string;
       darkDescription: string;
-      capybara: string;
-      capybaraDescription: string;
+      capyhome: string;
+      capyHomeDescription: string;
       languageTitle: string;
       languageDescription: string;
     };

@@ -37,7 +37,7 @@ import { env } from "@/env";
 import { useCurrentTaskDescription } from "@/hooks/use-current-task-description";
 import { cn } from "@/lib/utils";
 
-import { CapybaraRunner } from "../chat-ui/capybara-runner";
+import { CapyHomeRunner } from "../chat-ui/capyhome-runner";
 
 import { ArtifactLink } from "./artifact-link";
 import { useThread } from "./context";
@@ -519,7 +519,7 @@ export function MessageList({
         {thread.isLoading && (
           <div className="text-muted-foreground rounded-md border bg-muted/20 px-3 py-2 text-xs">
             {activeActivityLine ?? (
-              <CapybaraRunner className="my-0 text-xs" taskDescription={currentTaskDescription} />
+              <CapyHomeRunner className="my-0 text-xs" taskDescription={currentTaskDescription} />
             )}
           </div>
         )}

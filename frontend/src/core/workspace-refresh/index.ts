@@ -49,8 +49,8 @@ type WorkspaceRefreshQueryOptions<
   invalidateExact?: boolean;
 };
 
-const STORAGE_KEY = "capybara:workspace-refresh";
-const CHANNEL_NAME = "capybara-workspace-refresh";
+const STORAGE_KEY = "capyhome:workspace-refresh";
+const CHANNEL_NAME = "capyhome-workspace-refresh";
 const listeners = new Set<WorkspaceRefreshListener>();
 let broadcastChannel: BroadcastChannel | null = null;
 let listenersInitialized = false;
@@ -67,7 +67,7 @@ function getTabId(): string {
   }
 
   try {
-    const existing = window.sessionStorage.getItem("capybara:workspace-tab-id");
+    const existing = window.sessionStorage.getItem("capyhome:workspace-tab-id");
     if (existing) {
       tabId = existing;
       return tabId;
@@ -78,7 +78,7 @@ function getTabId(): string {
 
   tabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   try {
-    window.sessionStorage.setItem("capybara:workspace-tab-id", tabId);
+    window.sessionStorage.setItem("capyhome:workspace-tab-id", tabId);
   } catch {
     // Ignore storage access failures.
   }

@@ -123,7 +123,7 @@ export function RecentChatList() {
     async (threadId: string) => {
       const thread = threads.find((t) => t.thread_id === threadId);
       // Always use Vercel URL for sharing so others can access
-      const VERCEL_URL = "https://capybara-home-v2.vercel.app";
+      const VERCEL_URL = "https://capyhome-v2.vercel.app";
       const isLocalhost =
         window.location.hostname === "localhost" ||
         window.location.hostname === "127.0.0.1";

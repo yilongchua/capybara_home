@@ -252,7 +252,7 @@ export default function VaultPage() {
                     minSize={15}
                     className="flex h-full flex-col space-y-3 rounded-md border p-3"
                   >
-                    <p className="text-xs text-muted-foreground">/backend/.capybara-home/knowledge_vault/</p>
+                    <p className="text-xs text-muted-foreground">/backend/.capyhome/knowledge_vault/</p>
                     <div className="min-h-0 flex-1 overflow-y-auto space-y-1 text-xs">
                       <button
                         type="button"

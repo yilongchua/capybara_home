@@ -13,7 +13,7 @@ export type PendingChatLaunchPayload =
       createdAt: number;
     };
 
-const STORAGE_KEY = "capybara:pending-chat-launch";
+const STORAGE_KEY = "capyhome:pending-chat-launch";
 
 function hasWindow(): boolean {
   return typeof window !== "undefined";

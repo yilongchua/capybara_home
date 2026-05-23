@@ -40,7 +40,7 @@ export async function main() {
   );
   const backendRootPath = path.resolve(
     process.cwd(),
-    "../backend/.capybara-home/threads",
+    "../backend/.capyhome/threads",
     threadId,
   );
   copyFolder("user-data/outputs", rootPath, backendRootPath);

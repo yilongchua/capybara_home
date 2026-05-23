@@ -54,7 +54,7 @@ export function ChatActivityPanel({
     const merged = mergeActivityEvents(persisted, liveEvents);
 
     const items: TimelineItem[] = merged.map((event, index) => {
-      const title = event.line || "Capybara is working on the next step...";
+      const title = event.line || "CapyHome is working on the next step...";
       const detail = event.tool_summary ?? undefined;
       return {
         id: event.id ?? `activity:${event.timestamp}:${index}`,

@@ -34,7 +34,7 @@ import {
 import { explainLastToolCall } from "@/core/tools/utils";
 import { cn } from "@/lib/utils";
 
-import { CapybaraRunner } from "../chat-ui/capybara-runner";
+import { CapyHomeRunner } from "../chat-ui/capyhome-runner";
 import { CitationLink } from "../citations/citation-link";
 import { FlipDisplay } from "../flip-display";
 
@@ -85,7 +85,7 @@ export function SubtaskCard({
     } else if (task.status === "in_progress") {
       return isStaleRunning
         ? <ClipboardListIcon className="size-3" />
-        : <CapybaraRunner actor="baby_capy" size="sm" taskDescription={taskLabel} />;
+        : <CapyHomeRunner actor="baby_capy" size="sm" taskDescription={taskLabel} />;
     }
   }, [isStaleRunning, task.status, taskLabel]);
   return (
@@ -185,7 +185,7 @@ export function SubtaskCard({
             !isStaleRunning && (
               <ChainOfThoughtStep
                 label={t.subtasks.in_progress}
-                icon={<CapybaraRunner actor="baby_capy" size="sm" taskDescription={explainLastToolCall(task.latestMessage, t)} />}
+                icon={<CapyHomeRunner actor="baby_capy" size="sm" taskDescription={explainLastToolCall(task.latestMessage, t)} />}
               >
                 {explainLastToolCall(task.latestMessage, t)}
               </ChainOfThoughtStep>

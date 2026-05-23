@@ -60,16 +60,16 @@ function getTaskIcon(taskDescription: string | undefined): React.ReactNode {
   return <Brain className="size-3.5" />;
 }
 
-export function CapybaraRunner({
+export function CapyHomeRunner({
   className,
   taskDescription,
   size = "md",
-  actor = "capybara",
+  actor = "capyhome",
 }: {
   className?: string;
   taskDescription?: string;
   size?: "sm" | "md" | "lg";
-  actor?: "capybara" | "baby_capy";
+  actor?: "capyhome" | "baby_capy";
 }) {
   const { t } = useI18n();
   const [dotIndex, setDotIndex] = useState(0);
@@ -83,7 +83,7 @@ export function CapybaraRunner({
 
   const dotText = DOTS_INTERVALS[dotIndex % DOTS_INTERVALS.length];
   const icon = useMemo(() => getTaskIcon(taskDescription), [taskDescription]);
-  const showWorkingGif = actor === "capybara" || actor === "baby_capy";
+  const showWorkingGif = actor === "capyhome" || actor === "baby_capy";
   const gifClassName = cn(
     "shrink-0 object-contain",
     size === "sm" && "size-4",
@@ -104,8 +104,8 @@ export function CapybaraRunner({
         <>
           {showWorkingGif && (
             <Image
-              src="/capybara-working.gif"
-              alt={actor === "baby_capy" ? "Baby Capy working" : "Capybara working"}
+              src="/capyhome-working.gif"
+              alt={actor === "baby_capy" ? "Baby Capy working" : "CapyHome working"}
               width={20}
               height={20}
               unoptimized
@@ -114,8 +114,8 @@ export function CapybaraRunner({
           )}
           <span className="text-muted-foreground font-medium">
             {actor === "baby_capy"
-              ? t.chatUI.capybaraRunner.babyWorkingOn
-              : t.chatUI.capybaraRunner.workingOn}
+              ? t.chatUI.capyHomeRunner.babyWorkingOn
+              : t.chatUI.capyHomeRunner.workingOn}
             :
           </span>
           <span className="text-accent">{icon}</span>
@@ -128,8 +128,8 @@ export function CapybaraRunner({
         <>
           {showWorkingGif && (
             <Image
-              src="/capybara-working.gif"
-              alt={actor === "baby_capy" ? "Baby Capy thinking" : "Capybara thinking"}
+              src="/capyhome-working.gif"
+              alt={actor === "baby_capy" ? "Baby Capy thinking" : "CapyHome thinking"}
               width={20}
               height={20}
               unoptimized
@@ -138,8 +138,8 @@ export function CapybaraRunner({
           )}
           <span className="text-muted-foreground animate-pulse">
             {actor === "baby_capy"
-              ? t.chatUI.capybaraRunner.babyThinking
-              : t.chatUI.capybaraRunner.thinking}
+              ? t.chatUI.capyHomeRunner.babyThinking
+              : t.chatUI.capyHomeRunner.thinking}
             <span className="animate-pulse">{dotText}</span>
           </span>
         </>

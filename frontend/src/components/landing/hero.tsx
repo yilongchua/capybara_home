@@ -54,7 +54,7 @@ export function Hero({ className }: { className?: string }) {
               "Learn Anything",
             ]}
           />{" "}
-          <div>with Capybara Home</div>
+          <div>with CapyHome</div>
         </h1>
         <p
           className="mt-8 scale-105 text-center text-2xl text-shadow-sm"

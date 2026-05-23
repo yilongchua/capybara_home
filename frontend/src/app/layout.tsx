@@ -9,7 +9,7 @@ import { I18nProvider } from "@/core/i18n/context";
 import { detectLocaleServer } from "@/core/i18n/server";
 
 export const metadata: Metadata = {
-  title: "Capybara Home",
+  title: "CapyHome",
   description: "A LangChain-based framework for building super agents.",
   icons: "/icon.png",
 };
@@ -33,10 +33,10 @@ export default async function RootLayout({
       <body>
         <ThemeProvider
           attribute="class"
-          defaultTheme="capybara"
+          defaultTheme="capyhome"
           enableSystem={false}
           disableTransitionOnChange
-          themes={["light", "dark", "capybara"]}
+          themes={["light", "dark", "capyhome"]}
         >
           <I18nProvider initialLocale={locale}>{children}</I18nProvider>
         </ThemeProvider>

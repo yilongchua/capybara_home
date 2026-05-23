@@ -30,7 +30,7 @@ import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
 import { humanMessagePlugins } from "@/core/streamdown";
 import { cn } from "@/lib/utils";
 
-import { CapybaraRunner } from "../chat-ui/capybara-runner";
+import { CapyHomeRunner } from "../chat-ui/capyhome-runner";
 import { CopyButton } from "../copy-button";
 
 
@@ -207,7 +207,7 @@ function MessageContent_({
       <AIElementMessageContent className={className}>
         <Task defaultOpen={false}>
           <TaskTrigger title="">
-            <CapybaraRunner size="sm" taskDescription={contentToDisplay} />
+            <CapyHomeRunner size="sm" taskDescription={contentToDisplay} />
           </TaskTrigger>
         </Task>
       </AIElementMessageContent>
