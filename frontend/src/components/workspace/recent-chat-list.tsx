@@ -138,7 +138,7 @@ export function RecentChatList() {
   if (threadsLoading) {
     return (
       <SidebarGroup>
-        <SidebarGroupLabel>
+        <SidebarGroupLabel className="font-bold text-sidebar-foreground">
           {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true"
             ? t.sidebar.recentChats
             : t.sidebar.demoChats}
@@ -153,7 +153,7 @@ export function RecentChatList() {
   if (threadsError) {
     return (
       <SidebarGroup>
-        <SidebarGroupLabel>
+        <SidebarGroupLabel className="font-bold text-sidebar-foreground">
           {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true"
             ? t.sidebar.recentChats
             : t.sidebar.demoChats}
@@ -171,7 +171,7 @@ export function RecentChatList() {
   return (
     <>
       <SidebarGroup>
-        <SidebarGroupLabel>
+        <SidebarGroupLabel className="font-bold text-sidebar-foreground">
           {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true"
             ? t.sidebar.recentChats
             : t.sidebar.demoChats}

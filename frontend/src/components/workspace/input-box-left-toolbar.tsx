@@ -2,8 +2,7 @@
 
 import {
   CheckIcon,
-  ClipboardListIcon,
-  MoonIcon,
+  SlidersHorizontalIcon,
   SparklesIcon,
   WorkflowIcon,
   ZapIcon,
@@ -134,12 +133,14 @@ export function PrivacyAndAutoMenu({
   onTogglePlanMode,
   onToggleAutoMode,
   triggerId,
+  triggerClassName,
 }: {
   mode: InputMode | undefined;
   autoModeEnabled: boolean;
   onTogglePlanMode: () => void;
   onToggleAutoMode: () => void;
   triggerId: string;
+  triggerClassName?: string;
 }) {
   const { t } = useI18n();
   const planModeEnabled = mode === "plan";
@@ -150,10 +151,9 @@ export function PrivacyAndAutoMenu({
         <PromptInputButton
           id={triggerId}
           aria-label="Plan mode and auto mode tools"
-          className="gap-1 px-2"
+          className={cn("px-2", triggerClassName)}
         >
-          <ClipboardListIcon className="size-3" />
-          <MoonIcon className="size-3" />
+          <SlidersHorizontalIcon className="size-4" />
         </PromptInputButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-72">
@@ -207,17 +207,22 @@ export function ReasoningEffortMenu({
   reasoningEffort,
   onSelect,
   triggerId,
+  triggerClassName,
 }: {
   show: boolean;
   reasoningEffort: "minimal" | "low" | "medium" | "high" | undefined;
   onSelect: (effort: "minimal" | "low" | "medium" | "high") => void;
   triggerId: string;
+  triggerClassName?: string;
 }) {
   const { t } = useI18n();
   if (!show) return null;
   return (
     <PromptInputActionMenu>
-      <PromptInputActionMenuTrigger id={triggerId} className="gap-1! px-2!">
+      <PromptInputActionMenuTrigger
+        id={triggerId}
+        className={cn("gap-1! px-2!", triggerClassName)}
+      >
         <div className="text-xs font-normal">
           {t.inputBox.reasoningEffort}:
           {reasoningEffort === "minimal" && " " + t.inputBox.reasoningEffortMinimal}
