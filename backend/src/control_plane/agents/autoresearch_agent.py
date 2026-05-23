@@ -127,7 +127,6 @@ class AutoresearchOrchestratorAgent:
                     "forced_plan_mode": True,
                     "runtime_mode": "plan",
                     "subagents_enabled": True,
-                    "long_running_visible": True,
                 },
             )
             if not run.requires_approval:
