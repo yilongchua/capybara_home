@@ -1,11 +1,11 @@
 # Custom Agents
 
-Custom agents let you run the lead agent with a distinct personality, model, and tool scope — without modifying any code. Each agent is a directory under `.capybara-home/agents/{name}/`.
+Custom agents let you run the lead agent with a distinct personality, model, and tool scope — without modifying any code. Each agent is a directory under `.capyhome/agents/{name}/`.
 
 ## Directory Structure
 
 ```
-backend/.capybara-home/agents/
+backend/.capyhome/agents/
 ├── example/                  # Template to copy from
 │   ├── config.yaml           # Required — agent metadata and overrides
 │   └── SOUL.md               # Optional — personality and behavioural framing
@@ -60,12 +60,12 @@ description: "One-line description shown in the agent list."
 apply_prompt_template()
     └── get_agent_soul(agent_name)
             └── load_agent_soul(agent_name)
-                    └── reads .capybara-home/agents/{name}/SOUL.md
+                    └── reads .capyhome/agents/{name}/SOUL.md
                             → wrapped in <soul>...</soul> tags
                             → inserted between <role> and <thinking_style>
 ```
 
-When `agent_name` is `None` (the default agent), the loader checks `.capybara-home/SOUL.md` instead — this acts as a global personality override for all unnamed sessions.
+When `agent_name` is `None` (the default agent), the loader checks `.capyhome/SOUL.md` instead — this acts as a global personality override for all unnamed sessions.
 
 ## Activating a Custom Agent
 
@@ -75,7 +75,7 @@ Pass `agent_name` in the LangGraph `config.configurable`:
 config = {
     "configurable": {
         "thread_id": "my-thread",
-        "agent_name": "autoresearch",   # matches .capybara-home/agents/autoresearch/
+        "agent_name": "autoresearch",   # matches .capyhome/agents/autoresearch/
         "is_plan_mode": True,
         "subagent_enabled": True,
     }
@@ -88,7 +88,7 @@ Or set it in the frontend thread settings if supported by the UI.
 
 1. Copy the `example/` directory:
    ```bash
-   cp -r backend/.capybara-home/agents/example backend/.capybara-home/agents/my-agent
+   cp -r backend/.capyhome/agents/example backend/.capyhome/agents/my-agent
    ```
 
 2. Edit `config.yaml` — update `name` and `description`.
@@ -120,7 +120,7 @@ Companion agent for interactive autoresearch sessions. Designed to be used along
 
 ## Notes
 
-- Agent directories live in `.capybara-home/agents/` which is gitignored — they are user data, not repo content.
+- Agent directories live in `.capyhome/agents/` which is gitignored — they are user data, not repo content.
 - Agent name validation: must match `^[A-Za-z0-9-]+$`.
 - If `model` is set in `config.yaml` but not found in `config.yaml` model list, the global default is used.
-- Per-agent memory is stored separately at `.capybara-home/agents/{name}/memory.json`.
+- Per-agent memory is stored separately at `.capyhome/agents/{name}/memory.json`.

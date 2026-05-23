@@ -1,6 +1,6 @@
-# Contributing to Capybara Home Backend
+# Contributing to CapyHome Backend
 
-Thank you for your interest in contributing to Capybara Home! This document provides guidelines and instructions for contributing to the backend codebase.
+Thank you for your interest in contributing to CapyHome! This document provides guidelines and instructions for contributing to the backend codebase.
 
 ## Table of Contents
 
@@ -27,8 +27,8 @@ Thank you for your interest in contributing to Capybara Home! This document prov
 1. Fork the repository on GitHub
 2. Clone your fork locally:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/capybara-home.git
-   cd capybara-home
+   git clone https://github.com/YOUR_USERNAME/CapyHome.git
+   cd CapyHome
    ```
 
 ## Development Setup
@@ -424,4 +424,4 @@ If you have questions about contributing:
 2. Look for similar issues or PRs on GitHub
 3. Open a discussion or issue on GitHub
 
-Thank you for contributing to Capybara Home!
+Thank you for contributing to CapyHome!

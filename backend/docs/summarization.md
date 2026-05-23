@@ -1,6 +1,6 @@
 # Conversation Summarization
 
-Capybara Home uses automatic conversation summarization to compact old context before the active thread approaches the model context window. Compaction is token-pressure based: message count is recorded for diagnostics, but it does not decide when compaction runs.
+CapyHome uses automatic conversation summarization to compact old context before the active thread approaches the model context window. Compaction is token-pressure based: message count is recorded for diagnostics, but it does not decide when compaction runs.
 
 ## Configuration
 
@@ -54,7 +54,7 @@ The default summary prompt lives in `src/agents/middlewares/summarization_middle
 1. Before each model call, the middleware estimates current context tokens and emits `context_tokens` telemetry with both token and message counts.
 2. If token usage crosses the resolved threshold, older context is summarized.
 3. Recent context is retained by token budget.
-4. AI/tool-call groups are kept valid, and Capybara-specific rescue logic preserves active skill blocks, operational reminders, and user anchor messages.
+4. AI/tool-call groups are kept valid, and CapyHome-specific rescue logic preserves active skill blocks, operational reminders, and user anchor messages.
 5. A summary message plus preserved recent messages replace the old history.
 
 ## Example Configurations

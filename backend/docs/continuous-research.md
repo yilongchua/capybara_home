@@ -1,7 +1,7 @@
 # Autoresearch — Agentic Learning Loop
 
 Autoresearch is a continuous, self-driving knowledge accumulation system. Users
-declare a broad **topic** and **objective**; Capybara Home then anticipates the
+declare a broad **topic** and **objective**; CapyHome then anticipates the
 questions a curious human would ask about that topic and pre-fills the vault
 before the user ever searches.
 

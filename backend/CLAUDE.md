@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Capybara Home is a LangGraph-based AI super agent system with a full-stack architecture. The backend provides a "super agent" with sandbox execution, persistent memory, subagent delegation, and extensible tool integration - all operating in per-thread isolated environments.
+CapyHome is a LangGraph-based AI super agent system with a full-stack architecture. The backend provides a "super agent" with sandbox execution, persistent memory, subagent delegation, and extensible tool integration - all operating in per-thread isolated environments.
 
 **Architecture**:
 - **LangGraph Server** (port 2024): Agent runtime and workflow execution
@@ -15,7 +15,7 @@ Capybara Home is a LangGraph-based AI super agent system with a full-stack archi
 
 **Project Structure**:
 ```
-capybara-home/
+CapyHome/
 ├── Makefile                    # Root commands (check, install, dev, stop)
 ├── config.yaml                 # Main application configuration
 ├── extensions_config.json      # MCP servers and skills configuration
@@ -48,7 +48,7 @@ capybara-home/
 │   │   ├── community/         # Community tools (image_search, aio_sandbox, browser_automation, comfyui, llama_cpp, login_scraper)
 │   │   ├── reflection/        # Dynamic module loading (resolve_variable, resolve_class)
 │   │   ├── utils/             # Utilities (network, readability)
-│   │   └── client.py          # Embedded Python client (CapybaraClient)
+│   │   └── client.py          # Embedded Python client (CapyHomeClient)
 │   ├── tests/                 # Test suite
 │   └── docs/                  # Documentation
 ├── frontend/                   # Next.js frontend application
@@ -118,7 +118,7 @@ CI runs these regression tests for every pull request via [.github/workflows/bac
 
 Middlewares execute in strict order in `src/agents/lead_agent/agent.py`:
 
-1. **ThreadDataMiddleware** - Creates per-thread directories (`backend/.capybara-home/threads/{thread_id}/user-data/{workspace,uploads,outputs}`)
+1. **ThreadDataMiddleware** - Creates per-thread directories (`backend/.capyhome/threads/{thread_id}/user-data/{workspace,uploads,outputs}`)
 2. **UploadsMiddleware** - Tracks and injects newly uploaded files into conversation
 3. **SandboxMiddleware** - Acquires sandbox, stores `sandbox_id` in state
 4. **AutoresearchMiddleware** / **WriteFileArtifactMiddleware** / **DanglingToolCallMiddleware** - Early routing, artifact promotion, and interrupted-tool repair
@@ -188,7 +188,7 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 
 **Virtual Path System**:
 - Agent sees: `/mnt/user-data/{workspace,uploads,outputs}`, `/mnt/skills`
-- Physical: `backend/.capybara-home/threads/{thread_id}/user-data/...`, `capybara-home/skills/`
+- Physical: `backend/.capyhome/threads/{thread_id}/user-data/...`, `CapyHome/skills/`
 - Translation: `replace_virtual_path()` / `replace_virtual_paths_in_command()`
 - Detection: `is_local_sandbox()` checks `sandbox_id == "local"`
 
@@ -239,7 +239,7 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 
 ### Skills System (`src/skills/`)
 
-- **Location**: `capybara-home/skills/{public,custom}/`
+- **Location**: `CapyHome/skills/{public,custom}/`
 - **Format**: Directory with `SKILL.md` (YAML frontmatter: name, description, license, allowed-tools)
 - **Loading**: `load_skills()` recursively scans `skills/{public,custom}` for `SKILL.md`, parses metadata, and reads enabled state from extensions_config.json
 - **Injection**: Enabled skills listed in prompt as description-first catalog; active skill bodies are injected progressively by middleware
@@ -266,7 +266,7 @@ User-added LLM endpoints from `extensions_config.json` (`userModels[*].models`) 
 
 ### IM Channels System (`src/channels/`)
 
-Bridges external messaging platforms (Slack, Telegram) to the Capybara Home agent via the LangGraph Server.
+Bridges external messaging platforms (Slack, Telegram) to the CapyHome agent via the LangGraph Server.
 
 **Architecture**: Channels communicate with the LangGraph Server through `langgraph-sdk` HTTP client (same as the frontend), ensuring threads are created and managed server-side.
 
@@ -297,7 +297,7 @@ Bridges external messaging platforms (Slack, Telegram) to the Capybara Home agen
 - `queue.py` - Debounced update queue (per-thread deduplication, configurable wait time)
 - `prompt.py` - Prompt templates for memory updates
 
-**Data Structure** (stored in `backend/.capybara-home/memory.json`):
+**Data Structure** (stored in `backend/.capyhome/memory.json`):
 - **User Context**: `workContext`, `personalContext`, `topOfMind` (1-3 sentence summaries)
 - **History**: `recentMonths`, `earlierContext`, `longTermBackground`
 - **Facts**: Discrete facts with `id`, `content`, `category` (preference/knowledge/context/behavior/goal), `confidence` (0-1), `createdAt`, `source`
@@ -396,11 +396,11 @@ Public API on the facade is unchanged — every public method delegates one-line
 - `mcpServers` - Map of server name → config (enabled, type, command, args, env, url, headers, oauth, description)
 - `skills` - Map of skill name → state (enabled)
 
-Both can be modified at runtime via Gateway API endpoints or `CapybaraClient` methods.
+Both can be modified at runtime via Gateway API endpoints or `CapyHomeClient` methods.
 
 ### Embedded Client (`src/client.py`)
 
-`CapybaraClient` provides direct in-process access to all Capybara Home capabilities without HTTP services. All return types align with the Gateway API response schemas, so consumer code works identically in HTTP and embedded modes.
+`CapyHomeClient` provides direct in-process access to all CapyHome capabilities without HTTP services. All return types align with the Gateway API response schemas, so consumer code works identically in HTTP and embedded modes.
 
 **Architecture**: Imports the same `src/` modules that LangGraph Server and Gateway API use. Shares the same config files and data directories. No FastAPI dependency.
 

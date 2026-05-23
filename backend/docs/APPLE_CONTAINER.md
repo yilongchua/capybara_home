@@ -1,10 +1,10 @@
 # Apple Container Support
 
-Capybara Home now supports Apple Container as the preferred container runtime on macOS, with automatic fallback to Docker.
+CapyHome now supports Apple Container as the preferred container runtime on macOS, with automatic fallback to Docker.
 
 ## Overview
 
-Starting with this version, Capybara Home automatically detects and uses Apple Container on macOS when available, falling back to Docker when:
+Starting with this version, CapyHome automatically detects and uses Apple Container on macOS when available, falling back to Docker when:
 - Apple Container is not installed
 - Running on non-macOS platforms
 
@@ -155,8 +155,8 @@ The project includes a unified cleanup script that handles both runtimes:
 
 **Usage:**
 ```bash
-# Clean up all Capybara Home sandbox containers
-./scripts/cleanup-containers.sh capybara-home-sandbox
+# Clean up all CapyHome sandbox containers
+./scripts/cleanup-containers.sh capyhome-sandbox
 
 # Custom prefix
 ./scripts/cleanup-containers.sh my-prefix
@@ -219,7 +219,7 @@ This will:
 
 2. Run cleanup script manually:
    ```bash
-   ./scripts/cleanup-containers.sh capybara-home-sandbox
+   ./scripts/cleanup-containers.sh capyhome-sandbox
    ```
 
 ### Performance issues

@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This document provides a comprehensive overview of the Capybara Home backend architecture.
+This document provides a comprehensive overview of the CapyHome backend architecture.
 
 ## System Architecture
 
@@ -130,7 +130,7 @@ class ThreadState(AgentState):
     # Core state from AgentState
     messages: list[BaseMessage]
 
-    # Capybara Home extensions
+    # CapyHome extensions
     sandbox: dict             # Sandbox environment info
     artifacts: list[str]      # Generated file paths
     thread_data: dict         # {workspace, uploads, outputs} paths
@@ -178,9 +178,9 @@ class ThreadState(AgentState):
 
 | Virtual Path | Physical Path |
 |-------------|---------------|
-| `/mnt/user-data/workspace` | `backend/.capybara-home/threads/{thread_id}/user-data/workspace` |
-| `/mnt/user-data/uploads` | `backend/.capybara-home/threads/{thread_id}/user-data/uploads` |
-| `/mnt/skills` | `capybara-home/skills/` |
+| `/mnt/user-data/workspace` | `backend/.capyhome/threads/{thread_id}/user-data/workspace` |
+| `/mnt/user-data/uploads` | `backend/.capyhome/threads/{thread_id}/user-data/uploads` |
+| `/mnt/skills` | `CapyHome/skills/` |
 
 ### Tool System
 
@@ -384,14 +384,14 @@ SKILL.md Format:
 
 2. Gateway receives file
    - Validates file
-   - Stores in .capybara-home/threads/{thread_id}/user-data/uploads/
+   - Stores in .capyhome/threads/{thread_id}/user-data/uploads/
    - If document: converts to Markdown via markitdown
 
 3. Returns response
    {
      "files": [{
        "filename": "doc.pdf",
-       "path": ".capybara-home/.../uploads/doc.pdf",
+       "path": ".capyhome/.../uploads/doc.pdf",
        "virtual_path": "/mnt/user-data/uploads/doc.pdf",
        "artifact_url": "/api/threads/.../artifacts/mnt/.../doc.pdf"
      }]
