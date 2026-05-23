@@ -1,4 +1,4 @@
-# Capybara Home
+# CapyHome
 
 An open-source **super agent harness** that orchestrates sub-agents, persistent memory, and sandboxed execution environments to perform complex, multi-step tasks — powered by extensible skills.
 
@@ -32,8 +32,8 @@ An open-source **super agent harness** that orchestrates sub-agents, persistent 
 ### Configuration
 
 ```bash
-git clone https://github.com/capybara-home/capybara-home.git
-cd capybara-home
+git clone https://github.com/CapyHome/CapyHome.git
+cd CapyHome
 make config
 ```
 
@@ -126,7 +126,7 @@ Three sandbox modes: **Local**, **Docker**, **Kubernetes** (via provisioner).
 
 ### Persistent Memory
 
-LLM-powered fact extraction across sessions. Stores user context, preferences, and accumulated knowledge locally in `.capybara-home/memory.json`.
+LLM-powered fact extraction across sessions. Stores user context, preferences, and accumulated knowledge locally in `.capyhome/memory.json`.
 
 - Configurable confidence threshold (default: 0.7)
 - Max 100 facts, debounced updates (30s)
@@ -171,9 +171,9 @@ Receive tasks from messaging apps. Channels auto-start when configured.
 ### Embedded Python Client
 
 ```python
-from src.client import CapybaraClient
+from src.client import CapyHomeClient
 
-client = CapybaraClient()
+client = CapyHomeClient()
 response = client.chat("Analyze this paper", thread_id="my-thread")
 
 for event in client.stream("hello"):
@@ -198,7 +198,7 @@ After each run completes, the script waits 60 seconds immediately before submitt
 ## Project Structure
 
 ```
-capybara-home/
+CapyHome/
   backend/
     src/
       agents/          # LangGraph agent + middleware registry chain

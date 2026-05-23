@@ -1,6 +1,6 @@
-# Contributing to Capybara Home
+# Contributing to CapyHome
 
-Thank you for your interest in contributing to Capybara Home! This guide will help you set up your development environment and understand our development workflow.
+Thank you for your interest in contributing to CapyHome! This guide will help you set up your development environment and understand our development workflow.
 
 ## Development Environment Setup
 
@@ -75,7 +75,7 @@ make docker-logs-gateway
 ```
 Host Machine
   ↓
-Docker Compose (capybara-home-dev)
+Docker Compose (capyhome-dev)
   ├→ nginx (port 2026) ← Reverse proxy
   ├→ web (port 3000) ← Frontend with hot-reload
   ├→ api (port 8001) ← Gateway API with hot-reload
@@ -169,7 +169,7 @@ The nginx configuration provides:
 ## Project Structure
 
 ```
-capybara-home/
+CapyHome/
 ├── config.example.yaml      # Configuration template
 ├── extensions_config.example.json  # MCP and Skills configuration template
 ├── Makefile                 # Build and development commands
@@ -261,10 +261,10 @@ Every pull request runs the backend regression workflow at [.github/workflows/ba
 
 ## Need Help?
 
-- Check existing [Issues](https://github.com/capybara-home/capybara-home/issues)
+- Check existing [Issues](https://github.com/CapyHome/CapyHome/issues)
 - Read the [Documentation](backend/docs/)
-- Ask questions in [Discussions](https://github.com/capybara-home/capybara-home/discussions)
+- Ask questions in [Discussions](https://github.com/CapyHome/CapyHome/discussions)
 
 ## License
 
-By contributing to Capybara Home, you agree that your contributions will be licensed under the [MIT License](./LICENSE).
+By contributing to CapyHome, you agree that your contributions will be licensed under the [MIT License](./LICENSE).

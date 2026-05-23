@@ -20,7 +20,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 brew install nginx
 
 # 2. Generate config files
-cd /Volumes/ryan_chua/Desktop/capybara-home
+cd /Volumes/ryan_chua/Desktop/CapyHome
 make config
 
 # 3. Edit config.yaml — add your model + API key

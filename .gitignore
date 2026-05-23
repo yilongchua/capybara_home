@@ -1,4 +1,4 @@
-# Capybara Home docker image cache
+# CapyHome docker image cache
 docker/.cache/
 # OS generated files
 .DS_Store
@@ -33,6 +33,7 @@ extensions_config.json
 # Coverage report
 coverage.xml
 coverage/
+.capyhome/
 .capybara-home/
 .claude/
 skills/custom/*
@@ -51,6 +52,8 @@ web/
 graphify-out/*
 .opencode/*
 .local-stack/*
+capyhome-uat/*
+capyhome-uat-web/*
 capybara-uat/*
 capybara-uat-web/*
 prompt-tunning/*

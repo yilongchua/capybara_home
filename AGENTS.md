@@ -1,4 +1,4 @@
-# Capybara Home — Agent Quick Reference
+# CapyHome — Agent Quick Reference
 
 ## Structure
 
