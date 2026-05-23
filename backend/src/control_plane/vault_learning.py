@@ -4,10 +4,13 @@ import hashlib
 import json
 import re
 import shutil
+import threading
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -43,6 +46,38 @@ from src.control_plane.vault_text_utils import (
 from src.models.factory import create_chat_model
 
 
+# ---------------------------------------------------------------------------
+# Cross-instance coordination
+#
+# `_default_vault_manager()` builds a fresh `VaultLearningManager` per call, so
+# instance-level locks would not coordinate concurrent ingest runs. We keep a
+# module-level registry keyed by the vault root: every manager pointing at the
+# same vault shares the same queue lock, manifest lock, and active-runner
+# counter. The counter is used to gate destructive cleanup operations against
+# concurrent ingest writes.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _VaultCoordination:
+    queue_lock: threading.RLock = field(default_factory=threading.RLock)
+    manifest_lock: threading.RLock = field(default_factory=threading.RLock)
+    counter_lock: threading.Lock = field(default_factory=threading.Lock)
+    active_runners: int = 0
+
+
+_VAULT_COORDINATION: dict[Path, _VaultCoordination] = {}
+_VAULT_COORDINATION_GLOBAL_LOCK = threading.Lock()
+
+
+def _get_vault_coordination(vault_root: Path) -> _VaultCoordination:
+    with _VAULT_COORDINATION_GLOBAL_LOCK:
+        coord = _VAULT_COORDINATION.get(vault_root)
+        if coord is None:
+            coord = _VaultCoordination()
+            _VAULT_COORDINATION[vault_root] = coord
+        return coord
+
+
 class VaultLoopGuardConfig(BaseModel):
     cooldown_hours: int = 24
     retry_budget: int = 3
@@ -70,6 +105,7 @@ class VaultManifest(BaseModel):
     coverage_signals: dict[str, Any] = Field(default_factory=dict)
     sufficiency_state: dict[str, Any] = Field(default_factory=dict)
     memory_stats: dict[str, Any] = Field(default_factory=dict)
+    entity_dismissals: dict[str, Any] = Field(default_factory=dict)
     schema_migrated_from: str = "vault-manifest.v4"
     model_config = ConfigDict(extra="allow")
 
@@ -86,6 +122,9 @@ class VaultLearningManager:
         search_results_queue_path: str | None = None,
         search_results_dedupe_window_hours: int = 72,
         search_results_max_queue_items: int = 5000,
+        search_results_terminal_retention_hours: int = 168,
+        claim_lease_seconds: int = 900,
+        max_ingest_attempts: int = 5,
     ) -> None:
         self.vault_root = vault_root.expanduser().resolve()
         try:
@@ -109,6 +148,9 @@ class VaultLearningManager:
         self.query_retention_hours = int(query_retention_hours)
         self.search_results_dedupe_window_hours = int(search_results_dedupe_window_hours)
         self.search_results_max_queue_items = int(search_results_max_queue_items)
+        self.search_results_terminal_retention_hours = max(1, int(search_results_terminal_retention_hours))
+        self.claim_lease_seconds = max(60, int(claim_lease_seconds))
+        self.max_ingest_attempts = max(1, int(max_ingest_attempts))
 
         self.schema_dir = self.vault_root / "00_schema"
         self.raw_dir = self.vault_root / "01_raw"
@@ -182,6 +224,8 @@ class VaultLearningManager:
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
+        self._coord = _get_vault_coordination(self.vault_root)
+
         self._seed_schema_docs()
         self._manifest = self._load_manifest()
         self._ensure_queue_file()
@@ -247,6 +291,7 @@ class VaultLearningManager:
             "coverage_signals": data.get("coverage_signals", {}),
             "sufficiency_state": data.get("sufficiency_state", {}),
             "memory_stats": data.get("memory_stats", {}),
+            "entity_dismissals": data.get("entity_dismissals", {}),
             "schema_migrated_from": version,
         }
         return VaultManifest.model_validate(payload).model_dump(mode="python")
@@ -258,6 +303,48 @@ class VaultLearningManager:
             json.dumps(validated, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+
+    @contextmanager
+    def _manifest_txn(self) -> Iterator[dict[str, Any]]:
+        """Hold the shared manifest lock for the lifetime of the block.
+
+        Reloads the manifest from disk on entry so the caller sees writes
+        made by any concurrent runner that committed before us, then saves
+        on successful exit. The lock is re-entrant — nested calls inside
+        the same thread reuse the outer transaction's state, which is
+        important because helper methods (`_record_trust_decision`,
+        `_update_synthesis_page`, …) call `_save_manifest` internally.
+        """
+        lock = self._coord.manifest_lock
+        already_held = False
+        try:
+            # threading.RLock has no introspection for re-entry depth, but we
+            # rely on the fact that acquiring an RLock we already hold is a
+            # cheap no-op increment. The outermost `with` block reloads from
+            # disk; inner blocks see the in-memory `_manifest` directly.
+            lock.acquire()
+            # If this is the outermost acquisition for *this thread*, reload.
+            # We detect outermost-ness by checking a per-thread counter on
+            # the coord object.
+            depth = getattr(self._coord, "_txn_depth", {})
+            tid = threading.get_ident()
+            depth[tid] = depth.get(tid, 0) + 1
+            self._coord._txn_depth = depth  # type: ignore[attr-defined]
+            if depth[tid] == 1:
+                self._manifest = self._load_manifest()
+            else:
+                already_held = True
+            yield self._manifest
+            if not already_held:
+                self._save_manifest()
+        finally:
+            depth = getattr(self._coord, "_txn_depth", {})
+            tid = threading.get_ident()
+            depth[tid] = depth.get(tid, 1) - 1
+            if depth[tid] <= 0:
+                depth.pop(tid, None)
+            self._coord._txn_depth = depth  # type: ignore[attr-defined]
+            lock.release()
 
     def _ensure_queue_file(self) -> None:
         if not self.search_results_queue_path.exists():
@@ -411,11 +498,75 @@ class VaultLearningManager:
         return payload if isinstance(payload, list) else []
 
     def _save_queue(self, items: list[dict[str, Any]]) -> None:
-        trimmed = items[-self.search_results_max_queue_items :]
+        trimmed = self._trim_queue(items)
         self.search_results_queue_path.write_text(
             json.dumps(trimmed, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+
+    def _trim_queue(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Age-based trim that never drops items still owing work.
+
+        Non-terminal items (`queued`, `claimed`) are kept regardless of age so
+        the finalize step can always look them up by `queue_id`. Terminal
+        items (`ingested`, `rejected`) older than the retention window are
+        dropped. If the total still exceeds the hard cap, drop the oldest
+        terminal items first; only fall back to dropping non-terminal items
+        if no terminal records remain — which would indicate a runaway
+        producer that the operator needs to see.
+        """
+        terminal_statuses = {"ingested", "rejected"}
+        now = _utcnow()
+        retention = timedelta(hours=self.search_results_terminal_retention_hours)
+        cap = self.search_results_max_queue_items
+
+        def _ts(item: dict[str, Any]) -> datetime:
+            for key in ("updated_at", "claimed_at", "queued_at"):
+                value = item.get(key)
+                if value:
+                    try:
+                        return datetime.fromisoformat(str(value)).replace(tzinfo=UTC)
+                    except Exception:
+                        continue
+            return datetime.min.replace(tzinfo=UTC)
+
+        kept: list[dict[str, Any]] = []
+        for item in items:
+            status = str(item.get("status") or "")
+            if status in terminal_statuses and (now - _ts(item)) > retention:
+                continue
+            kept.append(item)
+
+        if len(kept) <= cap:
+            return kept
+
+        terminal = [(idx, item) for idx, item in enumerate(kept) if str(item.get("status") or "") in terminal_statuses]
+        terminal.sort(key=lambda pair: _ts(pair[1]))
+        excess = len(kept) - cap
+        drop_idx = {idx for idx, _ in terminal[:excess]}
+        survivors = [item for idx, item in enumerate(kept) if idx not in drop_idx]
+        if len(survivors) <= cap:
+            return survivors
+        # All remaining items are non-terminal and still exceed the cap. Drop
+        # the oldest non-terminal items but emit a marker so the operator can
+        # see why claims are vanishing.
+        non_terminal_sorted = sorted(survivors, key=_ts)
+        return non_terminal_sorted[-cap:]
+
+    @contextmanager
+    def _queue_txn(self) -> Iterator[list[dict[str, Any]]]:
+        """Atomic read-modify-write transaction over the queue file.
+
+        Holds the shared queue lock for the lifetime of the context so
+        concurrent producers (web_search, clipper) and consumers (ingest
+        runners) cannot lose writes to each other. Any exception inside the
+        block aborts the write; callers are responsible for ensuring that
+        the returned list is the one they mutate.
+        """
+        with self._coord.queue_lock:
+            queue = self._load_queue()
+            yield queue
+            self._save_queue(queue)
 
     def _domain_allowed(self, url: str) -> bool:
         host = (urlparse(url).hostname or "").lower()
@@ -809,65 +960,65 @@ class VaultLearningManager:
         return {**inbox_payload, "inbox_path": str(inbox_path)}
 
     def enqueue_search_results(self, *, query: str, results: list[dict[str, Any]]) -> dict[str, Any]:
-        queue = self._load_queue()
         appended: list[dict[str, Any]] = []
         duplicates = 0
         skipped = 0
         now = _utcnow()
         dedupe_deadline = now - timedelta(hours=self.search_results_dedupe_window_hours)
 
-        for result in results:
-            if not isinstance(result, dict):
-                skipped += 1
-                continue
-            extracted = str(result.get("extracted_content") or "").strip()
-            url = str(result.get("url") or "").strip()
-            if not extracted or not url:
-                skipped += 1
-                continue
-            content_hash = hashlib.sha256(extracted.encode("utf-8")).hexdigest()
-            duplicate_match = next(
-                (
-                    item
-                    for item in queue
-                    if str(item.get("url") or "") == url
-                    and str(item.get("content_hash") or "") == content_hash
-                    and str(item.get("status") or "") in {"queued", "claimed", "ingested"}
-                    and datetime.fromisoformat(str(item.get("queued_at"))).replace(tzinfo=UTC) >= dedupe_deadline
-                ),
-                None,
-            )
-            if duplicate_match is not None:
-                duplicates += 1
-                continue
+        with self._queue_txn() as queue:
+            for result in results:
+                if not isinstance(result, dict):
+                    skipped += 1
+                    continue
+                extracted = str(result.get("extracted_content") or "").strip()
+                url = str(result.get("url") or "").strip()
+                if not extracted or not url:
+                    skipped += 1
+                    continue
+                content_hash = hashlib.sha256(extracted.encode("utf-8")).hexdigest()
+                duplicate_match = next(
+                    (
+                        item
+                        for item in queue
+                        if str(item.get("url") or "") == url
+                        and str(item.get("content_hash") or "") == content_hash
+                        and str(item.get("status") or "") in {"queued", "claimed", "ingested"}
+                        and datetime.fromisoformat(str(item.get("queued_at"))).replace(tzinfo=UTC) >= dedupe_deadline
+                    ),
+                    None,
+                )
+                if duplicate_match is not None:
+                    duplicates += 1
+                    continue
 
-            entry = {
-                "queue_id": f"queue-{uuid4().hex[:12]}",
-                "queued_at": now.isoformat(),
-                "source_tool": str(result.get("source_tool") or "web_search").strip() or "web_search",
-                "query": query,
-                "title": str(result.get("title") or "").strip(),
-                "url": url,
-                "snippet": str(result.get("snippet") or "").strip(),
-                "extracted_content": extracted,
-                "topic_tags": [str(item).strip() for item in result.get("topic_tags", []) if str(item).strip()],
-                "concept_refs": [str(item).strip() for item in result.get("concept_refs", []) if str(item).strip()],
-                "entity_refs": [str(item).strip() for item in result.get("entity_refs", []) if str(item).strip()],
-                "target_synthesis_refs": [str(item).strip() for item in result.get("target_synthesis_refs", []) if str(item).strip()],
-                "status": "queued",
-                "reason": str(result.get("reason") or "enriched_web_search_result").strip() or "enriched_web_search_result",
-                "content_hash": content_hash,
-            }
-            source_markdown_path = str(result.get("source_markdown_path") or "").strip()
-            if source_markdown_path:
-                entry["source_markdown_path"] = source_markdown_path
-            metadata = result.get("metadata")
-            if isinstance(metadata, dict) and metadata:
-                entry["metadata"] = metadata
-            queue.append(entry)
-            appended.append(entry)
+                entry = {
+                    "queue_id": f"queue-{uuid4().hex[:12]}",
+                    "queued_at": now.isoformat(),
+                    "source_tool": str(result.get("source_tool") or "web_search").strip() or "web_search",
+                    "query": query,
+                    "title": str(result.get("title") or "").strip(),
+                    "url": url,
+                    "snippet": str(result.get("snippet") or "").strip(),
+                    "extracted_content": extracted,
+                    "topic_tags": [str(item).strip() for item in result.get("topic_tags", []) if str(item).strip()],
+                    "concept_refs": [str(item).strip() for item in result.get("concept_refs", []) if str(item).strip()],
+                    "entity_refs": [str(item).strip() for item in result.get("entity_refs", []) if str(item).strip()],
+                    "target_synthesis_refs": [str(item).strip() for item in result.get("target_synthesis_refs", []) if str(item).strip()],
+                    "status": "queued",
+                    "reason": str(result.get("reason") or "enriched_web_search_result").strip() or "enriched_web_search_result",
+                    "content_hash": content_hash,
+                    "attempt_count": 0,
+                }
+                source_markdown_path = str(result.get("source_markdown_path") or "").strip()
+                if source_markdown_path:
+                    entry["source_markdown_path"] = source_markdown_path
+                metadata = result.get("metadata")
+                if isinstance(metadata, dict) and metadata:
+                    entry["metadata"] = metadata
+                queue.append(entry)
+                appended.append(entry)
 
-        self._save_queue(queue)
         return {
             "query": query,
             "appended_count": len(appended),
@@ -878,91 +1029,166 @@ class VaultLearningManager:
         }
 
     def claim_search_queue_items(self, *, topic: str = "", max_items: int = 10) -> list[dict[str, Any]]:
-        queue = self._load_queue()
+        """Atomically claim up to `max_items` queue entries for processing.
+
+        A claim is *also* eligible for stealing if its lease has expired —
+        this lets a new runner pick up items left behind by a worker that
+        crashed or hung, without waiting for an explicit orphan-rescue pass.
+        Each claim stamps `claim_lease_until` and bumps `attempt_count`.
+        """
         claimed: list[dict[str, Any]] = []
         topic_slug = self._topic_slug(topic) if topic.strip() else ""
+        now = _utcnow()
+        now_iso = now.isoformat()
+        lease_until = (now + timedelta(seconds=self.claim_lease_seconds)).isoformat()
 
-        for item in queue:
-            if str(item.get("status") or "") != "queued":
-                continue
-            if topic_slug:
-                tags = [str(tag).strip() for tag in item.get("topic_tags", [])]
-                text = f"{item.get('query', '')} {item.get('title', '')}".lower()
-                if topic_slug not in tags and topic_slug not in text:
+        with self._queue_txn() as queue:
+            for item in queue:
+                status = str(item.get("status") or "")
+                if status == "queued":
+                    pass
+                elif status == "claimed":
+                    lease_value = item.get("claim_lease_until")
+                    if not lease_value:
+                        # Legacy claim without a lease — treat as stealable.
+                        pass
+                    else:
+                        try:
+                            lease_dt = datetime.fromisoformat(str(lease_value)).replace(tzinfo=UTC)
+                        except Exception:
+                            lease_dt = now  # Malformed → consider expired.
+                        if lease_dt > now:
+                            continue
+                else:
                     continue
-            item["status"] = "claimed"
-            item["claimed_at"] = _utcnow_iso()
-            claimed.append(dict(item))
-            if len(claimed) >= max(1, int(max_items)):
-                break
+                if topic_slug:
+                    tags = [str(tag).strip() for tag in item.get("topic_tags", [])]
+                    text = f"{item.get('query', '')} {item.get('title', '')}".lower()
+                    if topic_slug not in tags and topic_slug not in text:
+                        continue
+                item["status"] = "claimed"
+                item["claimed_at"] = now_iso
+                item["claim_lease_until"] = lease_until
+                item["attempt_count"] = int(item.get("attempt_count") or 0) + 1
+                claimed.append(dict(item))
+                if len(claimed) >= max(1, int(max_items)):
+                    break
 
-        self._save_queue(queue)
         return claimed
+
+    def renew_queue_claim_lease(self, queue_ids: list[str]) -> None:
+        """Extend the lease on currently-claimed items. Long-running ingest
+        loops should call this periodically so a slow job is not stolen by
+        another runner mid-process."""
+        if not queue_ids:
+            return
+        now = _utcnow()
+        lease_until = (now + timedelta(seconds=self.claim_lease_seconds)).isoformat()
+        queue_id_set = set(queue_ids)
+        with self._queue_txn() as queue:
+            for item in queue:
+                if str(item.get("queue_id") or "") not in queue_id_set:
+                    continue
+                if str(item.get("status") or "") != "claimed":
+                    continue
+                item["claim_lease_until"] = lease_until
 
     def _mark_queue_items(self, queue_ids: list[str], *, status: str, reason: str = "") -> None:
         if not queue_ids:
             return
-        queue = self._load_queue()
         now = _utcnow_iso()
         queue_id_set = set(queue_ids)
-        for item in queue:
-            if str(item.get("queue_id") or "") not in queue_id_set:
-                continue
-            item["status"] = status
-            item["updated_at"] = now
-            if reason:
-                item["reason"] = reason
-        self._save_queue(queue)
+        with self._queue_txn() as queue:
+            for item in queue:
+                if str(item.get("queue_id") or "") not in queue_id_set:
+                    continue
+                item["status"] = status
+                item["updated_at"] = now
+                if reason:
+                    item["reason"] = reason
+                # Terminal statuses release the lease and remove transient fields.
+                if status in {"ingested", "rejected"}:
+                    item.pop("claim_lease_until", None)
 
     def requeue_claimed_items(self, queue_ids: list[str], *, reason: str = "ingest_failed_retry") -> None:
-        """Return claimed items back to queued so a later ingest run can retry them."""
+        """Return claimed items back to queued so a later ingest run can retry them.
+
+        Items whose `attempt_count` has reached `max_ingest_attempts` are
+        marked `rejected` with reason `max_attempts_exceeded` instead, so a
+        poison-pill URL doesn't bounce between runners forever.
+        """
         if not queue_ids:
             return
-        queue = self._load_queue()
         now = _utcnow_iso()
         queue_id_set = set(queue_ids)
-        for item in queue:
-            if str(item.get("queue_id") or "") not in queue_id_set:
-                continue
-            if str(item.get("status") or "") != "claimed":
-                continue
-            item["status"] = "queued"
-            item["updated_at"] = now
-            if reason:
-                item["reason"] = reason
-            item.pop("claimed_at", None)
-        self._save_queue(queue)
+        with self._queue_txn() as queue:
+            for item in queue:
+                if str(item.get("queue_id") or "") not in queue_id_set:
+                    continue
+                if str(item.get("status") or "") != "claimed":
+                    continue
+                attempts = int(item.get("attempt_count") or 0)
+                if attempts >= self.max_ingest_attempts:
+                    item["status"] = "rejected"
+                    item["reason"] = "max_attempts_exceeded"
+                else:
+                    item["status"] = "queued"
+                    item["reason"] = reason
+                item["updated_at"] = now
+                item.pop("claim_lease_until", None)
+                item.pop("claimed_at", None)
 
     def requeue_all_claimed_items(self, *, reason: str = "orphaned_from_prior_run") -> int:
-        """Return *every* item currently in 'claimed' state back to 'queued'.
+        """Return every `claimed` item with an expired (or missing) lease back to `queued`.
 
-        Used at ingest job start to recover from prior runs that died mid-flight
-        (backend restart, crash, hard kill) and left items orphaned in 'claimed'
-        with no live worker. Returns the number of items requeued.
+        Live claims with an unexpired lease are left alone — a parallel
+        runner may still be working on them. The "rescue all" semantics from
+        before parallel ingest landed are no longer correct because a fresh
+        job no longer implies no other job exists.
         """
-        queue = self._load_queue()
-        now = _utcnow_iso()
+        now = _utcnow()
+        now_iso = now.isoformat()
         count = 0
-        for item in queue:
-            if str(item.get("status") or "") != "claimed":
-                continue
-            item["status"] = "queued"
-            item["updated_at"] = now
-            if reason:
-                item["reason"] = reason
-            item.pop("claimed_at", None)
-            count += 1
-        if count:
-            self._save_queue(queue)
+        with self._queue_txn() as queue:
+            for item in queue:
+                if str(item.get("status") or "") != "claimed":
+                    continue
+                lease_value = item.get("claim_lease_until")
+                if lease_value:
+                    try:
+                        lease_dt = datetime.fromisoformat(str(lease_value)).replace(tzinfo=UTC)
+                    except Exception:
+                        lease_dt = now
+                    if lease_dt > now:
+                        continue
+                item["status"] = "queued"
+                item["updated_at"] = now_iso
+                if reason:
+                    item["reason"] = reason
+                item.pop("claim_lease_until", None)
+                item.pop("claimed_at", None)
+                count += 1
         return count
 
     def clear_queued_search_results(self, *, reason: str = "rejected_by_user") -> int:
-        queue = self._load_queue()
-        queued_ids = [str(item.get("queue_id") or "") for item in queue if str(item.get("status") or "") == "queued"]
-        queued_ids = [queue_id for queue_id in queued_ids if queue_id]
-        if not queued_ids:
-            return 0
-        self._mark_queue_items(queued_ids, status="rejected", reason=reason)
+        with self._queue_txn() as queue:
+            queued_ids = [
+                str(item.get("queue_id") or "")
+                for item in queue
+                if str(item.get("status") or "") == "queued"
+            ]
+            queued_ids = [queue_id for queue_id in queued_ids if queue_id]
+            if not queued_ids:
+                return 0
+            now = _utcnow_iso()
+            queue_id_set = set(queued_ids)
+            for item in queue:
+                if str(item.get("queue_id") or "") not in queue_id_set:
+                    continue
+                item["status"] = "rejected"
+                item["updated_at"] = now
+                item["reason"] = reason
+                item.pop("claim_lease_until", None)
         return len(queued_ids)
 
     def dedupe_recent_queries(self, *, query_text: str, topic_tags: list[str] | None = None) -> dict[str, Any] | None:
@@ -1768,6 +1994,10 @@ class VaultLearningManager:
         sources = self._manifest.get("sources", {}) or {}
         kept_source_stems = {str(sid) for sid in sources.keys() if str(sid).strip()}
 
+        dismissed_entity_slugs = {
+            str(slug) for slug in (self._manifest.get("entity_dismissals", {}) or {}).keys()
+        }
+
         kept_concept_slugs: set[str] = set()
         kept_entity_slugs: set[str] = set()
         for record in sources.values():
@@ -1779,7 +2009,7 @@ class VaultLearningManager:
                     kept_concept_slugs.add(slug)
             for ref in record.get("entity_refs", []) or []:
                 slug = _slugify(str(ref))
-                if slug:
+                if slug and slug not in dismissed_entity_slugs:
                     kept_entity_slugs.add(slug)
 
         kept_synthesis_stems: set[str] = set()
@@ -1834,6 +2064,293 @@ class VaultLearningManager:
 
         deleted["total"] = total
         return deleted
+
+    # ------------------------------------------------------------------
+    # Entity browser — entity-centric view of the vault.
+    # ------------------------------------------------------------------
+    def _entity_aggregates(self) -> tuple[
+        dict[str, dict[str, Any]],
+        dict[str, dict[str, Any]],
+    ]:
+        """Walk manifest sources once and return (entity_index, concept_index).
+
+        entity_index[slug] = {label, degree, source_ids: set, concept_slugs: set}
+        concept_index[slug] = {label}
+        Both indexes skip dismissed entities.
+        """
+        sources = self._manifest.get("sources", {}) or {}
+        dismissals = self._manifest.get("entity_dismissals", {}) or {}
+        alias_map = {
+            slug: str((entry or {}).get("alias_for") or "").strip()
+            for slug, entry in dismissals.items()
+            if isinstance(entry, dict)
+        }
+
+        entity_index: dict[str, dict[str, Any]] = {}
+        concept_index: dict[str, dict[str, Any]] = {}
+
+        for source_id, record in sources.items():
+            if not isinstance(record, dict):
+                continue
+            entity_refs = record.get("entity_refs") or []
+            concept_refs = record.get("concept_refs") or []
+
+            local_entity_slugs: set[str] = set()
+            for raw in entity_refs:
+                label = str(raw).strip()
+                if not label:
+                    continue
+                slug = _slugify(label)
+                if not slug:
+                    continue
+                # Skip dismissals that aren't aliased; rewrite when alias_for is set.
+                if slug in dismissals:
+                    alias = alias_map.get(slug) or ""
+                    if not alias:
+                        continue
+                    slug = alias
+                bucket = entity_index.setdefault(
+                    slug,
+                    {"slug": slug, "label": label, "source_ids": set(), "concept_slugs": set()},
+                )
+                bucket["source_ids"].add(str(source_id))
+                local_entity_slugs.add(slug)
+                # Prefer the longest original-case label seen.
+                if len(label) > len(bucket["label"]):
+                    bucket["label"] = label
+
+            local_concept_slugs: set[str] = set()
+            for raw in concept_refs:
+                label = str(raw).strip()
+                if not label:
+                    continue
+                slug = _slugify(label)
+                if not slug:
+                    continue
+                local_concept_slugs.add(slug)
+                bucket = concept_index.setdefault(slug, {"slug": slug, "label": label})
+                if len(label) > len(bucket["label"]):
+                    bucket["label"] = label
+
+            # Wire concept co-occurrence into every entity in this source.
+            for entity_slug in local_entity_slugs:
+                entity_index[entity_slug]["concept_slugs"].update(local_concept_slugs)
+
+        # Materialize degrees.
+        for entry in entity_index.values():
+            entry["degree"] = len(entry["source_ids"])
+
+        return entity_index, concept_index
+
+    def get_entity_browser(
+        self,
+        *,
+        top_n: int = 15,
+        bottom_n: int = 10,
+        critical_max_degree: int = 2,
+    ) -> dict[str, Any]:
+        """Return entity-centric view with top, critical-gap, and less-covered buckets.
+
+        - top: highest-degree entities (most connected, capped at top_n)
+        - critical_gaps: entities whose degree <= critical_max_degree (i.e. <3 by default)
+        - less_covered: next bottom_n entities by ascending degree, excluding criticals.
+          Always populated when entities exist beyond the critical band.
+        """
+        entity_index, concept_index = self._entity_aggregates()
+        sources_map = self._manifest.get("sources", {}) or {}
+
+        def _source_summary(source_id: str) -> dict[str, str]:
+            record = sources_map.get(source_id) or {}
+            return {
+                "source_id": str(source_id),
+                "title": str(record.get("title") or record.get("url") or source_id),
+                "url": str(record.get("url") or ""),
+            }
+
+        def _serialize(entry: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "slug": entry["slug"],
+                "label": entry["label"],
+                "degree": int(entry.get("degree") or 0),
+                "sources": sorted(
+                    (_source_summary(sid) for sid in entry["source_ids"]),
+                    key=lambda item: item["title"].lower(),
+                ),
+                "concepts": sorted(
+                    (
+                        {
+                            "slug": slug,
+                            "label": (concept_index.get(slug) or {}).get("label", slug),
+                        }
+                        for slug in entry["concept_slugs"]
+                    ),
+                    key=lambda item: item["label"].lower(),
+                ),
+            }
+
+        all_entries = list(entity_index.values())
+        all_entries.sort(key=lambda item: (-int(item["degree"]), item["label"].lower()))
+
+        top = [_serialize(entry) for entry in all_entries[: max(0, int(top_n))]]
+
+        critical_entries = [entry for entry in all_entries if int(entry["degree"]) <= int(critical_max_degree)]
+        critical_entries.sort(key=lambda item: (int(item["degree"]), item["label"].lower()))
+        critical_gaps = [_serialize(entry) for entry in critical_entries]
+
+        critical_slugs = {entry["slug"] for entry in critical_entries}
+        non_critical = [entry for entry in all_entries if entry["slug"] not in critical_slugs]
+        non_critical.sort(key=lambda item: (int(item["degree"]), item["label"].lower()))
+        less_covered = [_serialize(entry) for entry in non_critical[: max(0, int(bottom_n))]]
+
+        dismissals_raw = self._manifest.get("entity_dismissals", {}) or {}
+
+        return {
+            "generated_at": _utcnow_iso(),
+            "counts": {
+                "total_entities": len(entity_index),
+                "dismissed": len(dismissals_raw),
+                "critical_max_degree": int(critical_max_degree),
+            },
+            "top": top,
+            "critical_gaps": critical_gaps,
+            "less_covered": less_covered,
+        }
+
+    def list_entity_dismissals(self) -> list[dict[str, Any]]:
+        dismissals = self._manifest.get("entity_dismissals", {}) or {}
+        items: list[dict[str, Any]] = []
+        for slug, raw in dismissals.items():
+            if not isinstance(raw, dict):
+                continue
+            items.append(
+                {
+                    "slug": str(slug),
+                    "label": str(raw.get("label") or slug),
+                    "reason": str(raw.get("reason") or ""),
+                    "alias_for": str(raw.get("alias_for") or "") or None,
+                    "dismissed_at": str(raw.get("dismissed_at") or ""),
+                }
+            )
+        items.sort(key=lambda item: item["dismissed_at"], reverse=True)
+        return items
+
+    def dismiss_entity(
+        self,
+        *,
+        slug: str,
+        reason: str = "",
+        alias_for: str | None = None,
+    ) -> dict[str, Any]:
+        """Mark an entity slug as dismissed (noise / duplicate).
+
+        - Records the dismissal in manifest["entity_dismissals"].
+        - Removes the slug from every source's entity_refs (or rewrites it to
+          alias_for when supplied).
+        - Deletes 02_compiled/entities/{slug}.md if present.
+        - Marks affected pages dirty so the next compile regenerates indexes.
+        """
+        normalized = _slugify(str(slug or ""))
+        if not normalized:
+            raise ValueError("Entity slug is required.")
+
+        normalized_alias: str | None = None
+        if alias_for:
+            normalized_alias = _slugify(str(alias_for))
+            if not normalized_alias:
+                normalized_alias = None
+            elif normalized_alias == normalized:
+                raise ValueError("Alias target cannot equal the dismissed slug.")
+
+        # Find a human label to surface in the dismissal record by scanning sources.
+        sources = self._manifest.get("sources", {}) or {}
+        original_label = normalized
+        for record in sources.values():
+            if not isinstance(record, dict):
+                continue
+            for raw in record.get("entity_refs") or []:
+                label = str(raw).strip()
+                if label and _slugify(label) == normalized and len(label) > len(original_label):
+                    original_label = label
+
+        affected_sources: list[str] = []
+        for source_id, record in sources.items():
+            if not isinstance(record, dict):
+                continue
+            refs = record.get("entity_refs") or []
+            if not isinstance(refs, list):
+                continue
+            new_refs: list[str] = []
+            changed = False
+            for raw in refs:
+                label = str(raw).strip()
+                if not label:
+                    continue
+                if _slugify(label) == normalized:
+                    changed = True
+                    if normalized_alias:
+                        # Rewrite the ref so future slugify maps to the alias.
+                        new_refs.append(normalized_alias)
+                    # Otherwise drop the ref entirely (pure dismissal).
+                else:
+                    new_refs.append(label)
+            if changed:
+                # Dedupe in case alias collides with an existing ref.
+                seen: set[str] = set()
+                deduped: list[str] = []
+                for ref in new_refs:
+                    if ref not in seen:
+                        seen.add(ref)
+                        deduped.append(ref)
+                record["entity_refs"] = deduped
+                affected_sources.append(str(source_id))
+
+        dismissals = self._manifest.setdefault("entity_dismissals", {})
+        dismissals[normalized] = {
+            "label": original_label,
+            "reason": str(reason or "").strip(),
+            "alias_for": normalized_alias,
+            "dismissed_at": _utcnow_iso(),
+        }
+
+        # Delete the compiled entity page if present.
+        deleted = False
+        compiled_path = self.compiled_entities_dir / f"{normalized}.md"
+        if compiled_path.exists():
+            try:
+                compiled_path.unlink()
+                deleted = True
+            except OSError:
+                deleted = False
+
+        # Regenerate entities index now (cheap) and mark dirty pages for the next compile.
+        if self.compiled_entities_dir.exists():
+            (self.compiled_entities_dir / "index.md").write_text(
+                self._render_index_for_dir("Entities", self.compiled_entities_dir),
+                encoding="utf-8",
+            )
+        dirty = set(self._manifest.get("dirty_pages") or [])
+        dirty.update({"entities/index.md", "index.md"})
+        self._manifest["dirty_pages"] = sorted(dirty)
+
+        self._save_manifest()
+        return {
+            "slug": normalized,
+            "alias_for": normalized_alias,
+            "affected_sources": affected_sources,
+            "compiled_deleted": deleted,
+        }
+
+    def restore_entity_dismissal(self, *, slug: str) -> dict[str, Any]:
+        normalized = _slugify(str(slug or ""))
+        if not normalized:
+            raise ValueError("Entity slug is required.")
+        dismissals = self._manifest.get("entity_dismissals", {}) or {}
+        if normalized not in dismissals:
+            raise ValueError(f"No dismissal found for entity '{normalized}'.")
+        del dismissals[normalized]
+        self._manifest["entity_dismissals"] = dismissals
+        self._save_manifest()
+        return {"slug": normalized, "restored": True}
 
     def _render_index_for_dir(self, title: str, directory: Path) -> str:
         lines = [f"# {title}", ""]
