@@ -88,10 +88,10 @@ export const TimelineItemRow = memo(function TimelineItemRow_({
         </div>
         <div className="flex items-start gap-2">
           {renderEventIcon(item.icon)}
-          <div className="min-w-0 flex-1 text-sm leading-5">{item.title}</div>
+          <div className="min-w-0 flex-1 text-sm leading-5 whitespace-normal break-all">{item.title}</div>
         </div>
         {item.detail && (
-          <div className="text-muted-foreground mt-1 truncate text-xs leading-5" title={item.detail}>
+          <div className="text-muted-foreground mt-1 text-xs leading-5 whitespace-normal break-all" title={item.detail}>
             {item.detail}
           </div>
         )}

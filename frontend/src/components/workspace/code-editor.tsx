@@ -42,6 +42,7 @@ export function CodeEditor({
   readonly,
   disabled,
   autoFocus,
+  wrapLines = false,
   settings,
 }: {
   className?: string;
@@ -51,6 +52,7 @@ export function CodeEditor({
   readonly?: boolean;
   disabled?: boolean;
   autoFocus?: boolean;
+  wrapLines?: boolean;
   settings?: unknown;
 }) {
   const {
@@ -72,6 +74,21 @@ export function CodeEditor({
     ];
   }, []);
 
+  if (readonly && wrapLines) {
+    return (
+      <div
+        className={cn(
+          "flex cursor-text flex-col overflow-hidden rounded-md",
+          className,
+        )}
+      >
+        <pre className="size-full overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-sm">
+          {value || placeholder}
+        </pre>
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
@@ -84,6 +101,7 @@ export function CodeEditor({
           className={cn(
             "h-full overflow-auto font-mono [&_.cm-editor]:h-full [&_.cm-focused]:outline-none!",
             "resize-none p-4! [&_.cm-line]:px-2! [&_.cm-line]:py-0!",
+            wrapLines && "whitespace-pre-wrap break-all",
             "border-none",
           )}
           readOnly
@@ -96,6 +114,8 @@ export function CodeEditor({
           className={cn(
             "h-full overflow-auto font-mono [&_.cm-editor]:h-full [&_.cm-focused]:outline-none!",
             "px-2 py-0! [&_.cm-line]:px-2! [&_.cm-line]:py-0!",
+            wrapLines &&
+              "[&_.cm-scroller]:overflow-x-hidden [&_.cm-content]:whitespace-pre-wrap [&_.cm-line]:whitespace-pre-wrap [&_.cm-line]:break-all",
           )}
           theme={resolvedTheme === "dark" ? customDarkTheme : customLightTheme}
           extensions={extensions}

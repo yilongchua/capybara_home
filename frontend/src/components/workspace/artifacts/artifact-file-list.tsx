@@ -223,9 +223,7 @@ export function ArtifactFileList({
 
   const renderRowContent = useCallback(
     (file: string, source: "created" | "mounted") => {
-      const metadata = source === "mounted"
-        ? `${getFileExtensionDisplayName(file)} file • ${mountedFolder ?? "/mnt/user-data/mounted"}`
-        : `${getFileExtensionDisplayName(file)} file • /mnt/user-data/workspace`;
+      const metadata = `${getFileExtensionDisplayName(file)} file`;
 
       return (
         <div
@@ -237,7 +235,7 @@ export function ArtifactFileList({
               {getFileIcon(file, "size-4")}
             </span>
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{getFileName(file)}</p>
+              <p className="text-sm font-medium whitespace-normal break-all">{getFileName(file)}</p>
               <p className="text-muted-foreground truncate text-xs">{metadata}</p>
             </div>
           </div>
@@ -257,23 +255,25 @@ export function ArtifactFileList({
                 )}
               </Button>
             )}
-            <a
-              href={urlOfArtifact({
-                filepath: file,
-                threadId,
-                download: true,
-              })}
-              target="_blank"
-            >
-              <Button variant="ghost" size="icon-sm" title={t.common.download}>
-                <DownloadIcon className="size-4" />
-              </Button>
-            </a>
+            {source === "created" && (
+              <a
+                href={urlOfArtifact({
+                  filepath: file,
+                  threadId,
+                  download: true,
+                })}
+                target="_blank"
+              >
+                <Button variant="ghost" size="icon-sm" title={t.common.download}>
+                  <DownloadIcon className="size-4" />
+                </Button>
+              </a>
+            )}
           </div>
         </div>
       );
     },
-    [handleClick, handleInstallSkill, installingFile, mountedFolder, t, threadId],
+    [handleClick, handleInstallSkill, installingFile, t, threadId],
   );
 
   const renderTree = useCallback(

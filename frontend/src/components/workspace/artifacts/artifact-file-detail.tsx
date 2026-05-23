@@ -405,6 +405,7 @@ export function ArtifactFileDetail({
             className="size-full resize-none rounded-none border-none"
             value={displayContent ?? ""}
             readonly
+            wrapLines
           />
         )}
         {!shouldRenderPlan && !isCodeFile && (
