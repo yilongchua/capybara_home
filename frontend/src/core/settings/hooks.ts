@@ -55,7 +55,11 @@ export function useLocalSettings(): [
         };
         saveLocalSettings(newState);
         if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent(SETTINGS_CHANGE_EVENT));
+          // Defer cross-instance notification so listeners' setState calls
+          // don't run during another component's render phase.
+          queueMicrotask(() =>
+            window.dispatchEvent(new CustomEvent(SETTINGS_CHANGE_EVENT)),
+          );
         }
         return newState;
       });
