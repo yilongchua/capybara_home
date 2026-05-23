@@ -18,13 +18,13 @@ export function Welcome({
     >
       <div className="text-2xl font-bold">
         <div className="flex items-center gap-2">
-          <img src="/Logo.webp" alt="Capy Hub logo" className="size-8" />
-          <span>Welcome to Capy Hub!</span>
+          <img src="/Logo.webp" alt="CapyHome logo" className="size-8" />
+          <span>Welcome to CapyHome!</span>
         </div>
       </div>
       <div className="text-muted-foreground text-sm">
         <p>
-          Think less, create more. Capy Hub handles the hard stuff while you
+          Think less, create more. CapyHome handles the hard stuff while you
           focus on what matters 🚀
         </p>
       </div>
