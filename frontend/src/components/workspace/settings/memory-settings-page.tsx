@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { deleteVaultKnowledgeGraph } from "@/core/control-plane/api";
 import { useI18n } from "@/core/i18n/hooks";
 import { useCompactions, useMemory, useMemoryMutations } from "@/core/memory/hooks";
 import { formatTimeAgo } from "@/core/utils/datetime";
@@ -30,6 +31,7 @@ export function MemorySettingsPage() {
   const compactions = useCompactions(threadId);
   const globalMutations = useMemoryMutations("global");
   const workspaceMutations = useMemoryMutations("workspace", threadId);
+  const [graphDeleting, setGraphDeleting] = useState(false);
 
   const loading = globalMemory.isLoading || workspaceMemory.isLoading;
   const global = globalMemory.memory;
@@ -151,6 +153,32 @@ export function MemorySettingsPage() {
           >
             Delete Workspace Memory
           </Button>
+          <Button
+            variant="destructive"
+            onClick={async () => {
+              if (
+                !window.confirm(
+                  "Delete the entire knowledge graph? This removes all sources, concepts, entities, and pending queue items. This cannot be undone.",
+                )
+              ) {
+                return;
+              }
+              setGraphDeleting(true);
+              try {
+                await deleteVaultKnowledgeGraph();
+              } catch (err) {
+                window.alert(err instanceof Error ? err.message : "Failed to delete knowledge graph.");
+              } finally {
+                setGraphDeleting(false);
+              }
+            }}
+            disabled={graphDeleting}
+          >
+            {graphDeleting ? "Deleting…" : "Delete Knowledge Graph"}
+          </Button>
+        </div>
+        <div className="text-xs text-muted-foreground">
+          Knowledge Graph removes all sources, concepts, entities, and queued ingest items from the vault.
         </div>
       </div>
 

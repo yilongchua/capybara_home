@@ -350,6 +350,80 @@ class VaultLearningManager:
         if not self.search_results_queue_path.exists():
             self.search_results_queue_path.write_text("[]", encoding="utf-8")
 
+    def reset_knowledge_graph(self) -> dict[str, Any]:
+        """Wipe all sources, concepts, entities, queue items, and manifest state.
+
+        Callers must ensure no ingest runners are active (see
+        `_VaultCoordination.active_runners`). Holds the queue and manifest
+        locks for the duration of the reset so producers and consumers cannot
+        interleave with the wipe.
+        """
+        removed_dirs = [
+            self.raw_dir,
+            self.compiled_dir,
+            self.ops_dir,
+            self.state_dir,
+        ]
+        external_queue = self.search_results_queue_path.resolve()
+        try:
+            external_queue.relative_to(self.vault_root)
+            queue_inside_vault = True
+        except ValueError:
+            queue_inside_vault = False
+
+        counts_before = {
+            "sources": len(self._manifest.get("sources", {}) or {}),
+            "queue_items": len(self._load_queue()),
+        }
+
+        with self._coord.queue_lock, self._coord.manifest_lock:
+            for directory in removed_dirs:
+                if directory.exists():
+                    shutil.rmtree(directory, ignore_errors=True)
+            if not queue_inside_vault and self.search_results_queue_path.exists():
+                self.search_results_queue_path.unlink(missing_ok=True)
+
+            for directory in (
+                self.vault_root,
+                self.schema_dir,
+                self.raw_dir,
+                self.compiled_dir,
+                self.ops_dir,
+                self.raw_sources_dir,
+                self.compiled_sources_dir,
+                self.compiled_entities_dir,
+                self.compiled_concepts_dir,
+                self.compiled_syntheses_dir,
+                self.compiled_queries_dir,
+                self.inbox_dir,
+                self.tasks_dir,
+                self.reports_dir,
+                self.queues_dir,
+                self.quarantine_dir,
+                self.discover_reports_dir,
+                self.ingest_reports_dir,
+                self.compile_reports_dir,
+                self.lint_reports_dir,
+                self.synthesis_reports_dir,
+                self.sufficiency_reports_dir,
+                self.task_backlog_dir,
+                self.task_review_dir,
+                self.task_done_dir,
+                self.state_dir,
+                self.search_results_queue_path.parent,
+            ):
+                directory.mkdir(parents=True, exist_ok=True)
+
+            self._seed_schema_docs()
+            self._manifest = self._load_manifest()
+            self._save_manifest()
+            self._ensure_queue_file()
+
+        return {
+            "status": "cleared",
+            "removed": counts_before,
+        }
+
     def _fingerprint_attempt(self, *, objective_id: str, query_text: str, key_entities: list[str] | None = None, source_hash: str | None = None) -> str:
         entities = sorted(_slugify(item) for item in (key_entities or []) if str(item).strip())
         raw = f"{objective_id.strip().lower()}|{query_text.strip().lower()}|{'|'.join(entities)}|{str(source_hash or '').strip().lower()}"

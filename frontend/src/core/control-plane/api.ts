@@ -25,7 +25,6 @@ import type {
   VaultSearchResponse,
   VaultSaveRequest,
   VaultActionItemsResponse,
-  VaultGraphResponse,
   VaultSufficiencyRequest,
   VaultSufficiencyResponse,
   VaultStatusResponse,
@@ -34,6 +33,13 @@ import type {
   VaultFileResponse,
   VaultFileWriteRequest,
   VaultIngestStatusResponse,
+  VaultEntityBrowserResponse,
+  VaultEntityDismissalsResponse,
+  VaultEntityDismissRequest,
+  VaultEntityDismissResponse,
+  VaultEntityRestoreResponse,
+  VaultEntityAutoresearchRequest,
+  VaultEntityAutoresearchResponse,
 } from "./types";
 
 async function parseError(response: Response, fallback: string) {
@@ -267,16 +273,6 @@ export async function saveToVault(request: VaultSaveRequest): Promise<VaultWrite
   return response.json() as Promise<VaultWriteResponse>;
 }
 
-export async function getVaultGraph(limit = 200): Promise<VaultGraphResponse> {
-  const response = await fetch(
-    `${getBackendBaseURL()}/api/vault/graph?limit=${Math.max(1, Math.min(1000, limit))}`,
-  );
-  if (!response.ok) {
-    await parseError(response, `Failed to load vault graph: ${response.statusText}`);
-  }
-  return response.json() as Promise<VaultGraphResponse>;
-}
-
 export async function getVaultExplorer(): Promise<VaultExplorerResponse> {
   const response = await fetch(`${getBackendBaseURL()}/api/vault/explorer`);
   if (!response.ok) {
@@ -343,6 +339,82 @@ export async function saveVaultFile(request: VaultFileWriteRequest): Promise<{
   return response.json() as Promise<{ status: string; path: string; bytes: number }>;
 }
 
+export async function getVaultEntityBrowser(
+  options?: { top?: number; bottom?: number; criticalMaxDegree?: number },
+): Promise<VaultEntityBrowserResponse> {
+  const params = new URLSearchParams();
+  if (options?.top !== undefined) params.set("top", String(options.top));
+  if (options?.bottom !== undefined) params.set("bottom", String(options.bottom));
+  if (options?.criticalMaxDegree !== undefined) {
+    params.set("critical_max_degree", String(options.criticalMaxDegree));
+  }
+  const qs = params.toString();
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/vault/entity-browser${qs ? `?${qs}` : ""}`,
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to load entity browser: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultEntityBrowserResponse>;
+}
+
+export async function listVaultEntityDismissals(): Promise<VaultEntityDismissalsResponse> {
+  const response = await fetch(`${getBackendBaseURL()}/api/vault/entity-dismissals`);
+  if (!response.ok) {
+    await parseError(response, `Failed to load entity dismissals: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultEntityDismissalsResponse>;
+}
+
+export async function dismissVaultEntity(
+  slug: string,
+  request: VaultEntityDismissRequest = {},
+): Promise<VaultEntityDismissResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/vault/entities/${encodeURIComponent(slug)}/dismiss`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    },
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to dismiss entity: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultEntityDismissResponse>;
+}
+
+export async function restoreVaultEntityDismissal(
+  slug: string,
+): Promise<VaultEntityRestoreResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/vault/entity-dismissals/${encodeURIComponent(slug)}/restore`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to restore entity dismissal: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultEntityRestoreResponse>;
+}
+
+export async function startVaultEntityAutoresearch(
+  slug: string,
+  request: VaultEntityAutoresearchRequest = {},
+): Promise<VaultEntityAutoresearchResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/vault/entities/${encodeURIComponent(slug)}/autoresearch`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    },
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to start entity autoresearch: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultEntityAutoresearchResponse>;
+}
+
 export async function deleteVaultFile(path: string): Promise<{ status: string; path: string }> {
   const response = await fetch(
     `${getBackendBaseURL()}/api/vault/file?path=${encodeURIComponent(path)}`,
@@ -352,6 +424,19 @@ export async function deleteVaultFile(path: string): Promise<{ status: string; p
     await parseError(response, `Failed to delete vault file: ${response.statusText}`);
   }
   return response.json() as Promise<{ status: string; path: string }>;
+}
+
+export async function deleteVaultKnowledgeGraph(): Promise<{
+  status: string;
+  removed: Record<string, number>;
+}> {
+  const response = await fetch(`${getBackendBaseURL()}/api/vault/knowledge-graph`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    await parseError(response, `Failed to delete knowledge graph: ${response.statusText}`);
+  }
+  return response.json() as Promise<{ status: string; removed: Record<string, number> }>;
 }
 
 export async function evaluateVaultSufficiency(

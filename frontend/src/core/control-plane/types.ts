@@ -360,12 +360,6 @@ export interface VaultExplorerResponse {
     others: VaultExplorerFileNode[];
   };
   files: VaultExplorerFileNode[];
-  graph: {
-    generated_at?: string;
-    counts?: Record<string, unknown>;
-    nodes?: VaultGraphNode[];
-    edges?: VaultGraphEdge[];
-  };
 }
 
 export interface VaultFileResponse {
@@ -388,27 +382,76 @@ export interface VaultSaveRequest {
   source_thread_id?: string;
 }
 
-export interface VaultGraphNode {
-  id: string;
+export interface VaultEntitySourceItem {
+  source_id: string;
+  title: string;
+  url: string;
+}
+
+export interface VaultEntityConceptItem {
+  slug: string;
   label: string;
-  kind: string;
-  path: string;
-  tags: string[];
+}
+
+export interface VaultEntityBrowserItem {
+  slug: string;
+  label: string;
   degree: number;
+  sources: VaultEntitySourceItem[];
+  concepts: VaultEntityConceptItem[];
 }
 
-export interface VaultGraphEdge {
-  source: string;
-  target: string;
-  type: string;
-}
-
-export interface VaultGraphResponse {
+export interface VaultEntityBrowserResponse {
   generated_at: string;
-  counts: Record<string, unknown>;
-  nodes: VaultGraphNode[];
-  edges: VaultGraphEdge[];
-  highlights: Record<string, unknown>;
+  counts: {
+    total_entities?: number;
+    dismissed?: number;
+    critical_max_degree?: number;
+  } & Record<string, unknown>;
+  top: VaultEntityBrowserItem[];
+  critical_gaps: VaultEntityBrowserItem[];
+  less_covered: VaultEntityBrowserItem[];
+}
+
+export interface VaultEntityDismissalItem {
+  slug: string;
+  label: string;
+  reason: string;
+  alias_for: string | null;
+  dismissed_at: string;
+}
+
+export interface VaultEntityDismissalsResponse {
+  items: VaultEntityDismissalItem[];
+}
+
+export interface VaultEntityDismissRequest {
+  reason?: string;
+  alias_for?: string | null;
+}
+
+export interface VaultEntityDismissResponse {
+  slug: string;
+  alias_for: string | null;
+  affected_sources: string[];
+  compiled_deleted: boolean;
+}
+
+export interface VaultEntityRestoreResponse {
+  slug: string;
+  restored: boolean;
+}
+
+export interface VaultEntityAutoresearchRequest {
+  label?: string;
+  endpoint_goal?: string;
+}
+
+export interface VaultEntityAutoresearchResponse {
+  objective_id: string | null;
+  run_id: string | null;
+  accepted: boolean | null;
+  message: string | null;
 }
 
 export interface VaultIngestStatusResponse {

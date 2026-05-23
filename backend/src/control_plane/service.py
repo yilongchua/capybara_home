@@ -1088,15 +1088,6 @@ class ControlPlaneService:
             source_thread_id=source_thread_id,
         )
 
-    def _default_vault_graph_limit(self) -> int:
-        configured = int(get_app_config().knowledge_vault.graph_limit)
-        return max(1, min(5000, configured))
-
-    def get_vault_graph(self, *, limit: int | None = None) -> dict[str, Any]:
-        manager = self._default_vault_manager()
-        effective_limit = self._default_vault_graph_limit() if limit is None else max(1, int(limit))
-        return manager.get_graph(limit=effective_limit)
-
     def get_vault_source(self, source_id: str) -> dict[str, Any]:
         manager = self._default_vault_manager()
         return manager.get_source(source_id)
@@ -1128,7 +1119,6 @@ class ControlPlaneService:
     ) -> dict[str, Any]:
         manager = self._default_vault_manager()
         result = manager.dismiss_entity(slug=slug, reason=reason, alias_for=alias_for)
-        # Invalidate explorer cache so the graph view reflects the change immediately.
         with self._vault_explorer_cache_lock:
             self._vault_explorer_cache = {}
         return result
@@ -1169,7 +1159,7 @@ class ControlPlaneService:
                 return dict(self._vault_explorer_cache.get("payload") or {})
 
         # On manual refresh, also prune compiled artifacts that the manifest
-        # no longer references so the explorer/graph reflect actual state.
+        # no longer references so the explorer reflects actual state.
         # Skip while *any* ingest runner is active — a peer may be mid-write
         # with a compiled file it hasn't yet recorded to the manifest.
         if force_refresh:
@@ -1239,19 +1229,12 @@ class ControlPlaneService:
             "others": _tree(manager.compiled_dir / "syntheses") + _tree(manager.compiled_dir / "queries"),
         }
 
-        graph = manager.get_graph(limit=self._default_vault_graph_limit())
         return {
             "generated_at": datetime.now(UTC).isoformat(),
             "cache_ttl_seconds": self._vault_explorer_cache_ttl_seconds,
             "raw_sources": raw_sources,
             "knowledge": knowledge_groups,
             "files": _tree(manager.vault_root),
-            "graph": {
-                "generated_at": graph.get("generated_at"),
-                "counts": graph.get("counts", {}),
-                "nodes": graph.get("nodes", []),
-                "edges": graph.get("edges", []),
-            },
         }
 
     def get_vault_file(self, *, relative_path: str) -> dict[str, Any]:
@@ -1289,6 +1272,20 @@ class ControlPlaneService:
             "status": "deleted",
             "path": str(resolved.relative_to(manager.vault_root)),
         }
+
+    def delete_vault_knowledge_graph(self) -> dict[str, Any]:
+        manager = self._default_vault_manager()
+        with manager._coord.counter_lock:
+            if manager._coord.active_runners > 0:
+                raise ValueError(
+                    "Cannot delete knowledge graph while ingest is running. "
+                    "Wait for active runs to finish and try again.",
+                )
+        result = manager.reset_knowledge_graph()
+        self._vault_ingest_job = self._new_vault_ingest_job_state()
+        with self._vault_explorer_cache_lock:
+            self._vault_explorer_cache = {}
+        return result
 
     def _resolve_vault_file_path(self, manager: VaultLearningManager, relative_path: str) -> Path:
         normalized = relative_path.strip().lstrip("/")

@@ -101,29 +101,6 @@ class VaultSufficiencyResponse(BaseModel):
     progress: dict[str, Any] = Field(default_factory=dict)
 
 
-class VaultGraphNode(BaseModel):
-    id: str
-    label: str
-    kind: str
-    path: str
-    tags: list[str] = Field(default_factory=list)
-    degree: int = 0
-
-
-class VaultGraphEdge(BaseModel):
-    source: str
-    target: str
-    type: str
-
-
-class VaultGraphResponse(BaseModel):
-    generated_at: str
-    counts: dict[str, Any] = Field(default_factory=dict)
-    nodes: list[VaultGraphNode] = Field(default_factory=list)
-    edges: list[VaultGraphEdge] = Field(default_factory=list)
-    highlights: dict[str, Any] = Field(default_factory=dict)
-
-
 class VaultIngestStartRequest(BaseModel):
     force_reanalyze: bool = False
 
@@ -179,7 +156,6 @@ class VaultExplorerResponse(BaseModel):
     raw_sources: list[VaultExplorerSourceItem] = Field(default_factory=list)
     knowledge: VaultExplorerKnowledgeResponse = Field(default_factory=VaultExplorerKnowledgeResponse)
     files: list[VaultFileNode] = Field(default_factory=list)
-    graph: dict[str, Any] = Field(default_factory=dict)
 
 
 class VaultFileResponse(BaseModel):
@@ -201,6 +177,79 @@ class VaultFileWriteResponse(BaseModel):
 class VaultFileDeleteResponse(BaseModel):
     status: str
     path: str
+
+
+class VaultKnowledgeGraphDeleteResponse(BaseModel):
+    status: str
+    removed: dict[str, Any] = Field(default_factory=dict)
+
+
+class VaultEntitySourceItem(BaseModel):
+    source_id: str
+    title: str = ""
+    url: str = ""
+
+
+class VaultEntityConceptItem(BaseModel):
+    slug: str
+    label: str = ""
+
+
+class VaultEntityBrowserItem(BaseModel):
+    slug: str
+    label: str
+    degree: int = 0
+    sources: list[VaultEntitySourceItem] = Field(default_factory=list)
+    concepts: list[VaultEntityConceptItem] = Field(default_factory=list)
+
+
+class VaultEntityBrowserResponse(BaseModel):
+    generated_at: str
+    counts: dict[str, Any] = Field(default_factory=dict)
+    top: list[VaultEntityBrowserItem] = Field(default_factory=list)
+    critical_gaps: list[VaultEntityBrowserItem] = Field(default_factory=list)
+    less_covered: list[VaultEntityBrowserItem] = Field(default_factory=list)
+
+
+class VaultEntityDismissalItem(BaseModel):
+    slug: str
+    label: str = ""
+    reason: str = ""
+    alias_for: str | None = None
+    dismissed_at: str = ""
+
+
+class VaultEntityDismissalsResponse(BaseModel):
+    items: list[VaultEntityDismissalItem] = Field(default_factory=list)
+
+
+class VaultEntityDismissRequest(BaseModel):
+    reason: str = ""
+    alias_for: str | None = None
+
+
+class VaultEntityDismissResponse(BaseModel):
+    slug: str
+    alias_for: str | None = None
+    affected_sources: list[str] = Field(default_factory=list)
+    compiled_deleted: bool = False
+
+
+class VaultEntityRestoreResponse(BaseModel):
+    slug: str
+    restored: bool
+
+
+class VaultEntityAutoresearchRequest(BaseModel):
+    label: str = ""
+    endpoint_goal: str = ""
+
+
+class VaultEntityAutoresearchResponse(BaseModel):
+    objective_id: str | None = None
+    run_id: str | None = None
+    accepted: bool | None = None
+    message: str | None = None
 
 
 @router.get("/status", response_model=VaultStatusResponse)
@@ -271,13 +320,6 @@ async def list_vault_action_items(
     return VaultActionItemsResponse.model_validate(payload)
 
 
-@router.get("/graph", response_model=VaultGraphResponse)
-async def get_vault_graph(limit: int | None = Query(None, ge=1, le=5000)) -> VaultGraphResponse:
-    service = get_control_plane_service()
-    payload = service.get_vault_graph(limit=limit)
-    return VaultGraphResponse.model_validate(payload)
-
-
 @router.get("/explorer", response_model=VaultExplorerResponse)
 async def get_vault_explorer() -> VaultExplorerResponse:
     service = get_control_plane_service()
@@ -336,6 +378,16 @@ async def delete_vault_file(path: str = Query(..., min_length=1)) -> VaultFileDe
     return VaultFileDeleteResponse.model_validate(payload)
 
 
+@router.delete("/knowledge-graph", response_model=VaultKnowledgeGraphDeleteResponse)
+async def delete_vault_knowledge_graph() -> VaultKnowledgeGraphDeleteResponse:
+    service = get_control_plane_service()
+    try:
+        payload = service.delete_vault_knowledge_graph()
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return VaultKnowledgeGraphDeleteResponse.model_validate(payload)
+
+
 @router.post("/sufficiency/evaluate", response_model=VaultSufficiencyResponse)
 async def evaluate_vault_sufficiency(
     request: VaultSufficiencyRequest,
@@ -347,6 +399,85 @@ async def evaluate_vault_sufficiency(
         min_score=request.min_score,
     )
     return VaultSufficiencyResponse.model_validate(payload)
+
+
+@router.get("/entity-browser", response_model=VaultEntityBrowserResponse)
+async def get_vault_entity_browser(
+    top: int = Query(15, ge=1, le=100),
+    bottom: int = Query(10, ge=0, le=50),
+    critical_max_degree: int = Query(2, ge=0, le=20),
+) -> VaultEntityBrowserResponse:
+    service = get_control_plane_service()
+    payload = service.get_vault_entity_browser(
+        top_n=top,
+        bottom_n=bottom,
+        critical_max_degree=critical_max_degree,
+    )
+    return VaultEntityBrowserResponse.model_validate(payload)
+
+
+@router.get("/entity-dismissals", response_model=VaultEntityDismissalsResponse)
+async def list_vault_entity_dismissals() -> VaultEntityDismissalsResponse:
+    service = get_control_plane_service()
+    items = service.list_vault_entity_dismissals()
+    return VaultEntityDismissalsResponse.model_validate({"items": items})
+
+
+@router.post("/entities/{slug}/dismiss", response_model=VaultEntityDismissResponse)
+async def dismiss_vault_entity(
+    slug: str,
+    request: VaultEntityDismissRequest | None = None,
+) -> VaultEntityDismissResponse:
+    service = get_control_plane_service()
+    body = request or VaultEntityDismissRequest()
+    try:
+        payload = service.dismiss_vault_entity(
+            slug=slug,
+            reason=body.reason,
+            alias_for=body.alias_for,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return VaultEntityDismissResponse.model_validate(payload)
+
+
+@router.post("/entity-dismissals/{slug}/restore", response_model=VaultEntityRestoreResponse)
+async def restore_vault_entity_dismissal(slug: str) -> VaultEntityRestoreResponse:
+    service = get_control_plane_service()
+    try:
+        payload = service.restore_vault_entity_dismissal(slug=slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return VaultEntityRestoreResponse.model_validate(payload)
+
+
+@router.post("/entities/{slug}/autoresearch", response_model=VaultEntityAutoresearchResponse)
+async def start_vault_entity_autoresearch(
+    slug: str,
+    request: VaultEntityAutoresearchRequest | None = None,
+) -> VaultEntityAutoresearchResponse:
+    service = get_control_plane_service()
+    body = request or VaultEntityAutoresearchRequest()
+    try:
+        payload = service.start_vault_entity_autoresearch(
+            slug=slug,
+            label=body.label,
+            endpoint_goal=body.endpoint_goal,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    objective = payload.get("objective")
+    bootstrap_run = payload.get("bootstrap_run")
+    objective_id = getattr(objective, "objective_id", None) or getattr(objective, "id", None)
+    run_id = getattr(bootstrap_run, "id", None) if bootstrap_run is not None else None
+    return VaultEntityAutoresearchResponse.model_validate(
+        {
+            "objective_id": objective_id,
+            "run_id": run_id,
+            "accepted": True,
+            "message": None,
+        }
+    )
 
 
 @router.get("/objectives/{objective_id}/progress.md", response_class=PlainTextResponse)

@@ -374,7 +374,6 @@ Public API on the facade is unchanged — every public method delegates one-line
 - `summarization` - Context summarization (enabled, trigger conditions, keep policy)
 - `subagents.enabled` - Master switch for subagent delegation
 - `memory` - Memory system (enabled, storage_path, debounce_seconds, model_name, max_facts, fact_confidence_threshold, injection_enabled, max_injection_tokens)
-- `knowledge_vault.graph_limit` - Default node limit used for `/api/vault/graph` (when query `limit` is omitted) and explorer graph snapshots
 
 **`extensions_config.json`**:
 - `mcpServers` - Map of server name → config (enabled, type, command, args, env, url, headers, oauth, description)
