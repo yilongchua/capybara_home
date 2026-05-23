@@ -1396,7 +1396,19 @@ class VaultLearningManager:
         topic: str = "",
         pre_extracted_content: str | None = None,
         queue_entry: dict[str, Any] | None = None,
+        tentative_hashes: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        """Ingest one URL or queue item and update the manifest in-memory.
+
+        `tentative_hashes` carries the *uncommitted* content-hash updates
+        for the current ingest run. When provided, the new hash is written
+        there instead of being appended to `source_record['hash_history']`
+        immediately, and the dedupe check consults both the committed
+        history and the tentative dict. The caller (`ingest()`) commits or
+        discards the tentative dict based on whether `compile_incremental`
+        succeeds — this prevents a compile failure from poisoning the
+        dedupe cache and silently skipping the retry.
+        """
         source_id = self._source_id_for_url(url)
         source_record = self._manifest["sources"].get(source_id, {})
         fetched_at = _utcnow()
@@ -1425,8 +1437,10 @@ class VaultLearningManager:
             raw_extension = ".html"
 
         content_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
-        hash_history = list(source_record.get("hash_history", []))
-        if hash_history and hash_history[-1] == content_hash:
+        committed_history = list(source_record.get("hash_history", []))
+        tentative_hash = tentative_hashes.get(source_id) if tentative_hashes is not None else None
+        effective_last_hash = tentative_hash or (committed_history[-1] if committed_history else None)
+        if effective_last_hash == content_hash:
             source_record.update(
                 {
                     "source_id": source_id,
@@ -1592,7 +1606,14 @@ class VaultLearningManager:
         ]
         self._write_page(path=compiled_source_path, frontmatter=source_frontmatter, title=title, sections=sections)
 
-        hash_history.append(content_hash)
+        if tentative_hashes is not None:
+            # Defer commit until `ingest()` confirms compile_incremental
+            # succeeded. The dedupe check above already consulted this dict
+            # for the current run, so within-run idempotency is preserved.
+            tentative_hashes[source_id] = content_hash
+            stored_history = committed_history[-10:]
+        else:
+            stored_history = (committed_history + [content_hash])[-10:]
         source_record.update(
             {
                 "source_id": source_id,
@@ -1600,7 +1621,7 @@ class VaultLearningManager:
                 "title": title,
                 "status": "ingested",
                 "trust_score": trust_score,
-                "hash_history": hash_history[-10:],
+                "hash_history": stored_history,
                 "last_ingested_at": _utcnow_iso(),
                 "compiled_path": str(compiled_source_path),
                 "raw_path": str(raw_source_path),
@@ -1715,7 +1736,9 @@ class VaultLearningManager:
         skipped_unchanged: list[dict[str, Any]] = []
         rejected_for_trust: list[dict[str, Any]] = []
         rejected_for_policy: list[dict[str, Any]] = []
+        fetch_failed: list[dict[str, Any]] = []
         queue_item_ids: list[str] = []
+        tentative_hashes: dict[str, str] = {}
 
         for item in queue_items or []:
             queue_item_ids.append(str(item.get("queue_id") or ""))
@@ -1726,9 +1749,14 @@ class VaultLearningManager:
                     topic=topic or str(item.get("query") or ""),
                     pre_extracted_content=str(item.get("extracted_content") or ""),
                     queue_entry=item,
+                    tentative_hashes=tentative_hashes,
                 )
             except Exception as exc:
-                rejected_for_policy.append({"url": str(item.get("url") or ""), "reason": f"queue_ingest_error:{exc}"})
+                # Treat any exception here as a transient fetch/parse failure
+                # eligible for retry. The queue lease + `attempt_count` cap
+                # in `requeue_claimed_items` ensures poison pills eventually
+                # get marked `rejected` with `max_attempts_exceeded`.
+                fetch_failed.append({"url": str(item.get("url") or ""), "reason": f"fetch_error:{exc}"})
                 continue
             status = result.get("status")
             if status == "ingested":
@@ -1746,9 +1774,14 @@ class VaultLearningManager:
                 rejected_for_policy.append({"url": url, "reason": "domain_not_allowed"})
                 continue
             try:
-                result = self.reingest_if_changed(url=url, source=source, topic=topic)
+                result = self.reingest_if_changed(
+                    url=url,
+                    source=source,
+                    topic=topic,
+                    tentative_hashes=tentative_hashes,
+                )
             except Exception as exc:
-                rejected_for_policy.append({"url": url, "reason": f"fetch_error:{exc}"})
+                fetch_failed.append({"url": url, "reason": f"fetch_error:{exc}"})
                 continue
             status = result.get("status")
             if status == "ingested":
@@ -1758,29 +1791,50 @@ class VaultLearningManager:
             elif status == "rejected_for_trust":
                 rejected_for_trust.append(result)
 
+        # Compile must commit or roll back together with the tentative hash
+        # updates collected above. On failure we requeue claimed items *and*
+        # drop the tentative hashes so the next attempt re-runs the pipeline
+        # instead of short-circuiting on the dedupe check.
         try:
             compile_report = self.compile_incremental()
         except Exception:
+            tentative_hashes.clear()
             if queue_item_ids:
                 self.requeue_claimed_items(queue_item_ids, reason="compile_failed_retry")
             raise
+
+        # Compile succeeded — promote tentative hashes into the manifest.
+        for source_id, new_hash in tentative_hashes.items():
+            record = self._manifest["sources"].get(source_id)
+            if not isinstance(record, dict):
+                continue
+            committed = list(record.get("hash_history", []))
+            if not committed or committed[-1] != new_hash:
+                committed.append(new_hash)
+                record["hash_history"] = committed[-10:]
+                self._manifest["sources"][source_id] = record
 
         if queue_item_ids:
             ingested_ids = {item["url"] for item in ingested if item.get("url")}
             skipped_ids = {item["url"] for item in skipped_unchanged if item.get("url")}
             rejected_ids = {item["url"] for item in rejected_for_trust if item.get("url")}
             policy_rejected_ids = {item["url"] for item in rejected_for_policy if item.get("url")}
+            fetch_failed_ids = {item["url"] for item in fetch_failed if item.get("url")}
             queue_to_ingested = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in ingested_ids]
             queue_to_skipped = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in skipped_ids]
             queue_to_rejected = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in rejected_ids]
-            queue_to_failed = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in policy_rejected_ids]
+            queue_to_policy = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in policy_rejected_ids]
+            queue_to_retry = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in fetch_failed_ids]
             self._mark_queue_items(queue_to_ingested, status="ingested", reason="converted_to_vault_source")
             self._mark_queue_items(queue_to_skipped, status="ingested", reason="content_hash_unchanged")
             self._mark_queue_items(queue_to_rejected, status="rejected", reason="trust_score_below_threshold")
-            self._mark_queue_items(queue_to_failed, status="rejected", reason="policy_or_fetch_error")
+            self._mark_queue_items(queue_to_policy, status="rejected", reason="policy_violation")
+            # Transient errors go back to `queued` (or `rejected` with
+            # `max_attempts_exceeded` if attempt_count has hit the ceiling).
+            self.requeue_claimed_items(queue_to_retry, reason="fetch_failed_retry")
             # Final safety net: any queue_item with a known queue_id that didn't end up
             # in any of the buckets above must not be left in "claimed" state.
-            handled = set(queue_to_ingested) | set(queue_to_skipped) | set(queue_to_rejected) | set(queue_to_failed)
+            handled = set(queue_to_ingested) | set(queue_to_skipped) | set(queue_to_rejected) | set(queue_to_policy) | set(queue_to_retry)
             unhandled = [qid for qid in queue_item_ids if qid and qid not in handled]
             if unhandled:
                 self.requeue_claimed_items(unhandled, reason="unhandled_status_retry")
@@ -1793,10 +1847,12 @@ class VaultLearningManager:
             "skipped_unchanged_count": len(skipped_unchanged),
             "rejected_for_trust_count": len(rejected_for_trust),
             "rejected_for_policy_count": len(rejected_for_policy),
+            "fetch_failed_count": len(fetch_failed),
             "ingested": ingested,
             "skipped_unchanged": skipped_unchanged,
             "rejected_for_trust": rejected_for_trust,
             "rejected_for_policy": rejected_for_policy,
+            "fetch_failed": fetch_failed,
             "queue_items_claimed": len(queue_items or []),
             "vector_preflight": vector_preflight,
             "compile": compile_report,
