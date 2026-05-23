@@ -142,7 +142,6 @@ export interface Translations {
     demoChats: string;
     agents: string;
     pipelines: string;
-    approvals: string;
     vault: string;
     dreamy: string;
   };
@@ -179,7 +178,6 @@ export interface Translations {
     workspace: string;
     chats: string;
     pipelines: string;
-    approvals: string;
     vault: string;
   };
 
@@ -214,7 +212,6 @@ export interface Translations {
     newChat: string;
     untitled: string;
     pipelines: string;
-    approvals: string;
     vault: string;
   };
 

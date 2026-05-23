@@ -118,7 +118,6 @@ function nameOfSegment(
   if (segment === "workspace") return t.breadcrumb.workspace;
   if (segment === "chats") return t.breadcrumb.chats;
   if (segment === "pipelines") return t.breadcrumb.pipelines;
-  if (segment === "approvals") return t.breadcrumb.approvals;
   if (segment === "vault") return t.breadcrumb.vault;
   return segment[0]?.toUpperCase() + segment.slice(1);
 }

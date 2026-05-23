@@ -183,7 +183,6 @@ export const enUS: Translations = {
     demoChats: "Demo chats",
     agents: "Agents",
     pipelines: "Scheduled Pipeline",
-    approvals: "Approvals",
     vault: "Knowledge Vault",
     dreamy: "Dreamy",
   },
@@ -227,7 +226,6 @@ export const enUS: Translations = {
     workspace: "Workspace",
     chats: "Chats",
     pipelines: "Scheduled Pipeline",
-    approvals: "Approvals",
     vault: "Knowledge Vault",
   },
 
@@ -265,7 +263,6 @@ export const enUS: Translations = {
     newChat: "New chat",
     untitled: "Untitled",
     pipelines: "Scheduled Pipeline",
-    approvals: "Approvals",
     vault: "Knowledge Vault",
   },
 
