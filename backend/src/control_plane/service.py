@@ -1098,6 +1098,19 @@ class ControlPlaneService:
             if self._vault_explorer_cache and is_fresh and not force_refresh:
                 return dict(self._vault_explorer_cache.get("payload") or {})
 
+        # On manual refresh, also prune compiled artifacts that the manifest
+        # no longer references so the explorer/graph reflect actual state.
+        # Skip while an ingest is running — it may be mid-write with files
+        # that haven't yet been recorded to the manifest.
+        if force_refresh:
+            with self._vault_ingest_lock:
+                ingest_running = self._vault_ingest_job.get("status") == "running"
+            if not ingest_running:
+                try:
+                    manager.cleanup_orphan_compiled_files()
+                except Exception:
+                    logger.exception("vault_explorer_compiled_cleanup_failed")
+
         payload = self._build_vault_explorer_payload(manager)
         with self._vault_explorer_cache_lock:
             self._vault_explorer_cache = {
@@ -1322,6 +1335,21 @@ class ControlPlaneService:
                         )
                 except Exception:
                     logger_obj.exception("vault_ingest_orphan_requeue_failed job_id=%s", job_id)
+
+                # Phase 0b — prune compiled artifacts not reachable from the
+                # current manifest. Past manifest resets/migrations can leave
+                # the compiled directories holding files for sources that no
+                # longer exist, which inflates the knowledge graph and search.
+                try:
+                    cleanup_summary = manager.cleanup_orphan_compiled_files()
+                    if cleanup_summary.get("total"):
+                        logger_obj.info(
+                            "vault_ingest_compiled_cleanup job_id=%s summary=%s",
+                            job_id,
+                            cleanup_summary,
+                        )
+                except Exception:
+                    logger_obj.exception("vault_ingest_compiled_cleanup_failed job_id=%s", job_id)
 
                 # Phase 1 — drain queued search results directly. Approval gating
                 # has been removed; the UI's Run Ingest button is the trigger.

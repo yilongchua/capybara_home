@@ -1752,6 +1752,89 @@ class VaultLearningManager:
             },
         }
 
+    def cleanup_orphan_compiled_files(self) -> dict[str, int]:
+        """Delete compiled artifacts on disk that are unreachable from the current manifest.
+
+        Reachability rules:
+          - sources/{source_id}.md kept iff source_id is a key in manifest["sources"].
+          - concepts/{slug}.md and entities/{slug}.md kept iff some manifest source's
+            concept_refs / entity_refs slugifies to that filename stem.
+          - syntheses/{name}.md kept iff some manifest["topic_syntheses"] entry's path
+            ends with that filename.
+          - queries/{query_id}.md kept iff query_id is a key in manifest["queries"].
+
+        index.md files are never deleted. Returns counts of deleted files per category.
+        """
+        sources = self._manifest.get("sources", {}) or {}
+        kept_source_stems = {str(sid) for sid in sources.keys() if str(sid).strip()}
+
+        kept_concept_slugs: set[str] = set()
+        kept_entity_slugs: set[str] = set()
+        for record in sources.values():
+            if not isinstance(record, dict):
+                continue
+            for ref in record.get("concept_refs", []) or []:
+                slug = _slugify(str(ref))
+                if slug:
+                    kept_concept_slugs.add(slug)
+            for ref in record.get("entity_refs", []) or []:
+                slug = _slugify(str(ref))
+                if slug:
+                    kept_entity_slugs.add(slug)
+
+        kept_synthesis_stems: set[str] = set()
+        for entry in (self._manifest.get("topic_syntheses", {}) or {}).values():
+            if not isinstance(entry, dict):
+                continue
+            path_value = str(entry.get("path") or "")
+            if path_value:
+                kept_synthesis_stems.add(Path(path_value).stem)
+
+        kept_query_stems = {str(qid) for qid in (self._manifest.get("queries", {}) or {}).keys() if str(qid).strip()}
+
+        targets = (
+            (self.compiled_sources_dir, kept_source_stems, "sources"),
+            (self.compiled_concepts_dir, kept_concept_slugs, "concepts"),
+            (self.compiled_entities_dir, kept_entity_slugs, "entities"),
+            (self.compiled_syntheses_dir, kept_synthesis_stems, "syntheses"),
+            (self.compiled_queries_dir, kept_query_stems, "queries"),
+        )
+
+        deleted: dict[str, int] = {}
+        total = 0
+        for directory, kept_stems, label in targets:
+            removed = 0
+            if not directory.exists():
+                deleted[label] = 0
+                continue
+            for path in directory.glob("*.md"):
+                if path.name == "index.md":
+                    continue
+                if path.stem in kept_stems:
+                    continue
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    continue
+            deleted[label] = removed
+            total += removed
+
+        if total:
+            # Rewrite index pages so they reflect the post-cleanup directory contents.
+            for directory, title in (
+                (self.compiled_sources_dir, "Sources"),
+                (self.compiled_concepts_dir, "Concepts"),
+                (self.compiled_entities_dir, "Entities"),
+                (self.compiled_syntheses_dir, "Syntheses"),
+                (self.compiled_queries_dir, "Queries"),
+            ):
+                if directory.exists():
+                    (directory / "index.md").write_text(self._render_index_for_dir(title, directory), encoding="utf-8")
+
+        deleted["total"] = total
+        return deleted
+
     def _render_index_for_dir(self, title: str, directory: Path) -> str:
         lines = [f"# {title}", ""]
         for path in sorted(directory.glob("*.md")):
