@@ -161,6 +161,7 @@ class SubagentExecutor:
         thread_data: ThreadDataState | None = None,
         thread_id: str | None = None,
         trace_id: str | None = None,
+        enforce_permissions: bool = True,
     ):
         """Initialize the executor.
 
@@ -172,6 +173,10 @@ class SubagentExecutor:
             thread_data: Thread data from parent agent.
             thread_id: Thread ID for sandbox operations.
             trace_id: Trace ID from parent for distributed tracing.
+            enforce_permissions: When True (default), strip tools whose parent
+                permission decision is anything other than ``allow``. Set to
+                False for background subagents (no user to confirm with), e.g.
+                the autoresearch loop.
         """
         self.config = config
         self.parent_model = parent_model
@@ -187,7 +192,8 @@ class SubagentExecutor:
             config.tools,
             config.disallowed_tools,
         )
-        self.tools = _filter_tools_by_permission_policy(self.tools)
+        if enforce_permissions:
+            self.tools = _filter_tools_by_permission_policy(self.tools)
 
         # Recursive delegation is never allowed: a subagent must not have the
         # `task` tool.  Catch misconfiguration early with a hard error.

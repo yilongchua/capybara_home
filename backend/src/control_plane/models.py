@@ -70,6 +70,7 @@ class PipelineStepDefinition(BaseModel):
         "vault_lint",
         "synthesize_knowledge_graph",
         "vault_sufficiency_evaluate",
+        "autoresearch_loop_iteration",
     ]
     stop_on_error: bool = True
     config: dict[str, Any] = Field(default_factory=dict)
@@ -231,19 +232,17 @@ class AutoresearchObjective(BaseModel):
     status: Literal["active", "paused_denied", "completed_endpoint"] = "active"
     scheduler_job_id: str | None = None
     schedule_daily_time: str = "02:00"
-    template_id: str = "knowledge-vault-autoresearch"
+    template_id: str = "knowledge-vault-autoresearch-loop"
     source_thread_id: str | None = None
     latest_run_id: str | None = None
-    latest_sufficiency_score: float | None = None
-    latest_sufficiency_decision: str | None = None
-    latest_blocking_checks: list[str] = Field(default_factory=list)
-    latest_next_actions: list[str] = Field(default_factory=list)
-    recommended_tasks: list[str] = Field(default_factory=list)
-    recommended_queries: list[str] = Field(default_factory=list)
-    milestones: list[dict[str, Any]] = Field(default_factory=list)
+    loop_iteration: int = 0
+    last_novelty_rate: float | None = None
+    last_stop_reason: str | None = None
+    last_reflection: str | None = None
+    cluster_coverage: dict[str, int] = Field(default_factory=dict)
+    ledger_markdown_path: str | None = None
+    ledger_json_path: str | None = None
     pause_reason: str | None = None
-    progress_markdown_path: str | None = None
-    progress_json_path: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     model_config = ConfigDict(extra="allow")

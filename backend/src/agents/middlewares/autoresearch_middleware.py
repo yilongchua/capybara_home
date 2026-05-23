@@ -118,7 +118,7 @@ class AutoresearchMiddleware(AgentMiddleware[AgentState]):
         # Record as activity so the inactivity guard does not immediately pause the new job.
         service.record_workspace_activity(thread_id=thread_id, message=f"autoresearch - {topic}")
 
-        template_id = "knowledge-vault-autoresearch"
+        template_id = "knowledge-vault-autoresearch-loop"
         templates = {tmpl.id for tmpl in service.list_templates()}
         if template_id not in templates:
             message = (

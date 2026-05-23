@@ -480,15 +480,24 @@ async def start_vault_entity_autoresearch(
     )
 
 
-@router.get("/objectives/{objective_id}/progress.md", response_class=PlainTextResponse)
-async def get_autoresearch_progress_markdown(objective_id: str) -> PlainTextResponse:
+@router.get("/objectives/{objective_id}/ledger.md", response_class=PlainTextResponse)
+async def get_autoresearch_ledger_markdown(objective_id: str) -> PlainTextResponse:
     service = get_control_plane_service()
     try:
-        name, content = service.get_autoresearch_progress_markdown(objective_id)
+        name, content = service.get_autoresearch_ledger_markdown(objective_id)
         return PlainTextResponse(
             content=content,
             media_type="text/markdown",
             headers={"Content-Disposition": f'inline; filename="{name}"'},
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/objectives/{objective_id}/ledger.json")
+async def get_autoresearch_ledger_json(objective_id: str) -> dict[str, Any]:
+    service = get_control_plane_service()
+    try:
+        return service.get_autoresearch_ledger_json(objective_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

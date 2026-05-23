@@ -1,9 +1,9 @@
 "use client";
 
-import { MoreHorizontal, Pencil, Share2, Trash2 } from "lucide-react";
+import { MoreHorizontal, Pencil, Search, Share2, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ import {
 import { Input } from "@/components/ui/input";
 import {
   SidebarGroup,
+  SidebarGroupAction,
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarMenu,
@@ -61,6 +62,18 @@ export function RecentChatList() {
   const [renameThreadId, setRenameThreadId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [threadIdToDelete, setThreadIdToDelete] = useState<string | null>(null);
+
+  // Search/filter state
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredThreads = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return threads;
+    return threads.filter((thread) =>
+      titleOfThread(thread).toLowerCase().includes(query),
+    );
+  }, [threads, searchQuery]);
 
   const handleDelete = useCallback(
     (threadId: string) => {
@@ -176,10 +189,40 @@ export function RecentChatList() {
             ? t.sidebar.recentChats
             : t.sidebar.demoChats}
         </SidebarGroupLabel>
+        <SidebarGroupAction
+          aria-label={t.chats.searchChats}
+          title={t.chats.searchChats}
+          onClick={() => {
+            setSearchOpen((prev) => {
+              const next = !prev;
+              if (!next) setSearchQuery("");
+              return next;
+            });
+          }}
+        >
+          {searchOpen ? <X /> : <Search />}
+          <span className="sr-only">{t.chats.searchChats}</span>
+        </SidebarGroupAction>
         <SidebarGroupContent className="group-data-[collapsible=icon]:pointer-events-none group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0">
+          {searchOpen ? (
+            <div className="px-2 pb-2">
+              <Input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={t.chats.searchChats}
+                className="h-8 text-xs"
+                autoFocus
+              />
+            </div>
+          ) : null}
           <SidebarMenu>
             <div className="flex w-full flex-col gap-1">
-              {threads.map((thread) => {
+              {filteredThreads.length === 0 && searchQuery.trim() ? (
+                <p className="text-muted-foreground px-2 py-1 text-xs">
+                  No matching chats.
+                </p>
+              ) : null}
+              {filteredThreads.map((thread) => {
                 const threadPath = pathOfThreadRecord(thread);
                 const isActive = threadPath === pathname;
                 return (

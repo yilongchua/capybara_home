@@ -1,22 +1,159 @@
-1. **Continuous pipeline is effectively off right now.**  
-`gateway` startup shows scheduler did not start: [gateway.log:14](/Users/ryan_chua/Desktop/capybara-home/logs/gateway.log:14) (`Control-plane scheduler disabled; skipping start.`).  
-So daily autoresearch jobs will not run continuously even if objectives exist.
+# Autoresearch — Agentic Learning Loop
 
-2. **Current objective says `active`, but its runtime schedule is disabled.**  
-The objective is `active` at [state.json:2579](/Users/ryan_chua/Desktop/capybara-home/backend/.capybara-home/control-plane/state.json:2579), but its runtime job has `"enabled": false` at [state.json:2563](/Users/ryan_chua/Desktop/capybara-home/backend/.capybara-home/control-plane/state.json:2563).  
-This creates a “looks active but not actually running” state in the Knowledge Vault tab.
+Autoresearch is a continuous, self-driving knowledge accumulation system. Users
+declare a broad **topic** and **objective**; Capybara Home then anticipates the
+questions a curious human would ask about that topic and pre-fills the vault
+before the user ever searches.
 
-3. **Template/state migration bug: persisted templates are stale.**  
-Seeder only inserts templates if missing and never updates existing ones ([service.py:101](/Users/ryan_chua/Desktop/capybara-home/backend/src/control_plane/service.py:101)-[109](/Users/ryan_chua/Desktop/capybara-home/backend/src/control_plane/service.py:109)).  
-Your persisted `knowledge-vault-autoresearch` template only has discover/ingest/compile/lint ([state.json:71](/Users/ryan_chua/Desktop/capybara-home/backend/.capybara-home/control-plane/state.json:71)-[113](/Users/ryan_chua/Desktop/capybara-home/backend/.capybara-home/control-plane/state.json:113)), while code now defines extra steps (graph synthesis + sufficiency). This can prevent progress logic from ever being reached.
+## Mental model
 
-4. **Progress is hardcoded to 0% in both backend ledger and frontend UI.**  
-Backend writes `"progress_percent": 0.0` and markdown `0% (default)` unconditionally at [autoresearch_agent.py:490](/Users/ryan_chua/Desktop/capybara-home/backend/src/control_plane/agents/autoresearch_agent.py:490) and [autoresearch_agent.py:526](/Users/ryan_chua/Desktop/capybara-home/backend/src/control_plane/agents/autoresearch_agent.py:526).  
-Frontend also hardcodes `0% (default)` at [page.tsx:170](/Users/ryan_chua/Desktop/capybara-home/frontend/src/app/workspace/vault/page.tsx:170).  
-So the “current task” appears stuck even after successful runs.
+> **Autoresearch is a vault warmer, not a research pipeline.**
+> The unit of work is a *question*, not a *source*. "Done" means
+> *novelty has decayed* — the system can no longer produce useful new
+> questions — not *some sufficiency score crossed a threshold*.
 
-5. **Queue approval pipeline has a step-definition mismatch bug (already seen in persisted failed run).**  
-`start_run` fails when a step exists but definition is missing ([service.py:995](/Users/ryan_chua/Desktop/capybara-home/backend/src/control_plane/service.py:995)-[1005](/Users/ryan_chua/Desktop/capybara-home/backend/src/control_plane/service.py:1005)).  
-In persisted run `run_9ee44d38ed1c`, step `queue-lint` failed with `"Step definition not found."` at [state.json:304](/Users/ryan_chua/Desktop/capybara-home/backend/.capybara-home/control-plane/state.json:304)-[310](/Users/ryan_chua/Desktop/capybara-home/backend/.capybara-home/control-plane/state.json:310), while metadata only had `queue-ingest` + `queue-compile` definitions ([state.json:332](/Users/ryan_chua/Desktop/capybara-home/backend/.capybara-home/control-plane/state.json:332)-[344](/Users/ryan_chua/Desktop/capybara-home/backend/.capybara-home/control-plane/state.json:344)).  
-This is consistent with update logic mutating step definitions without reconciling existing run steps ([service.py:1357](/Users/ryan_chua/Desktop/capybara-home/backend/src/control_plane/service.py:1357)-[1386](/Users/ryan_chua/Desktop/capybara-home/backend/src/control_plane/service.py:1386)).
+## One iteration
 
+```
+load ledger + taxonomy + coverage
+        │
+        ▼
+┌────────────────────────────────┐
+│ Generator (LLM call 1)         │  proposes N sub-questions
+└────────────────────────────────┘    across uncovered clusters
+        │
+        ▼
+┌────────────────────────────────┐
+│ Dedup                          │  Jaccard vs. ledger + vault search
+└────────────────────────────────┘    duplicates collapse, novel survive
+        │
+        ▼
+┌────────────────────────────────┐
+│ vault-source-researcher        │  one subagent per surviving question
+│ (subagent fanout, sequential)  │    saves a vault entry via
+└────────────────────────────────┘    save_to_knowledge_vault
+        │
+        ▼
+┌────────────────────────────────┐
+│ Reflector (LLM call 2)         │  reads new answers → emits follow-ups
+└────────────────────────────────┘
+        │
+        ▼
+ledger updated · novelty rate computed · stop signalled if saturated
+```
+
+One scheduled run = one iteration. The scheduler tick fires the pipeline
+template `knowledge-vault-autoresearch-loop` (one step, kind
+`autoresearch_loop_iteration`), which calls
+`src/control_plane/autoresearch_loop/loop.py:run_one_iteration`.
+
+## Question taxonomy
+
+12 clusters × 3 depth levels. The generator is asked to fill **breadth**
+(empty clusters at L1) before drilling **depth** (L2, then L3).
+
+Stored at `{vault_root}/00_schema/QUESTION_TAXONOMY.json` and seeded from
+`src/control_plane/autoresearch_loop/taxonomy.py:DEFAULT_TAXONOMY` on first
+vault initialisation. Users can edit the JSON file directly to add, remove,
+or rename clusters — `load_taxonomy()` falls back to the defaults if the
+file is malformed.
+
+The clusters are:
+
+| ID | Cluster | Lens |
+|----|---------|------|
+| 1 | Definition & Identity | What X is and how it is bounded |
+| 2 | Composition & Structure | What X is made of |
+| 3 | Process & Method | How X is made / done / used |
+| 4 | Origin & History | Where X came from |
+| 5 | Geography & Location | Where X is found or practiced |
+| 6 | Quality & Evaluation | How to tell good X from bad X |
+| 7 | Comparison & Contrast | How X relates to neighbours |
+| 8 | Practical Application | Real-world uses |
+| 9 | Risks & Pitfalls | What can go wrong |
+| 10 | Cultural & Social Context | How X fits into people's lives |
+| 11 | Tools & Resources | What you need |
+| 12 | People & Authorities | Who knows about X |
+
+## Question ledger
+
+The ledger lives at `{vault_root}/03_ops/autoresearch/objectives/{slug}/`:
+- `ledger.json` — structured nodes (TodoNode-shaped: id, content, status,
+  depends_on, cluster, level, asked_by, novelty, loop_iteration,
+  vault_entries, duplicate_of, researcher_summary)
+- `ledger.md` — human-readable mirror with iteration summaries and
+  cluster-coverage hint
+
+Statuses: `pending`, `in_progress`, `answered`, `duplicate`, `rejected`,
+`blocked`.
+
+## Stop criteria
+
+Single signal: **novelty decay**.
+
+```
+novelty_rate = (1 − duplicate_fraction) over last N generator-emitted questions
+stop if (1 − novelty_rate) >= novelty_decay_threshold
+```
+
+Defaults (`config.yaml` → `knowledge_vault`):
+- `autoresearch_novelty_decay_threshold: 0.7`
+- `autoresearch_novelty_window: 10`
+- `autoresearch_max_questions_per_iteration: 8`
+- `autoresearch_max_researcher_fanout: 3`
+- `autoresearch_dedup_similarity_threshold: 0.85`
+
+The objective is only eligible to stop after `autoresearch_novelty_window`
+generator questions exist — earlier iterations always continue.
+
+## Lifecycle
+
+1. **Start** — `service.start_autoresearch_objective(topic, endpoint_goal, …)`
+   creates an `AutoresearchObjective`, fires a bootstrap run.
+2. **Bootstrap completes** — `update_after_run` reads `iteration_summary` from
+   the step output, creates the daily scheduler job (default 02:00 UTC).
+3. **Daily iteration** — scheduler fires the loop template, one iteration runs.
+4. **Stop** — when `iteration_summary.stop == True`, the orchestrator flips
+   status to `completed_endpoint` and disables the scheduler job.
+5. **Pause / Resume / Delete** — user actions toggle the scheduler job and
+   objective status; delete cascades vault purge.
+
+## Key files
+
+| Path | Purpose |
+|------|---------|
+| `src/control_plane/autoresearch_loop/loop.py` | One-iteration driver |
+| `src/control_plane/autoresearch_loop/generator.py` | LLM call 1: propose questions |
+| `src/control_plane/autoresearch_loop/dedup.py` | Jaccard + vault search dedup |
+| `src/control_plane/autoresearch_loop/researcher.py` | Dispatch to `vault-source-researcher` |
+| `src/control_plane/autoresearch_loop/reflector.py` | LLM call 2: propose follow-ups |
+| `src/control_plane/autoresearch_loop/stop_criteria.py` | Novelty-decay stop |
+| `src/control_plane/autoresearch_loop/ledger.py` | Question ledger persistence |
+| `src/control_plane/autoresearch_loop/taxonomy.py` | 12-cluster taxonomy loader |
+| `src/control_plane/agents/autoresearch_agent.py` | Objective lifecycle owner |
+| `src/subagents/builtins/vault_source_researcher.py` | Subagent that writes to vault |
+
+## Configuration knobs (`KnowledgeVaultConfig`)
+
+| Field | Default | Purpose |
+|-------|--------:|---------|
+| `autoresearch_max_questions_per_iteration` | 8 | Generator cap |
+| `autoresearch_max_researcher_fanout` | 3 | Concurrent researchers per iteration (currently serial) |
+| `autoresearch_novelty_decay_threshold` | 0.7 | Duplicate fraction that triggers stop |
+| `autoresearch_novelty_window` | 10 | Recent-question window for novelty rate |
+| `autoresearch_dedup_similarity_threshold` | 0.85 | Jaccard cutoff for duplicates |
+| `autoresearch_objective_similarity_threshold` | 0.35 | Anti-drift floor (reserved) |
+| `cot_model` | `""` | Optional override model for the generator + reflector LLM calls |
+
+## Migration from the legacy template
+
+The old template-based pipeline
+(`knowledge-vault-autoresearch` with discover/ingest/compile/lint/synthesize/
+sufficiency steps) and the sufficiency-based completion logic have been
+removed. On first startup after upgrade, the control plane purges:
+- Any `AutoresearchObjective` still pinned to the old template id.
+- Any scheduler jobs that point at the old template id.
+- The legacy template definition itself.
+
+There is no opt-in path; users restart their objectives with `/autoresearch`
+or via the Knowledge Vault tab.

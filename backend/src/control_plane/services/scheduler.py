@@ -326,7 +326,15 @@ class SchedulerService:
                     metadata={"scheduler_job_id": job.id},
                 )
                 if not run.requires_approval:
-                    run = self._cps.start_run(run.id)
+                    # Autoresearch iterations can take 10+ minutes; running
+                    # them synchronously inside the scheduler tick (which
+                    # itself runs on the asyncio event loop) would block every
+                    # other HTTP request and scheduled job. Offload to a
+                    # daemon thread; other templates remain synchronous.
+                    if job.pipeline_template_id == "knowledge-vault-autoresearch-loop":
+                        run = self._cps.start_run_in_background(run.id)
+                    else:
+                        run = self._cps.start_run(run.id)
                 status = run.status
             except Exception as exc:
                 status = f"error: {exc}"
@@ -360,7 +368,7 @@ class SchedulerService:
             raise ValueError(f"Unknown scheduler job: {job_id}")
         if not job.enabled:
             runtime_job = self.jobs_from_runtime().get(job_id)
-            if runtime_job is not None and runtime_job.pipeline_template_id == "knowledge-vault-autoresearch":
+            if runtime_job is not None and runtime_job.pipeline_template_id == "knowledge-vault-autoresearch-loop":
                 self.set_runtime_scheduler_job_enabled(
                     job_id,
                     enabled=True,
@@ -390,7 +398,13 @@ class SchedulerService:
             metadata={"scheduler_job_id": job.id, "manual_trigger": True},
         )
         if not run.requires_approval:
-            run = self._cps.start_run(run.id)
+            # Same async path as the scheduler tick for autoresearch — see
+            # comment in run_scheduler_tick. Manual triggers go through the
+            # HTTP request handler, which we cannot block for 10+ minutes.
+            if job.pipeline_template_id == "knowledge-vault-autoresearch-loop":
+                run = self._cps.start_run_in_background(run.id)
+            else:
+                run = self._cps.start_run(run.id)
 
         def update_state(snapshot):
             state = snapshot.scheduler_jobs.get(job_id) or SchedulerJobState(id=job_id)

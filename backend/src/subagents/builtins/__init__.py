@@ -6,6 +6,7 @@ from .docs_explorer import DOCS_EXPLORER_CONFIG
 from .general_purpose import GENERAL_PURPOSE_CONFIG
 from .source_researcher import SOURCE_RESEARCHER_CONFIG
 from .synthesis_reviewer import SYNTHESIS_REVIEWER_CONFIG
+from .vault_source_researcher import VAULT_SOURCE_RESEARCHER_CONFIG
 
 __all__ = [
     "GENERAL_PURPOSE_CONFIG",
@@ -14,6 +15,7 @@ __all__ = [
     "DOCS_EXPLORER_CONFIG",
     "COMPARISON_DIMENSION_RESEARCHER_CONFIG",
     "SYNTHESIS_REVIEWER_CONFIG",
+    "VAULT_SOURCE_RESEARCHER_CONFIG",
 ]
 
 # Registry of built-in subagents
@@ -24,4 +26,5 @@ BUILTIN_SUBAGENTS = {
     "docs-explorer": DOCS_EXPLORER_CONFIG,
     "comparison-dimension-researcher": COMPARISON_DIMENSION_RESEARCHER_CONFIG,
     "synthesis-reviewer": SYNTHESIS_REVIEWER_CONFIG,
+    "vault-source-researcher": VAULT_SOURCE_RESEARCHER_CONFIG,
 }

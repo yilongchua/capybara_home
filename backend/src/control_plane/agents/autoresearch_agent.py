@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import json
+import logging
 import re
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.control_plane.models import AutoresearchObjective, PipelineRun, SchedulerJobState, utcnow
@@ -10,15 +9,25 @@ from src.control_plane.models import AutoresearchObjective, PipelineRun, Schedul
 if TYPE_CHECKING:
     from src.control_plane.service import ControlPlaneService
 
+logger = logging.getLogger(__name__)
+
 
 class AutoresearchOrchestratorAgent:
-    """Owns autoresearch objective lifecycle and continuous scheduling orchestration."""
+    """Lifecycle owner for autoresearch objectives.
 
-    template_id = "knowledge-vault-autoresearch"
+    Each objective is backed by a single-step pipeline template
+    (``knowledge-vault-autoresearch-loop``). One scheduled run = one
+    iteration of the agentic loop (generate → dedup → research → reflect).
+    Per-iteration results land in a question ledger inside the vault.
+    """
+
+    template_id = "knowledge-vault-autoresearch-loop"
     default_daily_time = "02:00"
 
     def __init__(self, service: ControlPlaneService) -> None:
         self._service = service
+
+    # --------------------------------------------------------------- start
 
     def start_objective(
         self,
@@ -59,13 +68,6 @@ class AutoresearchOrchestratorAgent:
                 status="active",
                 scheduler_job_id=None,
                 source_thread_id=thread_id,
-                milestones=[
-                    {
-                        "at": utcnow(),
-                        "event": "objective_started",
-                        "detail": "Objective created and first Pro run queued.",
-                    }
-                ],
             )
 
             def mutate(snapshot):
@@ -94,17 +96,8 @@ class AutoresearchOrchestratorAgent:
                 current.status = "active"
                 current.pause_reason = None
                 current.updated_at = utcnow()
-                current.milestones.append(
-                    {
-                        "at": utcnow(),
-                        "event": "objective_restarted",
-                        "detail": "Objective resumed via start trigger.",
-                    }
-                )
 
             self._service._store.mutate(mutate)
-
-        self._write_progress_ledger(self.get_objective(effective_objective_id))
 
         run = None
         if bootstrap:
@@ -112,33 +105,33 @@ class AutoresearchOrchestratorAgent:
                 template_id=self.template_id,
                 inputs={
                     "autoresearch_topic": normalized_topic,
-                    "urls": [],
                     "objective_id": effective_objective_id,
                     "endpoint_goal": normalized_endpoint_goal,
                 },
                 requires_approval=False,
-                summary=summary or f"Autoresearch first run: {normalized_topic}",
+                summary=summary or f"Autoresearch first iteration: {normalized_topic}",
                 metadata={
                     "manual_trigger": True,
                     "source_thread_id": thread_id,
                     "objective_id": effective_objective_id,
                     "autoresearch_continuous": True,
                     "first_run_for_objective": True,
-                    "forced_plan_mode": True,
-                    "runtime_mode": "plan",
-                    "subagents_enabled": True,
                 },
             )
             if not run.requires_approval:
-                run = self._service.start_run(run.id)
+                # The loop iteration takes many minutes — never block the HTTP
+                # caller (or the asyncio event loop) waiting for it. The run
+                # status will progress in the background; the frontend polls.
+                run = self._service.start_run_in_background(run.id)
 
         objective = self.get_objective(effective_objective_id)
-        self._write_progress_ledger(objective)
         return {
             "objective": objective,
             "bootstrap_run": run,
             "scheduled_time": effective_time,
         }
+
+    # ---------------------------------------------------------- pause/resume
 
     def pause_objective(self, *, objective_id: str, reason: str = "denied") -> AutoresearchObjective:
         objective = self.get_objective(objective_id)
@@ -154,18 +147,9 @@ class AutoresearchOrchestratorAgent:
             current.status = "paused_denied"
             current.pause_reason = reason
             current.updated_at = utcnow()
-            current.milestones.append(
-                {
-                    "at": utcnow(),
-                    "event": "objective_paused",
-                    "detail": reason,
-                }
-            )
 
         self._service._store.mutate(mutate)
-        updated = self.get_objective(objective_id)
-        self._write_progress_ledger(updated)
-        return updated
+        return self.get_objective(objective_id)
 
     def resume_objective(self, *, objective_id: str) -> AutoresearchObjective:
         objective = self.get_objective(objective_id)
@@ -181,18 +165,11 @@ class AutoresearchOrchestratorAgent:
             current.status = "active"
             current.pause_reason = None
             current.updated_at = utcnow()
-            current.milestones.append(
-                {
-                    "at": utcnow(),
-                    "event": "objective_resumed",
-                    "detail": "Resumed by user.",
-                }
-            )
 
         self._service._store.mutate(mutate)
-        updated = self.get_objective(objective_id)
-        self._write_progress_ledger(updated)
-        return updated
+        return self.get_objective(objective_id)
+
+    # ----------------------------------------------------------------- crud
 
     def delete_objective(self, *, objective_id: str) -> dict[str, Any]:
         objective = self.get_objective(objective_id)
@@ -254,7 +231,15 @@ class AutoresearchOrchestratorAgent:
             reverse=True,
         )
 
+    # -------------------------------------------------------- run lifecycle
+
     def update_after_run(self, *, run: PipelineRun) -> None:
+        """Called by ControlPlaneService after each pipeline run finalises.
+
+        Reads the loop-iteration summary from the step output and writes it
+        into the objective. Also creates the daily scheduler job on the very
+        first successful run.
+        """
         objective_id = str(run.metadata.get("objective_id") or run.inputs.get("objective_id") or "").strip()
         if not objective_id:
             return
@@ -262,7 +247,15 @@ class AutoresearchOrchestratorAgent:
         if match is None:
             return
 
-        recommended_tasks, recommended_queries = self._derive_recommendations(run=run, objective=match)
+        # Extract the loop summary from the (single) step output.
+        iteration_summary: dict[str, Any] = {}
+        for step in run.steps:
+            output = step.output if isinstance(step.output, dict) else {}
+            payload = output.get("iteration_summary")
+            if isinstance(payload, dict):
+                iteration_summary = payload
+                break
+
         schedule_job_id = None
         if bool(run.metadata.get("first_run_for_objective")) and run.status == "completed":
             schedule_job_id = self._upsert_daily_schedule(
@@ -272,105 +265,50 @@ class AutoresearchOrchestratorAgent:
                 daily_time=match.schedule_daily_time or self.default_daily_time,
             )
 
-        self._update_objective_from_run(
-            objective_id,
-            run=run,
-            recommended_tasks=recommended_tasks,
-            recommended_queries=recommended_queries,
-            scheduler_job_id=schedule_job_id,
-        )
-        self._write_progress_ledger(self.get_objective(objective_id))
-
-    def update_after_sufficiency(self, *, run: PipelineRun, report: dict[str, Any]) -> None:
-        objective_id = str(
-            report.get("objective_id")
-            or run.metadata.get("objective_id")
-            or run.inputs.get("objective_id")
-            or ""
-        ).strip()
-        if not objective_id:
-            return
-        objective = self._get_objective_internal(objective_id)
-        if objective is None:
-            return
-
-        decision = str(report.get("decision") or "").strip()
-        score_raw = report.get("score")
-        score = float(score_raw) if isinstance(score_raw, (int, float, str)) and str(score_raw).strip() else None
-        blocking = [str(item) for item in report.get("blocking_checks") or [] if str(item).strip()]
-        next_actions = [str(item) for item in report.get("recommended_actions") or [] if str(item).strip()]
-
-        should_complete = bool(decision.lower() == "sufficient" and not blocking)
+        stop_requested = bool(iteration_summary.get("stop"))
+        stop_reason = str(iteration_summary.get("stop_reason") or "")
 
         def mutate(snapshot):
-            current = snapshot.autoresearch_objectives[objective.id]
-            current.latest_sufficiency_decision = decision or None
-            current.latest_sufficiency_score = score
-            current.latest_blocking_checks = blocking
-            current.latest_next_actions = next_actions
+            current = snapshot.autoresearch_objectives.get(match.id)
+            if current is None:
+                return
+            current.latest_run_id = run.id
             current.updated_at = utcnow()
-            if should_complete:
+            if iteration_summary:
+                # Monotonic in iteration count — guard against any race in which
+                # an older run's late-arriving summary would otherwise decrement it.
+                summary_iteration = int(iteration_summary.get("iteration") or 0)
+                current.loop_iteration = max(int(current.loop_iteration or 0), summary_iteration)
+                current.last_novelty_rate = float(iteration_summary.get("novelty_rate") or 0.0)
+                current.last_stop_reason = stop_reason or None
+                current.last_reflection = str(iteration_summary.get("reflection") or "") or None
+                coverage = iteration_summary.get("cluster_coverage")
+                if isinstance(coverage, dict):
+                    # Pydantic field is dict[str, int]; the loop already stringifies keys.
+                    current.cluster_coverage = {str(k): int(v) for k, v in coverage.items()}
+                ledger_path = iteration_summary.get("ledger_path")
+                if ledger_path:
+                    current.ledger_markdown_path = str(ledger_path)
+                    current.ledger_json_path = str(ledger_path).replace("ledger.md", "ledger.json")
+            if schedule_job_id:
+                current.scheduler_job_id = schedule_job_id
+            if stop_requested:
                 current.status = "completed_endpoint"
-                current.pause_reason = "endpoint_reached"
-                current.milestones.append(
-                    {
-                        "at": utcnow(),
-                        "event": "objective_completed_endpoint",
-                        "detail": f"Sufficiency reached with decision={decision} and no blockers.",
-                    }
-                )
+                current.pause_reason = stop_reason or "novelty_decay"
 
         self._service._store.mutate(mutate)
 
-        if should_complete and objective.scheduler_job_id:
-            self._service.set_runtime_scheduler_job_enabled(
-                objective.scheduler_job_id,
-                enabled=False,
-                reason="endpoint_reached",
-            )
+        if stop_requested and match.scheduler_job_id:
+            try:
+                self._service.set_runtime_scheduler_job_enabled(
+                    match.scheduler_job_id,
+                    enabled=False,
+                    reason=stop_reason or "novelty_decay",
+                )
+            except Exception:
+                logger.exception("Failed to disable scheduler job after stop signal: %s", match.scheduler_job_id)
 
-        self._write_progress_ledger(self.get_objective(objective_id))
-
-    def _derive_recommendations(
-        self,
-        *,
-        run: PipelineRun,
-        objective: AutoresearchObjective,
-    ) -> tuple[list[str], list[str]]:
-        tasks: list[str] = []
-        queries: list[str] = []
-        for step in run.steps:
-            output = step.output if isinstance(step.output, dict) else {}
-            report = output.get("report")
-            if not isinstance(report, dict):
-                continue
-            for candidate in report.get("recommended_actions") or []:
-                text = str(candidate).strip()
-                if text and text not in tasks:
-                    tasks.append(text)
-            for candidate in report.get("next_queries") or []:
-                text = str(candidate).strip()
-                if text and text not in queries:
-                    queries.append(text)
-
-        if not tasks:
-            tasks.extend(
-                [
-                    "Review newly ingested sources and extract unanswered sub-questions.",
-                    "Refine graph entities/relations tied to the endpoint goal.",
-                ]
-            )
-        if not queries:
-            topic = objective.topic.strip()
-            endpoint = objective.endpoint_goal.strip()
-            queries.extend(
-                [
-                    f"{topic} latest updates relevant to: {endpoint}",
-                    f"{topic} official guidance and primary-source evidence",
-                    f"{topic} risks, blockers, and unresolved questions",
-                ]
-            )
-        return tasks[:10], queries[:10]
+    # -------------------------------------------------------- scheduler ops
 
     def _upsert_daily_schedule(
         self,
@@ -395,7 +333,7 @@ class AutoresearchOrchestratorAgent:
 
         if not matches:
             created = self._service.create_runtime_scheduler_job(
-                name=f"Autoresearch Daily 02:00 - {normalized_topic[:36]}",
+                name=f"Autoresearch Daily {effective_time} - {normalized_topic[:36]}",
                 pipeline_template_id=self.template_id,
                 daily_time=effective_time,
                 enabled=True,
@@ -404,7 +342,6 @@ class AutoresearchOrchestratorAgent:
                     "autoresearch_topic": normalized_topic,
                     "objective_id": objective.objective_id,
                     "endpoint_goal": normalized_endpoint_goal,
-                    "urls": [],
                 },
             )
 
@@ -415,13 +352,6 @@ class AutoresearchOrchestratorAgent:
                 current.scheduler_job_id = created.id
                 current.schedule_daily_time = effective_time
                 current.updated_at = utcnow()
-                current.milestones.append(
-                    {
-                        "at": utcnow(),
-                        "event": "schedule_created",
-                        "detail": f"Created daily schedule {created.id} at {effective_time}.",
-                    }
-                )
 
             self._service._store.mutate(mutate)
             return created.id
@@ -441,7 +371,7 @@ class AutoresearchOrchestratorAgent:
             job = snapshot.runtime_scheduler_jobs.get(primary.id)
             if job is None:
                 return
-            job.name = f"Autoresearch Daily 02:00 - {normalized_topic[:36]}"
+            job.name = f"Autoresearch Daily {effective_time} - {normalized_topic[:36]}"
             job.daily_time = effective_time
             job.enabled = True
             job.inputs = {
@@ -449,7 +379,6 @@ class AutoresearchOrchestratorAgent:
                 "autoresearch_topic": normalized_topic,
                 "objective_id": objective.objective_id,
                 "endpoint_goal": normalized_endpoint_goal,
-                "urls": [],
             }
             state = snapshot.scheduler_jobs.get(job.id)
             if state is None:
@@ -471,37 +400,7 @@ class AutoresearchOrchestratorAgent:
         self._service._store.mutate(mutate)
         return primary.id
 
-    def _update_objective_from_run(
-        self,
-        objective_id: str,
-        *,
-        run: PipelineRun,
-        recommended_tasks: list[str] | None = None,
-        recommended_queries: list[str] | None = None,
-        scheduler_job_id: str | None = None,
-    ) -> None:
-        def mutate(snapshot):
-            objective = self._lookup(snapshot=snapshot, objective_id=objective_id)
-            if objective is None:
-                return
-            objective.latest_run_id = run.id
-            objective.updated_at = utcnow()
-            if recommended_tasks is not None:
-                objective.recommended_tasks = recommended_tasks
-                objective.latest_next_actions = recommended_tasks
-            if recommended_queries is not None:
-                objective.recommended_queries = recommended_queries
-            if scheduler_job_id:
-                objective.scheduler_job_id = scheduler_job_id
-            objective.milestones.append(
-                {
-                    "at": utcnow(),
-                    "event": "run_executed",
-                    "detail": f"Run {run.id} finished with status={run.status}",
-                }
-            )
-
-        self._service._store.mutate(mutate)
+    # ----------------------------------------------------------------- util
 
     def _get_objective_internal(self, objective_id: str) -> AutoresearchObjective | None:
         snapshot = self._service._store.read()
@@ -515,122 +414,6 @@ class AutoresearchOrchestratorAgent:
             if entry.objective_id == normalized or entry.id == normalized:
                 return entry
         return None
-
-    def _progress_paths(self, objective: AutoresearchObjective) -> tuple[Path, Path]:
-        manager = self._service._default_vault_manager()
-        root = manager.ops_dir / "autoresearch" / "objectives"
-        topic_slug = re.sub(r"[^a-zA-Z0-9]+", "-", objective.objective_id.strip().lower()).strip("-") or "objective"
-        objective_dir = root / topic_slug
-        objective_dir.mkdir(parents=True, exist_ok=True)
-        return (objective_dir / "progress.md", objective_dir / "progress.json")
-
-    def _write_progress_ledger(self, objective: AutoresearchObjective) -> None:
-        manager = self._service._default_vault_manager()
-        root = manager.ops_dir / "autoresearch" / "objectives"
-        topic_slug = re.sub(r"[^a-zA-Z0-9]+", "-", objective.objective_id.strip().lower()).strip("-") or "objective"
-        objective_dir = root / topic_slug
-        objective_dir.mkdir(parents=True, exist_ok=True)
-        md_path = objective_dir / "progress.md"
-        json_path = objective_dir / "progress.json"
-        coverage = manager.get_coverage_progress(objective_id=objective.objective_id)
-        progress_percent = round(float(coverage.get("percent") or 0.0), 1)
-        payload = {
-            "id": objective.id,
-            "objective_id": objective.objective_id,
-            "topic": objective.topic,
-            "endpoint_goal": objective.endpoint_goal,
-            "status": objective.status,
-            "progress_percent": progress_percent,
-            "endpoint_policy": "manual_stop_or_progress_or_no_more_action_items",
-            "scheduler_job_id": objective.scheduler_job_id,
-            "schedule_daily_time": objective.schedule_daily_time,
-            "template_id": objective.template_id,
-            "source_thread_id": objective.source_thread_id,
-            "latest_run_id": objective.latest_run_id,
-            "latest_sufficiency_score": objective.latest_sufficiency_score,
-            "latest_sufficiency_decision": objective.latest_sufficiency_decision,
-            "latest_blocking_checks": objective.latest_blocking_checks,
-            "latest_next_actions": objective.latest_next_actions,
-            "recommended_tasks": objective.recommended_tasks,
-            "recommended_queries": objective.recommended_queries,
-            "pause_reason": objective.pause_reason,
-            "created_at": objective.created_at.isoformat(),
-            "updated_at": objective.updated_at.isoformat(),
-            "milestones": objective.milestones,
-        }
-        json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-        lines = [
-            f"# Autoresearch Objective: {objective.topic}",
-            "",
-            "## Detailed Objective",
-            f"- Objective ID: `{objective.objective_id}`",
-            f"- Topic: `{objective.topic}`",
-            f"- Endpoint Goal: `{objective.endpoint_goal}`",
-            f"- Tracking Status: `{objective.status}`",
-            "",
-            "## Endpoint",
-            f"- Completion target: `{objective.endpoint_goal}`",
-            "- Stop only when one of the following is true:",
-            "  - manual user stop",
-            "  - progress completed",
-            "  - no more action items",
-            "",
-            "## Progress",
-            f"- Percent: `{progress_percent:.1f}%`",
-            f"- Last Updated: `{objective.updated_at.isoformat()}`",
-            "",
-            "## Structure",
-            f"- Objective folder: `{md_path.parent}`",
-            f"- Markdown tracker: `{md_path}`",
-            f"- JSON tracker: `{json_path}`",
-            f"- Suggested raw memory folder: `knowledge_vault/01_raw/{objective.objective_id}/`",
-            "",
-            "## UI Tracking",
-            "- Primary control surface: `Knowledge Vault` objective card (`knowledge_vault card`).",
-            "- Card freshness tag format: `Updated <relative-time>` (example: `Updated 15 minutes ago`).",
-            "",
-            "## Schedule Metadata",
-            f"- Daily schedule time: `{objective.schedule_daily_time}`",
-            f"- Scheduler job: `{objective.scheduler_job_id or '-'}`",
-            "",
-            "## Runtime Metadata",
-            f"- Latest run: `{objective.latest_run_id or '-'}`",
-            f"- Pause reason: `{objective.pause_reason or '-'}`",
-            "",
-            "## Next Steps",
-        ]
-        if objective.recommended_tasks:
-            lines.extend(f"- {item}" for item in objective.recommended_tasks)
-        else:
-            lines.append("- Continue scheduled research cycles.")
-
-        lines.extend(["", "## Next Queries"])
-        if objective.recommended_queries:
-            lines.extend(f"- {item}" for item in objective.recommended_queries)
-        else:
-            lines.append("- No next queries captured yet.")
-
-        lines.extend(["", "## Milestones"])
-        if objective.milestones:
-            for milestone in objective.milestones[-20:]:
-                at = str(milestone.get("at") or "-")
-                event = str(milestone.get("event") or "event")
-                detail = str(milestone.get("detail") or "")
-                lines.append(f"- {at}: `{event}` {detail}".rstrip())
-        else:
-            lines.append("- No milestones recorded yet.")
-
-        md_path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
-
-        def mutate(snapshot):
-            current = snapshot.autoresearch_objectives.get(objective.id)
-            if current is None:
-                return
-            current.progress_markdown_path = str(md_path)
-            current.progress_json_path = str(json_path)
-            current.updated_at = utcnow()
-
-        self._service._store.mutate(mutate)
 
     def _objective_id(self, topic: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9]+", "-", topic.strip().lower()).strip("-")

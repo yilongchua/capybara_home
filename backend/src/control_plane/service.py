@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -113,8 +114,35 @@ class ControlPlaneService:
     def _seed_from_config(self) -> None:
         config = get_app_config()
         builtin_templates = self._templates.builtin_templates()
+        builtin_template_ids = {t.id for t in builtin_templates}
+        legacy_objective_ids: list[str] = []
 
         def seed(snapshot):
+            # One-shot autoresearch migration: the old template-based pipeline
+            # is gone. Drop any objectives still pinned to it, their scheduler
+            # jobs, and the legacy template definition itself. Vault directory
+            # cleanup happens *outside* this mutate() block (purge_objective
+            # writes to the filesystem and can't safely run under the store lock).
+            legacy_template_id = "knowledge-vault-autoresearch"
+            for entry_id, objective in list(snapshot.autoresearch_objectives.items()):
+                template_id = getattr(objective, "template_id", "") or ""
+                has_legacy_fields = bool(getattr(objective, "progress_markdown_path", None))
+                if template_id == legacy_template_id or has_legacy_fields:
+                    legacy_objective_ids.append(getattr(objective, "objective_id", entry_id))
+                    snapshot.autoresearch_objectives.pop(entry_id, None)
+            if legacy_objective_ids:
+                stale_job_ids = [
+                    job_id
+                    for job_id, job in list(snapshot.runtime_scheduler_jobs.items())
+                    if str((job.inputs or {}).get("objective_id") or "") in legacy_objective_ids
+                    or job.pipeline_template_id == legacy_template_id
+                ]
+                for job_id in stale_job_ids:
+                    snapshot.runtime_scheduler_jobs.pop(job_id, None)
+                    snapshot.scheduler_jobs.pop(job_id, None)
+            if legacy_template_id in snapshot.templates and legacy_template_id not in builtin_template_ids:
+                snapshot.templates.pop(legacy_template_id, None)
+
             # Builtin templates are code-defined; always overwrite so new steps propagate without manual state wipes.
             for template in builtin_templates:
                 snapshot.templates[template.id] = template.model_copy(deep=True)
@@ -127,6 +155,21 @@ class ControlPlaneService:
                     snapshot.scheduler_jobs[job.id] = SchedulerJobState(id=job.id)
 
         self._store.mutate(seed)
+
+        # Vault cleanup runs after the snapshot mutation so the filesystem work
+        # never happens under the store lock. Best-effort: log and continue on
+        # individual failures.
+        if legacy_objective_ids:
+            try:
+                manager = self._default_vault_manager()
+            except Exception:
+                logger.exception("Autoresearch migration: failed to build vault manager for legacy purge")
+                return
+            for legacy_id in legacy_objective_ids:
+                try:
+                    manager.purge_objective(objective_id=legacy_id)
+                except Exception:
+                    logger.exception("Autoresearch migration: failed to purge legacy vault dir for %s", legacy_id)
 
     def _builtin_templates(self) -> list[PipelineTemplate]:
         return self._templates.builtin_templates()
@@ -279,7 +322,7 @@ class ControlPlaneService:
                 run.id
                 for run in snapshot.runs.values()
                 if bool(run.metadata.get("autoresearch_continuous"))
-                or run.template_id == "knowledge-vault-autoresearch"
+                or run.template_id == "knowledge-vault-autoresearch-loop"
                 or bool(str(run.metadata.get("objective_id") or run.inputs.get("objective_id") or "").strip())
             ]
             run_cleanup = self._delete_runs(run_ids=target_run_ids, reason="cleanup_autoresearch_runs")
@@ -296,15 +339,31 @@ class ControlPlaneService:
     def list_autoresearch_objectives(self) -> list[AutoresearchObjective]:
         return self._autoresearch_orchestrator.list_objectives()
 
-    def get_autoresearch_progress_markdown(self, objective_id: str) -> tuple[str, str]:
+    def get_autoresearch_ledger_markdown(self, objective_id: str) -> tuple[str, str]:
         objective = self.get_autoresearch_objective(objective_id)
-        progress_path = str(objective.progress_markdown_path or "").strip()
-        if not progress_path:
-            raise ValueError(f"No markdown tracker found for objective: {objective_id}")
-        path = Path(progress_path)
+        ledger_path = str(objective.ledger_markdown_path or "").strip()
+        if not ledger_path:
+            raise ValueError(f"No ledger found for objective: {objective_id}")
+        path = Path(ledger_path)
         if not path.exists() or not path.is_file():
-            raise ValueError(f"Markdown tracker does not exist for objective: {objective_id}")
+            raise ValueError(f"Ledger does not exist for objective: {objective_id}")
         return (path.name, path.read_text(encoding="utf-8"))
+
+    def get_autoresearch_ledger_json(self, objective_id: str) -> dict[str, Any]:
+        objective = self.get_autoresearch_objective(objective_id)
+        ledger_path = str(objective.ledger_json_path or "").strip()
+        if ledger_path:
+            path = Path(ledger_path)
+        else:
+            manager = self._default_vault_manager()
+            slug = objective.objective_id
+            path = manager.vault_root / "03_ops" / "autoresearch" / "objectives" / slug / "ledger.json"
+        if not path.exists():
+            return {"objective_slug": objective.objective_id, "questions": [], "iterations": []}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {"objective_slug": objective.objective_id, "questions": [], "iterations": []}
 
     def list_self_improver_proposals(self) -> list[dict[str, Any]]:
         return self._proposals.list_self_improver_proposals()
@@ -684,6 +743,31 @@ class ControlPlaneService:
             logger.exception("Failed to update autoresearch objective after run finalization: %s", finalized.id)
         return finalized
 
+    def start_run_in_background(self, run_id: str) -> PipelineRun:
+        """Kick ``start_run`` onto a daemon thread and return the queued run.
+
+        Used for autoresearch-loop runs and any other long-running template so
+        that the asyncio event loop (scheduler tick, HTTP request handler)
+        does not block for the full duration of step execution. The run is
+        finalised in the background thread; callers should poll the run
+        status instead of expecting it to be complete on return.
+        """
+        run = self.get_run(run_id)
+
+        def _runner() -> None:
+            try:
+                self.start_run(run_id)
+            except Exception:
+                logger.exception("Background pipeline run failed: %s", run_id)
+
+        thread = threading.Thread(
+            target=_runner,
+            daemon=True,
+            name=f"pipeline-run-{run_id}",
+        )
+        thread.start()
+        return run
+
     def start_run(self, run_id: str) -> PipelineRun:
         run = self.get_run(run_id)
         if run.status == "pending_approval":
@@ -792,6 +876,15 @@ class ControlPlaneService:
             artifact = self._write_json_artifact(run_id, f"{step.step_id}-http.json", response)
             self._append_artifact(run_id, artifact)
             return {"response": response, "artifact_path": artifact}
+
+        if definition.kind == "autoresearch_loop_iteration":
+            summary = self._run_autoresearch_loop_iteration(run=run, step=step, definition=definition)
+            artifact = self._write_json_artifact(
+                run_id, f"{step.step_id}-autoresearch-iteration.json", summary
+            )
+            self._append_artifact(run_id, artifact)
+            return {"iteration_summary": summary, "artifact_path": artifact}
+
         agent_result = self._execute_step_with_agent(
             run_id=run_id,
             run=run,
@@ -802,6 +895,65 @@ class ControlPlaneService:
             return agent_result
 
         raise ValueError(f"Unsupported step kind: {definition.kind}")
+
+    def _run_autoresearch_loop_iteration(
+        self,
+        *,
+        run: PipelineRun,
+        step: PipelineStepRun,
+        definition: PipelineStepDefinition,
+    ) -> dict[str, Any]:
+        """Drive one iteration of the agentic autoresearch loop."""
+        from src.control_plane.autoresearch_loop import run_one_iteration
+
+        cfg = definition.config or {}
+        topic_key = str(cfg.get("topic_input_key") or "autoresearch_topic")
+        objective_key = str(cfg.get("objective_input_key") or "objective_id")
+        endpoint_key = str(cfg.get("endpoint_goal_input_key") or "endpoint_goal")
+
+        topic = str(run.inputs.get(topic_key) or "").strip()
+        objective_slug = str(run.inputs.get(objective_key) or "").strip()
+        endpoint_goal = str(run.inputs.get(endpoint_key) or "").strip()
+        if not topic or not objective_slug or not endpoint_goal:
+            raise ValueError(
+                "autoresearch_loop_iteration requires non-empty topic, objective_id, and endpoint_goal inputs."
+            )
+
+        vault_cfg = get_app_config().knowledge_vault
+        manager = self._default_vault_manager()
+        vault_root = manager.vault_root
+
+        def vault_lookup(query: str) -> list[dict[str, Any]]:
+            try:
+                payload = manager.search(query=query, limit=3)
+            except Exception:
+                logger.exception("autoresearch loop: vault search failed for query=%r", query)
+                return []
+            items = payload.get("items") if isinstance(payload, dict) else None
+            if not isinstance(items, list):
+                return []
+            return items
+
+        thread_id = (
+            str(run.metadata.get("source_thread_id") or "").strip()
+            or f"autoresearch-{objective_slug}"
+        )
+
+        return run_one_iteration(
+            vault_root=vault_root,
+            objective_slug=objective_slug,
+            topic=topic,
+            endpoint_goal=endpoint_goal,
+            thread_id=thread_id,
+            max_questions=int(vault_cfg.autoresearch_max_questions_per_iteration),
+            max_followups=int(vault_cfg.autoresearch_max_questions_per_iteration),
+            max_researcher_fanout=int(vault_cfg.autoresearch_max_researcher_fanout),
+            novelty_decay_threshold=float(vault_cfg.autoresearch_novelty_decay_threshold),
+            novelty_window=int(vault_cfg.autoresearch_novelty_window),
+            dedup_similarity_threshold=float(vault_cfg.autoresearch_dedup_similarity_threshold),
+            model_name=str(vault_cfg.cot_model or "").strip() or None,
+            vault_search=vault_lookup,
+        )
 
     def _execute_step_with_agent(
         self,
@@ -1661,7 +1813,7 @@ class ControlPlaneService:
 
     def _vault_scheduler_error_action_items(self, *, snapshot, limit: int) -> list[dict[str, Any]]:
         runtime_jobs = snapshot.runtime_scheduler_jobs
-        autoresearch_template_id = "knowledge-vault-autoresearch"
+        autoresearch_template_id = "knowledge-vault-autoresearch-loop"
         objective_by_job_id = {
             str(obj.scheduler_job_id): obj
             for obj in snapshot.autoresearch_objectives.values()

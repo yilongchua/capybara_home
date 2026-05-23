@@ -242,17 +242,54 @@ export interface AutoresearchObjective {
   template_id: string;
   source_thread_id?: string | null;
   latest_run_id?: string | null;
-  latest_sufficiency_score?: number | null;
-  latest_sufficiency_decision?: string | null;
-  latest_blocking_checks: string[];
-  latest_next_actions: string[];
-  recommended_tasks: string[];
-  recommended_queries: string[];
-  milestones: Array<Record<string, unknown>>;
+  loop_iteration: number;
+  last_novelty_rate?: number | null;
+  last_stop_reason?: string | null;
+  last_reflection?: string | null;
+  cluster_coverage: Record<string, number>;
+  ledger_markdown_path?: string | null;
+  ledger_json_path?: string | null;
   pause_reason?: string | null;
-  progress_markdown_path?: string | null;
-  progress_json_path?: string | null;
   created_at: string;
+  updated_at: string;
+}
+
+export interface AutoresearchQuestionNode {
+  id: string;
+  content: string;
+  status: "pending" | "in_progress" | "answered" | "duplicate" | "rejected" | "blocked";
+  depends_on?: string[];
+  cluster: number;
+  level: number;
+  asked_by: "generator" | "reflector" | "user";
+  novelty: number;
+  loop_iteration: number;
+  vault_entries?: string[];
+  duplicate_of?: string | null;
+  researcher_summary?: string;
+  sources_used?: number;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AutoresearchLedger {
+  objective_slug: string;
+  loop_iteration: number;
+  questions: AutoresearchQuestionNode[];
+  iterations: Array<{
+    iteration: number;
+    at: string;
+    generated: number;
+    answered: number;
+    duplicates: number;
+    blocked: number;
+    followups: number;
+    novelty_rate: number;
+    stop: boolean;
+    stop_reason: string;
+    reflection: string;
+  }>;
   updated_at: string;
 }
 

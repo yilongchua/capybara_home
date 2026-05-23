@@ -157,4 +157,34 @@ class KnowledgeVaultConfig(BaseModel):
     cot_ingest_enabled: bool = Field(default=True, description="Enable two-step source analysis and generation during ingest")
     cot_min_chars: int = Field(default=1200, ge=0, le=200000, description="Minimum source length before invoking the CoT ingest flow")
     cot_model: str = Field(default="", description="Optional explicit model name for knowledge vault analysis and generation")
+    autoresearch_max_questions_per_iteration: int = Field(
+        default=8,
+        ge=1,
+        le=50,
+        description="Cap on how many new sub-questions the generator may emit per loop iteration.",
+    )
+    autoresearch_max_researcher_fanout: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="Max concurrent vault-source-researcher subagents per iteration.",
+    )
+    autoresearch_novelty_decay_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="When this fraction of recently generated questions are duplicates, the loop stops.",
+    )
+    autoresearch_novelty_window: int = Field(
+        default=10,
+        ge=2,
+        le=200,
+        description="Number of most-recent generated questions used to compute novelty rate.",
+    )
+    autoresearch_dedup_similarity_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description="Embedding cosine threshold above which a new question is treated as a duplicate of an existing ledger question.",
+    )
     model_config = ConfigDict(extra="allow")

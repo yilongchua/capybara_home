@@ -72,66 +72,31 @@ class TemplatesService:
                 ),
             ],
         )
-        autoresearch = PipelineTemplate(
-            id="knowledge-vault-autoresearch",
-            name="Knowledge Vault Autoresearch",
-            description="Daily autoresearch that discovers and ingests trusted knowledge while workspace is active.",
+        autoresearch_loop = PipelineTemplate(
+            id="knowledge-vault-autoresearch-loop",
+            name="Knowledge Vault Autoresearch Loop",
+            description=(
+                "One iteration of the agentic autoresearch loop: generate sub-questions, "
+                "dedup, dispatch vault-source-researcher per question, reflect, update ledger."
+            ),
             enabled=True,
             requires_approval=False,
             trigger_sources=["manual", "scheduler"],
-            default_inputs={"urls": [], "autoresearch_topic": "", "objective_id": "obj-general"},
+            default_inputs={"autoresearch_topic": "", "objective_id": "", "endpoint_goal": ""},
             steps=[
                 PipelineStepDefinition(
-                    id="autoresearch-discover",
-                    name="Autoresearch discover",
-                    kind="vault_discover",
+                    id="autoresearch-loop-iteration",
+                    name="Autoresearch loop iteration",
+                    kind="autoresearch_loop_iteration",
                     config={
-                        "input_key": "urls",
                         "topic_input_key": "autoresearch_topic",
-                        "source": "autoresearch",
-                        "max_discovery_results": 8,
-                        "stop_if_inactive": True,
-                        "activity_window_hours": 24,
+                        "objective_input_key": "objective_id",
+                        "endpoint_goal_input_key": "endpoint_goal",
                     },
-                ),
-                PipelineStepDefinition(
-                    id="autoresearch-ingest",
-                    name="Autoresearch ingest",
-                    kind="vault_ingest",
-                    config={
-                        "input_key": "urls",
-                        "source": "autoresearch",
-                        "stop_if_inactive": True,
-                        "activity_window_hours": 24,
-                    },
-                ),
-                PipelineStepDefinition(
-                    id="autoresearch-compile",
-                    name="Autoresearch compile",
-                    kind="vault_compile",
-                    config={},
-                ),
-                PipelineStepDefinition(
-                    id="autoresearch-lint",
-                    name="Autoresearch lint",
-                    kind="vault_lint",
-                    config={"freshness_window_days": 30},
-                ),
-                PipelineStepDefinition(
-                    id="autoresearch-synthesize-graph",
-                    name="Autoresearch synthesize graph",
-                    kind="synthesize_knowledge_graph",
-                    config={"topic_input_key": "autoresearch_topic"},
-                ),
-                PipelineStepDefinition(
-                    id="autoresearch-sufficiency",
-                    name="Autoresearch sufficiency",
-                    kind="vault_sufficiency_evaluate",
-                    config={"topic_input_key": "autoresearch_topic", "min_score": 78},
                 ),
             ],
         )
-        return [continuous, autoresearch]
+        return [continuous, autoresearch_loop]
 
     def list_templates(self) -> list[PipelineTemplate]:
         snapshot = self._store.read()

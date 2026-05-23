@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import shutil
 import threading
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterator
+from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -45,6 +47,7 @@ from src.control_plane.vault_text_utils import (
 )
 from src.models.factory import create_chat_model
 
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Cross-instance coordination
@@ -256,6 +259,18 @@ class VaultLearningManager:
         for path, content in docs.items():
             if not path.exists():
                 path.write_text(content, encoding="utf-8")
+
+        # Seed the user-editable question taxonomy used by the autoresearch loop.
+        try:
+            from src.control_plane.autoresearch_loop.taxonomy import seed_taxonomy_if_missing
+
+            seed_taxonomy_if_missing(self.vault_root)
+        except Exception:
+            # Best-effort: vault should still come up if it fails, but log so a
+            # missing taxonomy doesn't silently fall back to the in-code default.
+            logger.exception(
+                "Failed to seed autoresearch QUESTION_TAXONOMY.json under %s", self.schema_dir
+            )
 
     def _load_manifest(self) -> dict[str, Any]:
         if self.manifest_path.exists():
@@ -2086,8 +2101,8 @@ class VaultLearningManager:
                     if edge_key not in edge_seen:
                         edge_seen.add(edge_key)
                         edges.append({"source": node_id, "target": target_id, "type": "source_ref"})
-                for field, kind in (("concept_refs", "concepts"), ("entity_refs", "entities"), ("synthesis_refs", "syntheses")):
-                    raw_refs = frontmatter.get(field, [])
+                for ref_field, kind in (("concept_refs", "concepts"), ("entity_refs", "entities"), ("synthesis_refs", "syntheses")):
+                    raw_refs = frontmatter.get(ref_field, [])
                     if not isinstance(raw_refs, list):
                         continue
                     for ref in raw_refs:
@@ -2096,7 +2111,7 @@ class VaultLearningManager:
                             continue
                         target_id = f"{kind}:{target_slug}"
                         ensure_node(target_id, label=str(ref), kind=kind, path="")
-                        edge_key = (node_id, target_id, field)
+                        edge_key = (node_id, target_id, ref_field)
                         if edge_key in edge_seen:
                             continue
                         edge_seen.add(edge_key)

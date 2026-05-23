@@ -201,7 +201,7 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 
 ### Subagent System (`src/subagents/`)
 
-**Built-in Agents**: `general-purpose` (all tools except `task`), `bash` (command specialist), and research-focused public subagents: `source-researcher`, `docs-explorer`, `comparison-dimension-researcher`, `synthesis-reviewer`
+**Built-in Agents**: `general-purpose` (all tools except `task`), `bash` (command specialist), `vault-source-researcher` (autoresearch loop helper that writes findings to the knowledge vault), and other research-focused public subagents: `source-researcher`, `docs-explorer`, `comparison-dimension-researcher`, `synthesis-reviewer`
 **Execution**: Dual thread pool - `_scheduler_pool` + `_execution_pool`, sized from `subagents.max_concurrent_limit`
 **Concurrency**: endpoint-aware queueing in `SubagentLimitMiddleware` (research helpers route to helper/triage endpoint, excess primary-targeted `task` calls defer), cooperative per-subagent timeout
 **Flow**: `task()` tool → `SubagentExecutor` → background thread → poll 5s → SSE events → result
@@ -341,6 +341,23 @@ Bridges external messaging platforms (Slack, Telegram) to the Capybara Home agen
 Cross-domain calls inside sub-services route through a back-reference `self._cps: ControlPlaneService` (e.g., `ApprovalsService` calls `self._cps._append_audit_event(...)` and `self._cps.start_run(...)`).
 
 Pure text/time utilities used by `vault_learning.py` live in `src/control_plane/vault_text_utils.py`: `utcnow`, `utcnow_iso`, `slugify`, `strip_html`, `extract_title`, `word_tokens`, `frontmatter_dump`, `parse_frontmatter`.
+
+### Autoresearch loop (`src/control_plane/autoresearch_loop/`)
+
+The agentic learning loop that powers `/autoresearch`. One scheduled run = one iteration: a generator LLM proposes sub-questions across the 12-cluster taxonomy (`{vault_root}/00_schema/QUESTION_TAXONOMY.json`, user-editable), Jaccard-based dedup filters duplicates against the per-objective ledger and the vault, the `vault-source-researcher` subagent answers each survivor and writes a vault entry, and a reflector LLM emits follow-up questions. The loop stops on novelty decay (default: 70% of recent generator questions are duplicates).
+
+| Module | Responsibility |
+|---|---|
+| `loop.py` | One-iteration driver; wires the pieces |
+| `generator.py` | LLM call 1: propose sub-questions |
+| `dedup.py` | Token-Jaccard against ledger + vault keyword search |
+| `researcher.py` | Spawn `vault-source-researcher` per question |
+| `reflector.py` | LLM call 2: emit follow-ups from new answers |
+| `stop_criteria.py` | Novelty-decay stop signal |
+| `ledger.py` | Per-objective question ledger (json + md) at `{vault_root}/03_ops/autoresearch/objectives/{slug}/` |
+| `taxonomy.py` | 12-cluster question taxonomy loader |
+
+The pipeline template is `knowledge-vault-autoresearch-loop` with a single step of kind `autoresearch_loop_iteration`, handled inline in `ControlPlaneService._run_autoresearch_loop_iteration`. `AutoresearchOrchestratorAgent.update_after_run` reads the step's `iteration_summary` output and flips the objective to `completed_endpoint` when `stop == True`. See `docs/continuous-research.md` for the full architecture.
 
 Public API on the facade is unchanged — every public method delegates one-line to the relevant sub-service. External callers (FastAPI routers, channel manager, agents) continue to call `service.list_approvals()`, `service.create_trigger_event()`, etc.
 

@@ -109,7 +109,6 @@ export default function PipelinesPage() {
   const [openCreateDialog, setOpenCreateDialog] = useState(false);
   const [newTopic, setNewTopic] = useState("");
   const [endpointGoal, setEndpointGoal] = useState("");
-  const [objectiveProgress, setObjectiveProgress] = useState<Record<string, number>>({});
 
   const toText = (value: unknown) => (typeof value === "string" ? value : "");
   const firstNonEmpty = (...values: string[]) =>
@@ -158,34 +157,17 @@ export default function PipelinesPage() {
     );
   }, [integrationStatus?.scheduler.jobs]);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function loadProgress() {
-      const entries = await Promise.all(
-        objectives.map(async (objective) => {
-          const link = `${getBackendBaseURL()}/api/vault/objectives/${encodeURIComponent(
-            objective.objective_id,
-          )}/progress.md`;
-          try {
-            const response = await fetch(link);
-            if (!response.ok) return [objective.objective_id, 0] as const;
-            const markdown = await response.text();
-            const percentPattern = /- Percent:\s*`?([0-9]+(?:\.[0-9]+)?)%`?/i;
-            const match = percentPattern.exec(markdown);
-            const parsed = match ? Number(match[1]) : 0;
-            return [objective.objective_id, Number.isFinite(parsed) ? parsed : 0] as const;
-          } catch {
-            return [objective.objective_id, 0] as const;
-          }
-        }),
-      );
-      if (cancelled) return;
-      setObjectiveProgress(Object.fromEntries(entries));
-    }
-    void loadProgress();
-    return () => {
-      cancelled = true;
-    };
+  // Progress is now expressed as cluster coverage breadth (covered / 12).
+  // The novelty rate sits beside it as a separate signal.
+  const objectiveProgress = useMemo<Record<string, number>>(() => {
+    const totalClusters = 12;
+    const entries = objectives.map((objective) => {
+      const coverage = objective.cluster_coverage ?? {};
+      const covered = Object.keys(coverage).length;
+      const percent = (covered / totalClusters) * 100;
+      return [objective.objective_id, percent] as const;
+    });
+    return Object.fromEntries(entries);
   }, [objectives]);
 
   return (
@@ -210,13 +192,16 @@ export default function PipelinesPage() {
               </Card>
             ) : (
               objectives.map((objective) => {
-                const nextQueries = objective.recommended_queries ?? [];
-                const nextTasks = objective.recommended_tasks ?? [];
-                const markdownPath = objective.progress_markdown_path ?? "";
-                const progressLink = `${getBackendBaseURL()}/api/vault/objectives/${encodeURIComponent(
+                const coverage = objective.cluster_coverage ?? {};
+                const coveredClusters = Object.entries(coverage)
+                  .map(([cid, depth]) => `C${cid} L${depth}`)
+                  .sort();
+                const ledgerLink = `${getBackendBaseURL()}/api/vault/objectives/${encodeURIComponent(
                   objective.objective_id,
-                )}/progress.md`;
+                )}/ledger.md`;
                 const progressPercent = objectiveProgress[objective.objective_id] ?? 0;
+                const noveltyPercent = ((objective.last_novelty_rate ?? 1) * 100).toFixed(0);
+                const lastReflection = (objective.last_reflection ?? "").trim();
                 const job = scheduleJobByObjectiveId.get(objective.objective_id);
 
                 return (
@@ -326,50 +311,45 @@ export default function PipelinesPage() {
                         Delete Objective
                       </Button>
 
-                      <div className="rounded-md border p-3">
-                        <p className="text-xs font-medium">Tracking Markdown</p>
+                      <div className="rounded-md border p-3 space-y-1">
+                        <p className="text-xs font-medium">Question Ledger</p>
                         <a
-                          className="text-primary mt-1 inline-flex items-center gap-1 text-xs underline"
-                          href={progressLink}
+                          className="text-primary inline-flex items-center gap-1 text-xs underline"
+                          href={ledgerLink}
                           target="_blank"
                           rel="noreferrer"
                         >
-                          {markdownPath || "Open objective ledger"}
+                          Open ledger.md
                         </a>
+                        <p className="text-muted-foreground text-[11px]">
+                          Iteration #{objective.loop_iteration} · novelty {noveltyPercent}%
+                          {objective.last_stop_reason ? ` · ${objective.last_stop_reason}` : ""}
+                        </p>
                       </div>
 
                       <Collapsible>
                         <CollapsibleTrigger className="flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-xs font-medium">
                           <span className="inline-flex items-center gap-1">
                             <ListChecksIcon className="size-3.5" />
-                            Action Items / Next Queries
+                            Cluster Coverage / Reflection
                           </span>
                           <ChevronDownIcon className="size-4" />
                         </CollapsibleTrigger>
-                        <CollapsibleContent className="mt-2 rounded-md border p-3">
-                          {nextTasks.length > 0 ? (
-                            <div className="mb-2">
-                              <p className="mb-1 text-[11px] font-medium">Action items</p>
-                              <ul className="space-y-1">
-                                {nextTasks.map((task, idx) => (
-                                  <li key={`${objective.id}-task-${idx}`} className="text-xs">
-                                    {idx + 1}. {task}
-                                  </li>
-                                ))}
-                              </ul>
+                        <CollapsibleContent className="mt-2 rounded-md border p-3 space-y-2">
+                          <div>
+                            <p className="mb-1 text-[11px] font-medium">Cluster coverage</p>
+                            {coveredClusters.length === 0 ? (
+                              <p className="text-muted-foreground text-xs">No clusters covered yet.</p>
+                            ) : (
+                              <p className="text-xs">{coveredClusters.join(" · ")}</p>
+                            )}
+                          </div>
+                          {lastReflection ? (
+                            <div>
+                              <p className="mb-1 text-[11px] font-medium">Latest reflection</p>
+                              <p className="text-xs">{lastReflection}</p>
                             </div>
                           ) : null}
-                          {nextQueries.length === 0 ? (
-                            <p className="text-muted-foreground text-xs">No next queries yet.</p>
-                          ) : (
-                            <ul className="space-y-1">
-                              {nextQueries.map((query, idx) => (
-                                <li key={`${objective.id}-query-${idx}`} className="text-xs">
-                                  {idx + 1}. {query}
-                                </li>
-                              ))}
-                            </ul>
-                          )}
                         </CollapsibleContent>
                       </Collapsible>
 

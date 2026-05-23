@@ -32,11 +32,6 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { clearThreadClientCache, getAPIClient } from "@/core/api/api-client";
 import { getBackendBaseURL } from "@/core/config";
-import {
-  saveToVault as saveToVaultApi,
-  searchVault as searchVaultApi,
-  startAutoresearchObjective,
-} from "@/core/control-plane/api";
 import { api } from "@/core/dreamy/api";
 import { useFolderPicker } from "@/core/dreamy/hooks/use-folder-picker";
 import {
@@ -81,7 +76,6 @@ import {
   type SlashCommandOption,
 } from "./chat-ui/slash-command-dropdown";
 import {
-  AutoresearchDialog,
   FollowupConfirmDialog,
   RenameThreadDialog,
 } from "./input-box-dialogs";
@@ -127,18 +121,6 @@ const SLASH_COMMANDS: SlashCommandOption[] = [
     description: "Recover stalled todo execution by clearing stale blocking runs.",
   },
   {
-    name: "dreamy",
-    title: "Dreamy mode",
-    usage: "Switch this thread into workflow mode",
-    description: "Show Dreamy mode status banner for this chat.",
-  },
-  {
-    name: "dreamy-exit",
-    title: "Exit Dreamy mode",
-    usage: "Disable Dreamy mode banner",
-    description: "Turn off Dreamy mode for this chat thread.",
-  },
-  {
     name: "handoff",
     title: "Create handoff",
     usage: "Fork into a new thread",
@@ -169,51 +151,12 @@ const SLASH_COMMANDS: SlashCommandOption[] = [
     description: "Copy staged docs from `/mnt/user-data/workspace/.docs` to `/mnt/user-data/mounted/.docs` after review.",
   },
   {
-    name: "autoresearch",
-    title: "Autoresearch",
-    usage: "<topic> [| endpoint goal]",
-    description: "Start an autoresearch objective tied to this chat thread.",
-  },
-  {
     name: "rename",
     title: "Rename chat",
     usage: "<new title>",
     description: "Rename current chat title.",
   },
-  {
-    name: "vault-save",
-    title: "Vault save",
-    usage: "<title> | <content>",
-    description: "Save a note directly into Knowledge Vault.",
-  },
-  {
-    name: "vault-search",
-    title: "Vault search",
-    usage: "<query>",
-    description: "Search cached Knowledge Vault content.",
-  },
 ];
-
-function defaultAutoresearchEndpoint(topic: string): string {
-  return `Deliver a complete, evidence-backed research brief for ${topic} with actionable next steps.`;
-}
-
-function parseAutoresearchArgs(rawArgs: string): {
-  topic: string;
-  endpointGoal: string;
-} | null {
-  const args = rawArgs.trim();
-  if (!args) return null;
-  const [topicRaw, endpointRaw] = args.split("|", 2);
-  const topic = topicRaw?.trim() ?? "";
-  if (!topic) return null;
-  const endpointGoalCandidate = endpointRaw?.trim() ?? "";
-  const endpointGoal =
-    endpointGoalCandidate.length > 0
-      ? endpointGoalCandidate
-      : defaultAutoresearchEndpoint(topic);
-  return { topic, endpointGoal };
-}
 
 function dedupeTodoLines(lines: string[]): string[] {
   const seen = new Set<string>();
@@ -355,10 +298,6 @@ export function InputBox({
   const [pendingSuggestion, setPendingSuggestion] = useState<string | null>(null);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameInput, setRenameInput] = useState("");
-  const [autoresearchDialogOpen, setAutoresearchDialogOpen] = useState(false);
-  const [autoresearchTopic, setAutoresearchTopic] = useState("");
-  const [autoresearchEndpointGoal, setAutoresearchEndpointGoal] = useState("");
-  const [autoresearchSubmitting, setAutoresearchSubmitting] = useState(false);
   const [slashSelected, setSlashSelected] = useState<string>("compact");
   const [hasStagedDocs, setHasStagedDocs] = useState(false);
   const repoOverviewPollRef = useRef<number | null>(null);
@@ -867,40 +806,6 @@ export function InputBox({
     [isNewThread, renameThread, threadId],
   );
 
-  const runAutoresearch = useCallback(
-    async (topic: string, endpointGoal: string) => {
-      const nextTopic = topic.trim();
-      const nextEndpoint = endpointGoal.trim();
-      if (!nextTopic || !nextEndpoint) {
-        toast.error("Topic and endpoint goal are required.");
-        return;
-      }
-      if (status === "streaming") {
-        toast.error("Wait for the current response to finish.");
-        return;
-      }
-      setAutoresearchSubmitting(true);
-      try {
-        await startAutoresearchObjective({
-          topic: nextTopic,
-          endpoint_goal: nextEndpoint,
-          thread_id: threadId,
-          bootstrap: true,
-        });
-        toast.success("Autoresearch objective created.");
-      } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : "Failed to start autoresearch objective.";
-        toast.error(message);
-      } finally {
-        setAutoresearchSubmitting(false);
-      }
-    },
-    [status, threadId],
-  );
-
   const runAnalyse = useCallback(async () => {
     if (!mountedFolder) {
       toast.error("Mount a folder first to run /analyse.");
@@ -1054,33 +959,6 @@ export function InputBox({
         return;
       }
 
-      if (commandName === "dreamy") {
-        if (isDreamyThread) {
-          toast.message("Dreamy mode is already active for this thread.");
-          return;
-        }
-        if (!onActivateDreamy) {
-          toast.error("Dreamy mode is not available on this chat surface yet.");
-          return;
-        }
-        await onActivateDreamy?.();
-        textInput.setInput("");
-        return;
-      }
-      if (commandName === "dreamy-exit") {
-        if (!isDreamyThread) {
-          toast.message("Dreamy mode is not active for this thread.");
-          return;
-        }
-        if (!onDeactivateDreamy) {
-          toast.error("Dreamy exit is not available on this chat surface yet.");
-          return;
-        }
-        await onDeactivateDreamy?.();
-        textInput.setInput("");
-        return;
-      }
-
       if (commandName === "new") {
         router.push(getNewChatHref());
         return;
@@ -1102,58 +980,6 @@ export function InputBox({
         return;
       }
 
-      if (commandName === "autoresearch") {
-        const parsed = parseAutoresearchArgs(args);
-        if (parsed) {
-          await runAutoresearch(parsed.topic, parsed.endpointGoal);
-          textInput.setInput("");
-          return;
-        }
-        setAutoresearchTopic("");
-        setAutoresearchEndpointGoal("");
-        setAutoresearchDialogOpen(true);
-        return;
-      }
-
-      if (commandName === "vault-save") {
-        const [titlePart, contentPart] = args.split("|", 2);
-        const title = titlePart?.trim() ?? "";
-        const content = contentPart?.trim() ?? "";
-        if (!title || !content) {
-          toast.error("Usage: /vault-save <title> | <content>");
-          return;
-        }
-        try {
-          await saveToVaultApi({ title, content, topic: title, source_thread_id: threadId });
-          toast.success("Saved to Knowledge Vault.");
-          textInput.setInput("");
-        } catch (error) {
-          toast.error(error instanceof Error ? error.message : "Failed to save to vault.");
-        }
-        return;
-      }
-
-      if (commandName === "vault-search") {
-        const query = args.trim();
-        if (!query) {
-          toast.error("Usage: /vault-search <query>");
-          return;
-        }
-        try {
-          const payload = await searchVaultApi(query, 5);
-          const first = payload.items[0];
-          if (!payload.items.length) {
-            toast.message("No cached vault matches yet.");
-          } else {
-            toast.success(`Found ${payload.items.length} cached result(s). Top: ${first?.title ?? first?.path ?? "Untitled"}`);
-          }
-          textInput.setInput("");
-        } catch (error) {
-          toast.error(error instanceof Error ? error.message : "Failed to search vault.");
-        }
-        return;
-      }
-
       if (commandName === "analyse") {
         await runAnalyse();
         textInput.setInput("");
@@ -1167,10 +993,6 @@ export function InputBox({
       }
 
       if (commandName === "handoff") {
-        if (isDreamyThread) {
-          toast.error("Exit Dreamy with /dreamy-exit before creating a handoff.");
-          return;
-        }
         try {
           const response = await fetch(
             `${getBackendBaseURL()}${api.threads.handoff(threadId)}`,
@@ -1213,9 +1035,7 @@ export function InputBox({
       disabled,
       getNewChatHref,
       handleMountFolder,
-      isDreamyThread,
       router,
-      runAutoresearch,
       runAnalyse,
       runPublishDocs,
       runCompact,
@@ -1225,8 +1045,6 @@ export function InputBox({
       status,
       textInput,
       threadId,
-      onActivateDreamy,
-      onDeactivateDreamy,
       onSubmit,
     ],
   );
@@ -1635,23 +1453,6 @@ export function InputBox({
           void runRename(renameInput);
           setRenameDialogOpen(false);
           setRenameInput("");
-          textInput.setInput("");
-        }}
-      />
-
-      <AutoresearchDialog
-        open={autoresearchDialogOpen}
-        onOpenChange={setAutoresearchDialogOpen}
-        topic={autoresearchTopic}
-        endpointGoal={autoresearchEndpointGoal}
-        onTopicChange={setAutoresearchTopic}
-        onEndpointGoalChange={setAutoresearchEndpointGoal}
-        isSubmitting={autoresearchSubmitting}
-        onConfirm={() => {
-          void runAutoresearch(autoresearchTopic, autoresearchEndpointGoal);
-          setAutoresearchDialogOpen(false);
-          setAutoresearchTopic("");
-          setAutoresearchEndpointGoal("");
           textInput.setInput("");
         }}
       />

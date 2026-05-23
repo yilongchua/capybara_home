@@ -43,11 +43,10 @@ class KnowledgeVaultAgent(BaseControlPlaneAgent):
 
     def _execution_profile(self, context: AgentExecutionContext) -> KnowledgeVaultExecutionProfile:
         source = str(context.definition.config.get("source") or "").strip()
-        inferred_mode = (
-            "autoresearch"
-            if source == "autoresearch" or str(context.run.template_id or "") == "knowledge-vault-autoresearch"
-            else "continuous"
-        )
+        # The new autoresearch loop does not use this vault-agent path at all, but a few
+        # legacy step configs may still set `source = "autoresearch"`. Honour that flag for
+        # the continuous-learning template's inactivity gating.
+        inferred_mode = "autoresearch" if source == "autoresearch" else "continuous"
         topic_input_key = str(context.definition.config.get("topic_input_key") or "autoresearch_topic")
         stop_if_inactive = bool(context.definition.config.get("stop_if_inactive", inferred_mode == "autoresearch"))
         activity_window_hours = int(context.definition.config.get("activity_window_hours") or 24)
@@ -324,8 +323,8 @@ class KnowledgeVaultAgent(BaseControlPlaneAgent):
                 report["auto_paused_scheduler_job"] = paused
                 report["scheduler_job_id"] = scheduler_job_id
 
-        # Keep autoresearch objective lifecycle synchronized with sufficiency outcomes.
-        self._service._autoresearch_orchestrator.update_after_sufficiency(run=context.run, report=report)  # noqa: SLF001
+        # Sufficiency evaluation only applies to the continuous-learning template; the
+        # autoresearch loop has its own novelty-decay stop criterion (no sufficiency report).
 
         artifacts = self._service._write_vault_step_artifacts(
             run_id=context.run_id,

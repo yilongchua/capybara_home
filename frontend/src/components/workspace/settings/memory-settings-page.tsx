@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { deleteVaultKnowledgeGraph } from "@/core/control-plane/api";
 import { useI18n } from "@/core/i18n/hooks";
 import { useCompactions, useMemory, useMemoryMutations } from "@/core/memory/hooks";
+import { useDeleteAllThreads } from "@/core/threads/hooks";
 import { formatTimeAgo } from "@/core/utils/datetime";
 
 import { SettingsSection } from "./settings-section";
@@ -31,6 +32,7 @@ export function MemorySettingsPage() {
   const compactions = useCompactions(threadId);
   const globalMutations = useMemoryMutations("global");
   const workspaceMutations = useMemoryMutations("workspace", threadId);
+  const deleteAllChats = useDeleteAllThreads();
   const [graphDeleting, setGraphDeleting] = useState(false);
 
   const loading = globalMemory.isLoading || workspaceMemory.isLoading;
@@ -175,6 +177,16 @@ export function MemorySettingsPage() {
             disabled={graphDeleting}
           >
             {graphDeleting ? "Deleting…" : "Delete Knowledge Graph"}
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => {
+              if (!window.confirm(t.chats.deleteAllChatsConfirm)) return;
+              deleteAllChats.mutate();
+            }}
+            disabled={deleteAllChats.isPending}
+          >
+            {deleteAllChats.isPending ? "Deleting…" : t.chats.deleteAllChats}
           </Button>
         </div>
         <div className="text-xs text-muted-foreground">

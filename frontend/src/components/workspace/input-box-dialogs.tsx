@@ -10,7 +10,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/core/i18n/hooks";
 
 export function MountFolderDialog({
@@ -135,66 +134,3 @@ export function RenameThreadDialog({
   );
 }
 
-export function AutoresearchDialog({
-  open,
-  onOpenChange,
-  topic,
-  endpointGoal,
-  onTopicChange,
-  onEndpointGoalChange,
-  onConfirm,
-  isSubmitting,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  topic: string;
-  endpointGoal: string;
-  onTopicChange: (value: string) => void;
-  onEndpointGoalChange: (value: string) => void;
-  onConfirm: () => void;
-  isSubmitting?: boolean;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Start autoresearch</DialogTitle>
-          <DialogDescription>
-            Provide a research topic and endpoint goal.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-2">
-          <Input
-            placeholder="Topic"
-            value={topic}
-            onChange={(e) => onTopicChange(e.target.value)}
-            autoFocus
-          />
-          <Textarea
-            placeholder="Endpoint goal"
-            value={endpointGoal}
-            onChange={(e) => onEndpointGoalChange(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                onConfirm();
-              }
-            }}
-            className="min-h-24"
-          />
-        </div>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={onConfirm}
-            disabled={!topic.trim() || !endpointGoal.trim() || isSubmitting}
-          >
-            {isSubmitting ? "Starting..." : "Start"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
