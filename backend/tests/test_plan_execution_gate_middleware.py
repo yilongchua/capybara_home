@@ -59,7 +59,7 @@ def test_draft_plan_allows_clarification_and_todo_updates():
 
 def test_draft_plan_blocks_research_and_presentation_tools():
     middleware = PlanExecutionGateMiddleware()
-    for tool_name in ("web_search", "query_knowledge_vault", "query_lightrag", "present_files"):
+    for tool_name in ("web_search", "query_knowledge_vault", "present_files"):
         result = middleware.wrap_tool_call(_request(tool_name, plan={"status": "draft"}), _handler)
         assert isinstance(result, Command)
         message = result.update["messages"][0]

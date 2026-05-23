@@ -73,7 +73,7 @@ _TRACEABLE_RUNTIME_EVENTS = {
     "dreamy_resumption_rehydrated",
 }
 
-_TRACEABLE_TOOL_NAMES = {"web_search", "query_knowledge_vault", "query_lightrag", "task"}
+_TRACEABLE_TOOL_NAMES = {"web_search", "query_knowledge_vault", "task"}
 
 
 def _truncate_preview(value: str, *, limit: int = 280) -> str:

@@ -32,7 +32,6 @@ import { useI18n } from "@/core/i18n/hooks";
 const orderedServiceIds: IntegrationServiceId[] = [
   "llm",
   "comfyui",
-  "lightrag",
   "websearch",
 ];
 

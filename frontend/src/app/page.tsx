@@ -18,7 +18,6 @@ import type {
 const serviceOrder: Array<IntegrationServiceStatus["id"]> = [
   "llm",
   "comfyui",
-  "lightrag",
   "websearch",
 ];
 

@@ -38,12 +38,6 @@ COMMUNITY_TOOL_REGISTRY: dict[str, CommunityToolEntry] = {
         "description": "Persist useful answers or curated notes into the local knowledge vault.",
         "source": "builtin",
     },
-    "query_lightrag": {
-        "import_path": "src.community.lightrag.tool:query_lightrag_tool",
-        "display_name": "LightRAG Query",
-        "description": "Graph-oriented evidence retrieval via a local LightRAG server.",
-        "source": "builtin",
-    },
     "comfyui_generate": {
         "import_path": "src.community.comfyui.tools:comfyui_generate_tool",
         "display_name": "ComfyUI Generate",

@@ -129,8 +129,7 @@ After `ask_clarification` is called, execution stops and waits for the user's re
 When looking for information, use sources in this priority order:
 1. `web_search` — external web research should be attempted first for fresh information
 2. `query_knowledge_vault` — enrich with local vault structure/snippets/concept links
-3. `query_lightrag` — retrieve graph-oriented, multi-hop relationship evidence when available
-4. `search_internal_documents` — alias for indexed internal doc search (maps to MCP `search_indexed_documents` when configured)
+3. `search_internal_documents` — alias for indexed internal doc search (maps to MCP `search_indexed_documents` when configured)
 Always keep fetch scope tight and respect runtime ceilings (timeouts/retries) when conducting broad queries.
 For `web_search`, prefer short human-like search phrases (keywords, entity names, dates) instead of instruction-heavy prompts.
 </fetch_policy>
@@ -240,7 +239,7 @@ FETCH_POLICY_SECTION = """<fetch_policy>
 When looking for information:
 - Start with the minimum source needed to reduce uncertainty; do NOT default to external search when local context or a reasonable assumption is enough.
 - Use `web_search` only when fresh, external, or source-verifiable facts are actually needed.
-- Use `query_knowledge_vault`, `query_lightrag`, and `search_internal_documents` when local indexed context is more relevant than the open web.
+- Use `query_knowledge_vault` and `search_internal_documents` when local indexed context is more relevant than the open web.
 - Always keep fetch scope tight and respect runtime ceilings (timeouts/retries) when conducting broad queries.
 - For `web_search`, prefer short human-like search phrases (keywords, entity names, dates) instead of instruction-heavy prompts.
 - In Plan Mode, any search or recall tool use is for scope discovery and ambiguity reduction only.

@@ -221,7 +221,7 @@ def test_core_services_readiness_returns_empty(tmp_path: Path) -> None:
 
 
 def test_resolve_integration_services_excludes_removed(tmp_path: Path) -> None:
-    """_resolve_integration_services must not include onyx_mcp, searxng, or crawl4ai."""
+    """_resolve_integration_services must not include onyx_mcp, searxng, crawl4ai, or lightrag."""
     from src.control_plane.service import ControlPlaneService
     from src.control_plane.store import ControlPlaneStore
 
@@ -232,12 +232,7 @@ def test_resolve_integration_services_excludes_removed(tmp_path: Path) -> None:
         mock_cfg.return_value.tool_backends = ToolBackendsConfig(
             comfyui=ToolBackendEndpointConfig(enabled=True, base_url="http://localhost:8188"),
         )
-        mock_cfg.return_value.knowledge_vault = SimpleNamespace(
-            lightrag=SimpleNamespace(
-                base_url="http://localhost:9621",
-                timeout_seconds=12.0,
-            )
-        )
+        mock_cfg.return_value.knowledge_vault = SimpleNamespace()
         mock_cfg.return_value.model_extra = {}
 
         services = svc._resolve_integration_services()
@@ -246,3 +241,46 @@ def test_resolve_integration_services_excludes_removed(tmp_path: Path) -> None:
     assert "onyx_mcp" not in ids, "onyx_mcp must not appear in resolved services"
     assert "searxng" not in ids, "searxng must not appear in resolved services"
     assert "crawl4ai" not in ids, "crawl4ai must not appear in resolved services"
+    assert "lightrag" not in ids, "lightrag must not appear in resolved services"
+
+
+# ---------------------------------------------------------------------------
+# 6. LightRAG removal — module gone, config field gone, no tool, no catalog entry
+# ---------------------------------------------------------------------------
+
+
+def test_lightrag_module_not_importable() -> None:
+    """src.community.lightrag must not exist after removal."""
+    for key in list(sys.modules.keys()):
+        if "community.lightrag" in key:
+            del sys.modules[key]
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("src.community.lightrag.tool")
+
+
+def test_knowledge_vault_config_no_lightrag_field() -> None:
+    """KnowledgeVaultConfig must not have a lightrag field."""
+    from src.config.control_plane_config import KnowledgeVaultConfig
+
+    cfg = KnowledgeVaultConfig()
+    assert not hasattr(cfg, "lightrag"), "lightrag field should have been removed from KnowledgeVaultConfig"
+
+
+def test_lightrag_not_in_community_registry() -> None:
+    """COMMUNITY_TOOL_REGISTRY must not contain a query_lightrag entry."""
+    from src.community.registry import COMMUNITY_TOOL_REGISTRY
+
+    assert "query_lightrag" not in COMMUNITY_TOOL_REGISTRY
+
+
+def test_integration_service_catalog_excludes_lightrag(tmp_path: Path) -> None:
+    """_integration_service_catalog must not list lightrag."""
+    from src.control_plane.service import ControlPlaneService
+    from src.control_plane.store import ControlPlaneStore
+
+    store = ControlPlaneStore(path=tmp_path / "state.json")
+    svc = ControlPlaneService(store=store)
+    catalog = svc._integration_service_catalog()
+    ids = {item["id"] for item in catalog}
+
+    assert "lightrag" not in ids, "lightrag must not appear in service catalog"

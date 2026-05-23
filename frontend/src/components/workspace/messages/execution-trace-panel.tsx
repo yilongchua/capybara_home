@@ -139,7 +139,7 @@ function summarizeEvent(event: ExecutionTraceEvent): string | null {
     if (!toolName) {
       return "Started a tool call.";
     }
-    if (toolName === "web_search" || toolName === "query_knowledge_vault" || toolName === "query_lightrag") {
+    if (toolName === "web_search" || toolName === "query_knowledge_vault") {
       return "Checking sources.";
     }
     if (toolInput) {

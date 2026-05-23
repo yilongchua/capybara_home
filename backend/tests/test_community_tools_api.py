@@ -18,7 +18,6 @@ def test_registry_has_expected_tools():
         "web_search",
         "query_knowledge_vault",
         "save_to_knowledge_vault",
-        "query_lightrag",
         "comfyui_generate",
         "image_search",
     }
@@ -34,7 +33,7 @@ def test_registry_entries_have_required_fields():
 
 
 def test_builtin_tools_are_marked_correctly():
-    builtin_expected = {"web_search", "query_knowledge_vault", "save_to_knowledge_vault", "query_lightrag"}
+    builtin_expected = {"web_search", "query_knowledge_vault", "save_to_knowledge_vault"}
     for name in builtin_expected:
         assert COMMUNITY_TOOL_REGISTRY[name]["source"] == "builtin", f"{name} should be 'builtin'"
 
@@ -180,5 +179,5 @@ def test_get_available_tools_builtin_enabled_by_default(tmp_path):
 
     tool_names = [t.name for t in tools]
     # All builtin tools should be present when not overridden
-    for name in ("web_search", "query_knowledge_vault", "save_to_knowledge_vault", "query_lightrag"):
+    for name in ("web_search", "query_knowledge_vault", "save_to_knowledge_vault"):
         assert name in tool_names, f"Expected {name} in default tool list"

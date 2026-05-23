@@ -3,7 +3,6 @@ import logging
 from langchain.tools import BaseTool
 
 from src.community.knowledge_vault_search import query_knowledge_vault_tool, save_to_knowledge_vault_tool
-from src.community.lightrag import query_lightrag_tool
 from src.community.scope_search import scope_search_tool
 from src.community.web_search import web_search_tool
 from src.config import get_app_config
@@ -24,7 +23,6 @@ BUILTIN_TOOLS = [
     scope_search_tool,
     query_knowledge_vault_tool,
     save_to_knowledge_vault_tool,
-    query_lightrag_tool,
 ]
 
 SUBAGENT_TOOLS = [

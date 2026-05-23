@@ -163,7 +163,7 @@ def test_no_hidden_tools_means_request_passes_through_unchanged() -> None:
 
 def test_hidden_set_includes_expected_search_and_write_tools() -> None:
     # Locks the contract — these tools MUST be hidden in draft mode.
-    for tool_name in ("web_search", "query_knowledge_vault", "query_lightrag",
+    for tool_name in ("web_search", "query_knowledge_vault",
                       "search_internal_documents", "task", "write_file", "str_replace"):
         assert tool_name in _DRAFT_HIDDEN_TOOLS
 

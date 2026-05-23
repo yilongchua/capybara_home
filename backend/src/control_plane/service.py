@@ -1925,12 +1925,6 @@ class ControlPlaneService:
                 "stop_command": "stop-comfyui",
             },
             {
-                "id": "lightrag",
-                "label": "LightRAG",
-                "start_command": "start-lightrag",
-                "stop_command": "stop-lightrag",
-            },
-            {
                 "id": "websearch",
                 "label": "WebSearch",
                 "start_command": "start-websearch",
@@ -1966,20 +1960,6 @@ class ControlPlaneService:
                 "health_path": comfyui_health_path,
                 "headers": comfyui_cfg.headers,
                 "timeout": max(1.0, float(comfyui_cfg.timeout_seconds)),
-                "can_start": True,
-            }
-        )
-
-        lightrag_cfg = app_config.knowledge_vault.lightrag
-        lightrag_base_url = lightrag_cfg.base_url or os.getenv("LIGHTRAG_BASE_URL", "http://localhost:9621")
-        services.append(
-            {
-                "id": "lightrag",
-                "label": "LightRAG",
-                "base_url": lightrag_base_url,
-                "health_path": "/health",
-                "headers": {},
-                "timeout": max(1.0, float(lightrag_cfg.timeout_seconds)),
                 "can_start": True,
             }
         )
@@ -2165,8 +2145,6 @@ class ControlPlaneService:
     def _docker_keywords_for_service(self, service_id: str) -> list[str]:
         if service_id == "comfyui":
             return ["comfyui"]
-        if service_id == "lightrag":
-            return ["lightrag"]
         if service_id == "websearch":
             return ["websearch"]
         return []

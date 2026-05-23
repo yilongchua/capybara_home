@@ -92,14 +92,6 @@ class GenerationAsyncConfig(BaseModel):
 
 
 class KnowledgeVaultConfig(BaseModel):
-    class LightRAGConfig(BaseModel):
-        enabled: bool = Field(default=False, description="Whether LightRAG graph query integration is enabled")
-        base_url: str = Field(default="http://localhost:9621", description="LightRAG API base URL")
-        timeout_seconds: float = Field(default=12.0, ge=1.0, le=120.0, description="HTTP timeout for LightRAG requests")
-        default_mode: str = Field(default="hybrid", description="Default query mode for LightRAG")
-        max_top_k: int = Field(default=20, ge=1, le=200, description="Maximum top_k per LightRAG query")
-        model_config = ConfigDict(extra="allow")
-
     enabled: bool = Field(default=True, description="Whether knowledge vault workflows are enabled")
     path: str = Field(default="", description="Path to Obsidian-compatible vault directory")
     allowed_domains: list[str] = Field(default_factory=list, description="Optional domain allowlist for vault ingestion")
@@ -153,5 +145,4 @@ class KnowledgeVaultConfig(BaseModel):
     cot_ingest_enabled: bool = Field(default=True, description="Enable two-step source analysis and generation during ingest")
     cot_min_chars: int = Field(default=1200, ge=0, le=200000, description="Minimum source length before invoking the CoT ingest flow")
     cot_model: str = Field(default="", description="Optional explicit model name for knowledge vault analysis and generation")
-    lightrag: LightRAGConfig = Field(default_factory=LightRAGConfig)
     model_config = ConfigDict(extra="allow")

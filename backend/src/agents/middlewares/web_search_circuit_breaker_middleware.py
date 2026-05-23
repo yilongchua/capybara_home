@@ -104,7 +104,7 @@ class WebSearchCircuitBreakerMiddleware(AgentMiddleware[AgentState]):
                 f"{_CIRCUIT_OPEN_FINGERPRINT}\n"
                 f"web_search already failed {failures} time(s) in this user run. "
                 "Skip further web_search retries for now. Use successful prior results, "
-                "query_knowledge_vault/query_lightrag if available, or answer from established knowledge with clear caveats."
+                "query_knowledge_vault if available, or answer from established knowledge with clear caveats."
             ),
         )
 

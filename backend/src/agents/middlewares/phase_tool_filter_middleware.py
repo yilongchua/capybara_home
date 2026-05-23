@@ -7,7 +7,7 @@ stronger behavioral signal than reactive runtime blocking.
 
 Two symmetric filters apply:
 
-- **Draft / Plan Mode**: execution tools — ``web_search``, ``query_lightrag``,
+- **Draft / Plan Mode**: execution tools — ``web_search``,
   ``query_knowledge_vault``, ``search_internal_documents``, ``task``,
   ``write_file``, ``str_replace`` — are removed from the LLM's tool catalog.
   ``scope_search`` (a Plan-Mode wrapper around ``web_search``) remains visible
@@ -42,7 +42,6 @@ _DRAFT_HIDDEN_TOOLS: frozenset[str] = frozenset(
         # Execution-grade search tools — must wait for plan approval.
         "web_search",
         "query_knowledge_vault",
-        "query_lightrag",
         "search_internal_documents",
         # Subagent dispatch and write tools.
         "task",

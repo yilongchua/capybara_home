@@ -13,7 +13,6 @@ DESKTOP_ROOT="${DESKTOP_ROOT:-$HOME/Desktop}"
 MARINETIME_MCP_DIR="${MARINETIME_MCP_DIR:-$DESKTOP_ROOT/marinetime_mcp}"
 LLAMA_CPP_DIR="${LLAMA_CPP_DIR:-$DESKTOP_ROOT/llama.cpp}"
 COMFYUI_DIR="${COMFYUI_DIR:-$DESKTOP_ROOT/comfyUI}"
-LIGHTRAG_DIR="${LIGHTRAG_DIR:-$DESKTOP_ROOT/LightRAG}"
 WEBSEARCH_DIR="${WEBSEARCH_DIR:-$DESKTOP_ROOT/websearch}"
 LOCAL_STACK_STATE_DIR="${LOCAL_STACK_STATE_DIR:-$CAPYBARA_ROOT/.local-stack}"
 
@@ -25,16 +24,9 @@ COMFYUI_BASE_URL="${COMFYUI_BASE_URL:-http://localhost:${COMFYUI_PORT}}"
 BROWSER_AUTOMATION_PORT="${LOCAL_PORT_BROWSER_AUTOMATION:-9333}"
 BROWSER_AUTOMATION_BASE_URL="${BROWSER_AUTOMATION_BASE_URL:-http://localhost:${BROWSER_AUTOMATION_PORT}}"
 CAPYBARA_UI_PORT="${LOCAL_PORT_CAPYBARA_UI:-2026}"
-LIGHTRAG_PORT="${LOCAL_PORT_LIGHTRAG:-9621}"
 WEBSEARCH_PORT="${LOCAL_PORT_WEBSEARCH:-9000}"
-INFINITY_RERANK_PORT="${LOCAL_PORT_INFINITY_RERANK:-7997}"
-LIGHTRAG_BASE_URL="${LIGHTRAG_BASE_URL:-http://localhost:${LIGHTRAG_PORT}}"
 WEBSEARCH_BASE_URL="${WEBSEARCH_BASE_URL:-http://localhost:${WEBSEARCH_PORT}}"
-INFINITY_RERANK_BASE_URL="${INFINITY_RERANK_BASE_URL:-http://localhost:${INFINITY_RERANK_PORT}}"
-LIGHTRAG_COMPOSE_PROJECT="${LIGHTRAG_COMPOSE_PROJECT:-lightrag}"
 WEBSEARCH_COMPOSE_PROJECT="${WEBSEARCH_COMPOSE_PROJECT:-websearch}"
-LIGHTRAG_COMPOSE_FILE="${LIGHTRAG_COMPOSE_FILE:-$LIGHTRAG_DIR/docker-compose.yml}"
-LIGHTRAG_INFINITY_COMPOSE_FILE="${LIGHTRAG_INFINITY_COMPOSE_FILE:-$LIGHTRAG_DIR/docker-compose.infinity-standalone.yaml}"
 WEBSEARCH_COMPOSE_FILE="${WEBSEARCH_COMPOSE_FILE:-$WEBSEARCH_DIR/docker-compose.yml}"
 LLAMA_CPP_WORKDIR="${LLAMA_CPP_WORKDIR:-$LLAMA_CPP_DIR}"
 COMFYUI_WORKDIR="${COMFYUI_WORKDIR:-$COMFYUI_DIR}"
@@ -65,17 +57,6 @@ require_file() {
         return 1
     fi
     return 0
-}
-
-lightrag_compose() {
-    require_file "$LIGHTRAG_COMPOSE_FILE" "LightRAG compose file" || return 1
-    require_file "$LIGHTRAG_INFINITY_COMPOSE_FILE" "Infinity compose file" || return 1
-    docker compose \
-        --project-name "$LIGHTRAG_COMPOSE_PROJECT" \
-        --project-directory "$LIGHTRAG_DIR" \
-        -f "$LIGHTRAG_COMPOSE_FILE" \
-        -f "$LIGHTRAG_INFINITY_COMPOSE_FILE" \
-        "$@"
 }
 
 websearch_compose() {
@@ -268,7 +249,6 @@ start_browser_automation() {
 start_stack() {
     print_header
     start_comfyui
-    start_lightrag_compose
     start_websearch_compose
     start_browser_automation
 
@@ -276,21 +256,9 @@ start_stack() {
     echo -e "${GREEN}Local stack is up.${NC}"
     echo "llama.cpp: ${LLAMA_CPP_BASE_URL}"
     echo "ComfyUI : ${COMFYUI_BASE_URL}"
-    echo "LightRAG: ${LIGHTRAG_BASE_URL}"
-    echo "Infinity Rerank: ${INFINITY_RERANK_BASE_URL}"
     echo "WebSearch: ${WEBSEARCH_BASE_URL}"
     echo "Browser : ${BROWSER_AUTOMATION_BASE_URL}"
     echo "Capybara Home is excluded from integration startup."
-}
-
-start_lightrag_compose() {
-    echo -e "${BLUE}Starting LightRAG compose stack...${NC}"
-    lightrag_compose up -d --remove-orphans
-}
-
-stop_lightrag_compose() {
-    echo -e "${BLUE}Stopping LightRAG compose stack...${NC}"
-    lightrag_compose down --remove-orphans
 }
 
 start_websearch_compose() {
@@ -317,12 +285,6 @@ start_llm_service() {
     fi
 }
 
-start_lightrag_service() {
-    print_header
-    start_lightrag_compose
-    echo -e "${GREEN}LightRAG startup command completed.${NC}"
-}
-
 start_websearch_service() {
     print_header
     start_websearch_compose
@@ -333,12 +295,6 @@ start_comfyui_service() {
     print_header
     start_comfyui
     echo -e "${GREEN}ComfyUI startup command completed.${NC}"
-}
-
-stop_lightrag_service() {
-    print_header
-    stop_lightrag_compose
-    echo -e "${GREEN}LightRAG stop command completed.${NC}"
 }
 
 stop_websearch_service() {
@@ -362,7 +318,6 @@ stop_stack() {
     stop_optional_process "COMFYUI" "$COMFYUI_PID_FILE"
     docker rm -f "$LLAMA_CPP_CONTAINER_NAME" >/dev/null 2>&1 || true
     stop_optional_process "LLAMA_CPP" "$LLAMA_CPP_PID_FILE"
-    stop_lightrag_compose || true
     stop_websearch_compose || true
 
     echo -e "${BLUE}Stopping Capybara Home...${NC}"
@@ -374,7 +329,7 @@ stop_stack() {
 stack_status() {
     print_header
     echo "Port checks:"
-    for port in "$CAPYBARA_UI_PORT" "$LLAMA_CPP_PORT" "$COMFYUI_PORT" "$LIGHTRAG_PORT" "$INFINITY_RERANK_PORT" "$WEBSEARCH_PORT" "$BROWSER_AUTOMATION_PORT"; do
+    for port in "$CAPYBARA_UI_PORT" "$LLAMA_CPP_PORT" "$COMFYUI_PORT" "$WEBSEARCH_PORT" "$BROWSER_AUTOMATION_PORT"; do
         if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
             echo "  [up]   :${port}"
         else
@@ -387,8 +342,6 @@ stack_status() {
     curl -s -o /dev/null -w "  capybara-home  %{http_code}\n" "http://localhost:${CAPYBARA_UI_PORT}/" || true
     curl -s -o /dev/null -w "  llama.cpp %{http_code}\n" "${LLAMA_CPP_BASE_URL%/}/models" || true
     curl -s -o /dev/null -w "  comfyui   %{http_code}\n" "${COMFYUI_BASE_URL}/system_stats" || true
-    curl -s -o /dev/null -w "  lightrag  %{http_code}\n" "${LIGHTRAG_BASE_URL}/health" || true
-    curl -s -o /dev/null -w "  infinity  %{http_code}\n" "${INFINITY_RERANK_BASE_URL}/health" || true
     curl -s -o /dev/null -w "  websearch %{http_code}\n" "${WEBSEARCH_BASE_URL}/health" || true
     curl -s -o /dev/null -w "  browser   %{http_code}\n" "${BROWSER_AUTOMATION_BASE_URL}/health" || true
 
@@ -419,15 +372,13 @@ stack_status() {
     echo ""
     echo "Containers:"
     docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | \
-        rg "capybara-home|lightrag|infinity|websearch|NAMES" || true
+        rg "capybara-home|websearch|NAMES" || true
 }
 
 stack_logs() {
     print_header
     echo "Use these focused log commands:"
     echo "  Capybara Home:  cd \"$CAPYBARA_ROOT\" && ./scripts/docker.sh logs"
-    echo "  lightrag: docker logs -f lightrag-lightrag-1"
-    echo "  infinity: docker logs -f infinity-rerank"
     echo "  websearch: docker logs -f websearch"
     echo "  llama.cpp: tail -f \"$LLAMA_CPP_LOG_FILE\""
     echo "  ComfyUI:   tail -f \"$COMFYUI_LOG_FILE\""
@@ -439,12 +390,10 @@ usage() {
 Usage: $(basename "$0") <command>
 
 Commands:
-  start              Start local integrations stack (ComfyUI, LightRAG, WebSearch)
+  start              Start local integrations stack (ComfyUI, WebSearch)
   start-llm          LLM health check only (:1234/v1/models)
-  start-lightrag     Start LightRAG + Infinity compose stack
   start-websearch    Start WebSearch compose stack
   start-comfyui       Start ComfyUI only
-  stop-lightrag      Stop LightRAG + Infinity compose stack
   stop-websearch     Stop WebSearch compose stack
   stop-comfyui        Stop ComfyUI only
   stop               Stop local stack
@@ -462,17 +411,11 @@ main() {
         start-llm)
             start_llm_service
             ;;
-        start-lightrag)
-            start_lightrag_service
-            ;;
         start-websearch)
             start_websearch_service
             ;;
         start-comfyui)
             start_comfyui_service
-            ;;
-        stop-lightrag)
-            stop_lightrag_service
             ;;
         stop-websearch)
             stop_websearch_service

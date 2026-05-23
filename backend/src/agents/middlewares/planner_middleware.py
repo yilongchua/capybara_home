@@ -290,7 +290,7 @@ Optional — include ONLY when they carry real signal, otherwise omit:
   comparison-dimension-researcher, synthesis-reviewer, general-purpose, bash}.
   Omit when the lead agent handles the step directly. Prefer
   ["source-researcher"] for broad web research (it has its own search budget).
-- steps[].tools: from {web_search, query_lightrag, query_knowledge_vault,
+- steps[].tools: from {web_search, query_knowledge_vault,
   read_file, write_file, str_replace, bash, ls, view_image, task,
   present_files}. Omit when the step needs no specific tool gating.
 - steps[].output_artifact_path: virtual path under /mnt/user-data/workspace,

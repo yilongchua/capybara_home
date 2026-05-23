@@ -122,7 +122,7 @@ Middlewares execute in strict order in `src/agents/lead_agent/agent.py`:
 2. **UploadsMiddleware** - Tracks and injects newly uploaded files into conversation
 3. **SandboxMiddleware** - Acquires sandbox, stores `sandbox_id` in state
 4. **AutoresearchMiddleware** / **WriteFileArtifactMiddleware** / **DanglingToolCallMiddleware** - Early routing, artifact promotion, and interrupted-tool repair
-5. **WorkModeMiddleware** / **SearchPrivacyMiddleware** / **PlanExecutionGateMiddleware** - Work-mode execution, privacy masking, and recoverable plan approval gating
+5. **WorkModeMiddleware** / **PlanExecutionGateMiddleware** - Work-mode execution and recoverable plan approval gating
 6. **PermissionMiddleware** / **ToolDisclosureMiddleware** / **HooksMiddleware** - Declarative permission, phase-gated tool disclosure, and command hooks
 7. **SummarizationMiddleware** / **SkillDisclosureMiddleware** - Context compaction with operational-message preservation, then active skill injection
 8. **PlannerMiddleware** / **PlanEvaluatorMiddleware** / **TodoDagMiddleware/TodoListMiddleware** - Planning, plan checks, and todo graph tracking
@@ -226,7 +226,6 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 - `aio_sandbox/` - Docker/container-based sandbox provider
 - `comfyui/` - ComfyUI image/video generation integration
 - `knowledge_vault_search/` - BM25 keyword search over compiled vault pages
-- `lightrag/` - Graph-based knowledge retrieval via LightRAG
 - `web_search/` - Web search via local SearXNG backend with crawl4ai
 
 ### MCP System (`src/mcp/`)

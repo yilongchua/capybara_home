@@ -54,17 +54,6 @@ Example usage:
 - "What do I know about LangGraph?" → `query_knowledge_vault(query="LangGraph memory state")`
 - "Show me my notes on climate policy" → `query_knowledge_vault(query="climate policy", categories=["syntheses","concepts"])`
 
-## Graph Evidence Mode
-
-When relational or multi-hop evidence is needed:
-
-1. Call `query_lightrag` with focused graph questions.
-2. Merge LightRAG findings with vault context rather than replacing vault notes directly.
-3. Use autoresearch pipeline synthesis stages to produce durable updates.
-
-Example:
-- "Which entities connect policy A to company B?" → `query_lightrag(query="policy A company B relationship chain", mode="hybrid", top_k=8)`
-
 ## Synthesis Mode
 
 - `synthesize_knowledge_graph` is not a default ad-hoc chat tool.

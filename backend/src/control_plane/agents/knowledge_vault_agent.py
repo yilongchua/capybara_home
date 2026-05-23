@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 from src.control_plane.agents.base import BaseControlPlaneAgent
 from src.control_plane.agents.schemas import (
@@ -279,23 +278,9 @@ class KnowledgeVaultAgent(BaseControlPlaneAgent):
         topic = self._topic(context, profile)
         objective_id = self._objective_id(context, topic)
 
-        graph_evidence: dict[str, Any] = {}
-        discover_report = None
-        for run_step in context.run.steps:
-            output = run_step.output if isinstance(run_step.output, dict) else {}
-            report = output.get("report")
-            if isinstance(report, dict) and run_step.kind == "vault_discover":
-                discover_report = report
-        if isinstance(discover_report, dict):
-            graph_evidence = {
-                "summary": f"Discovery identified {int(discover_report.get('candidate_count') or 0)} candidate URLs.",
-                "entities": [topic] if topic else [],
-            }
-
         report = manager.synthesize_knowledge_graph(
             objective_id=objective_id,
             topic=topic,
-            graph_evidence=graph_evidence,
         )
         artifacts = self._service._write_vault_step_artifacts(
             run_id=context.run_id,

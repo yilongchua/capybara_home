@@ -54,7 +54,6 @@ _SCOPE_GATED_TOOLS: frozenset[str] = frozenset(
     {
         "web_search",
         "query_knowledge_vault",
-        "query_lightrag",
         "search_internal_documents",
     }
 )

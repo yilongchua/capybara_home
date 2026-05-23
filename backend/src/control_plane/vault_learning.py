@@ -1968,11 +1968,9 @@ class VaultLearningManager:
         *,
         objective_id: str,
         topic: str = "",
-        graph_evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         objective = self._ensure_objective(objective_id=objective_id, topic=topic)
         lint = self._collect_lint_snapshot()
-        graph_payload = graph_evidence or {}
         findings: list[str] = []
         gaps: list[str] = []
         contradictions: list[str] = []
@@ -1997,15 +1995,8 @@ class VaultLearningManager:
         if isinstance(lint_contradictions, list):
             contradictions.extend(str(item) for item in lint_contradictions[:20])
 
-        graph_summary = graph_payload.get("summary")
-        if isinstance(graph_summary, str) and graph_summary.strip():
-            findings.append(graph_summary.strip())
-        graph_entities = graph_payload.get("entities")
-        if isinstance(graph_entities, list) and graph_entities:
-            findings.append(f"Graph evidence references {len(graph_entities)} entities for this objective.")
-
         if not findings:
-            findings.append("Vault evidence compiled; no additional graph summary available yet.")
+            findings.append("Vault evidence compiled.")
         if not gaps:
             next_actions.append("Maintain periodic lint and freshness checks.")
 
@@ -2017,7 +2008,6 @@ class VaultLearningManager:
             "gaps": gaps,
             "contradictions": contradictions,
             "next_actions": next_actions,
-            "graph_evidence": graph_payload,
             "lint_snapshot": {
                 "stale_syntheses_count": lint.get("stale_syntheses_count", 0),
                 "open_questions_count": lint.get("open_questions_count", 0),

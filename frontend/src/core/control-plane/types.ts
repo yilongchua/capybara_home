@@ -575,7 +575,6 @@ export interface SchedulerRuntimeJobCreateRequest {
 export type IntegrationServiceId =
   | "llm"
   | "comfyui"
-  | "lightrag"
   | "websearch";
 
 export interface IntegrationServiceStatus {
