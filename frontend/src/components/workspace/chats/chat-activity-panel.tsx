@@ -6,7 +6,6 @@ import { useCallback, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { useThread } from "@/components/workspace/messages/context";
 import { PhaseProgress } from "@/components/workspace/phase-progress";
-import { TodoList } from "@/components/workspace/todo-list";
 import { asActivityTimelineState, mergeActivityEvents, useActivityContext } from "@/core/activity";
 import { useI18n } from "@/core/i18n/hooks";
 import { cn } from "@/lib/utils";
@@ -214,13 +213,7 @@ export function ChatActivityPanel({
       <div className="flex-1 overflow-y-auto">
         <div className="space-y-0 p-3">
           <PhaseProgress phaseExecution={displayPhaseExecution} runState={runState} />
-          <TodoList
-            className="my-2"
-            todos={todos}
-            hidden={todos.length === 0}
-            embedded
-          />
-          <section className="space-y-2 rounded-lg border p-3">
+          <section className="mt-2 space-y-2 rounded-lg border p-3">
             <header
               className="flex cursor-pointer items-center justify-between gap-2 text-sm font-medium"
               onClick={() => setTimelineCollapsed((prev) => !prev)}

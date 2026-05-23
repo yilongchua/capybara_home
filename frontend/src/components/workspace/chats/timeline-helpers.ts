@@ -133,8 +133,8 @@ export function deriveSubtaskDescriptor(
 }
 
 export function kindToSpineColor(kind: TimelineItemKind): string {
-  if (kind === "task_completed") return "bg-emerald-400";
-  if (kind === "task_failed") return "bg-red-400";
-  if (kind === "task_started") return "bg-amber-400";
-  return "bg-slate-200";
+  if (kind === "task_completed") return "bg-emerald-100";
+  if (kind === "task_failed") return "bg-red-100";
+  if (kind === "task_started") return "bg-amber-100";
+  return "bg-slate-100";
 }

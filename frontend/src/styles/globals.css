@@ -308,8 +308,8 @@
   --accent: oklch(0.855 0.05 70);
   --accent-foreground: oklch(0.28 0.045 55);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.82 0.04 65);
-  --input: oklch(0.8 0.045 65);
+  --border: oklch(0.25 0.06 55);
+  --input: oklch(0.25 0.06 55);
   --ring: transparent;
   --chart-1: oklch(0.55 0.1 55);
   --chart-2: oklch(0.65 0.12 80);
@@ -322,8 +322,25 @@
   --sidebar-primary-foreground: oklch(0.975 0.025 80);
   --sidebar-accent: oklch(0.83 0.055 70);
   --sidebar-accent-foreground: oklch(0.28 0.045 55);
-  --sidebar-border: oklch(0.78 0.045 65);
+  --sidebar-border: oklch(0.25 0.06 55);
   --sidebar-ring: oklch(0.55 0.08 55);
+}
+
+/* Capybara theme: thicker dark-brown lines + framed UI */
+.capybara .border { border-width: 2px; }
+.capybara .border-t { border-top-width: 2px; }
+.capybara .border-b { border-bottom-width: 2px; }
+.capybara .border-l { border-left-width: 2px; }
+.capybara .border-r { border-right-width: 2px; }
+.capybara .border-x { border-left-width: 2px; border-right-width: 2px; }
+.capybara .border-y { border-top-width: 2px; border-bottom-width: 2px; }
+.capybara .divide-y > :not([hidden]) ~ :not([hidden]) { border-top-width: 2px; }
+.capybara .divide-x > :not([hidden]) ~ :not([hidden]) { border-left-width: 2px; }
+
+.capybara body {
+  border: 2px solid var(--border);
+  border-radius: 14px 14px 0 0;
+  overflow: hidden;
 }
 
 @layer base {
