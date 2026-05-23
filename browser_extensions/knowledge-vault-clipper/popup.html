@@ -9,13 +9,43 @@
         font-family: ui-sans-serif, system-ui, sans-serif;
         margin: 0;
         padding: 14px;
-        width: 320px;
+        width: 340px;
         background: #f7f4ed;
         color: #1f2937;
       }
+      .header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 4px;
+      }
+      .header img {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        flex-shrink: 0;
+      }
       h1 {
-        margin: 0 0 10px;
+        margin: 0;
         font-size: 16px;
+      }
+      .shortcut-line {
+        margin: 0 0 10px;
+        font-size: 11px;
+        color: #57534e;
+      }
+      .shortcut-line code {
+        background: #ece7dd;
+        border-radius: 6px;
+        padding: 1px 6px;
+        font-size: 11px;
+      }
+      h2 {
+        margin: 14px 0 6px;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #57534e;
       }
       label {
         display: block;
@@ -23,7 +53,6 @@
         font-size: 12px;
         font-weight: 600;
       }
-      input, textarea, button {
       input, textarea, button, select {
         width: 100%;
         box-sizing: border-box;
@@ -33,7 +62,7 @@
         font: inherit;
       }
       textarea {
-        min-height: 88px;
+        min-height: 64px;
         resize: vertical;
       }
       button {
@@ -51,38 +80,124 @@
       .hint {
         color: #57534e;
       }
-      .preview {
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
         margin-top: 10px;
-        max-height: 140px;
-        overflow: auto;
-        border: 1px solid #d6d3d1;
-        border-radius: 10px;
-        padding: 10px;
-        font-size: 11px;
-        white-space: pre-wrap;
+      }
+      .row label {
+        margin: 0;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .switch {
+        position: relative;
+        width: 40px;
+        height: 22px;
+        flex-shrink: 0;
+      }
+      .switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+      .slider {
+        position: absolute;
+        cursor: pointer;
+        inset: 0;
+        background: #d6d3d1;
+        border-radius: 22px;
+        transition: background 0.2s;
+      }
+      .slider::before {
+        content: "";
+        position: absolute;
+        height: 16px;
+        width: 16px;
+        left: 3px;
+        top: 3px;
         background: #fff;
+        border-radius: 50%;
+        transition: transform 0.2s;
+      }
+      .switch input:checked + .slider {
+        background: #0f766e;
+      }
+      .switch input:checked + .slider::before {
+        transform: translateX(18px);
+      }
+      .queue-pill {
+        display: none;
+        margin-top: 10px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        background: #ecfdf5;
+        color: #065f46;
+        border: 1px solid #a7f3d0;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .queue-pill.visible {
+        display: block;
+      }
+      details {
+        margin-top: 8px;
+        font-size: 12px;
+      }
+      summary {
+        cursor: pointer;
+        color: #0f766e;
+        font-weight: 600;
       }
     </style>
   </head>
   <body>
-    <h1>Save To Vault</h1>
-    <label for="apiBase">API Base</label>
-    <input id="apiBase" value="http://127.0.0.1:8001" />
-    <label for="mode">Clip Mode</label>
-    <select id="mode">
-      <option value="article">Article/Main</option>
-      <option value="selection">Selection</option>
-      <option value="full">Full Page</option>
-    </select>
-    <label for="topic">Topic Hint</label>
-    <input id="topic" placeholder="optional topic" />
-    <label for="notes">Extra Notes</label>
-    <textarea id="notes" placeholder="optional context to prepend"></textarea>
-    <button id="previewButton" type="button">Preview</button>
+    <div class="header">
+      <img src="Logo.png" alt="Capybara Home" />
+      <h1>Save To Vault</h1>
+    </div>
+    <p class="shortcut-line">
+      <code>Alt+Shift+V</code> / <code>⌘+Shift+V</code>
+    </p>
+
+    <div class="row">
+      <label for="autoClipToggle">
+        Auto-clip pages
+      </label>
+      <label class="switch">
+        <input id="autoClipToggle" type="checkbox" />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <details>
+      <summary>Auto-clip settings</summary>
+      <label for="autoClipDwell">Dwell time before clipping (seconds)</label>
+      <input id="autoClipDwell" type="number" min="4" step="1" value="10" />
+      <label for="autoClipBlocklist">Never auto-clip these hosts (one per line)</label>
+      <textarea id="autoClipBlocklist" placeholder="mail.google.com&#10;accounts.google.com"></textarea>
+      <label for="autoClipAllowlist">Restrict auto-clip to these hosts (leave empty to clip all)</label>
+      <textarea id="autoClipAllowlist" placeholder="(empty = clip every site, except the blocklist above)"></textarea>
+    </details>
+
+    <details>
+      <summary>Manual clip settings</summary>
+      <label for="apiBase">API Base</label>
+      <input id="apiBase" value="http://127.0.0.1:8001" />
+      <label for="mode">Clip Mode</label>
+      <select id="mode">
+        <option value="article">Article/Main</option>
+        <option value="selection">Selection</option>
+        <option value="full">Full Page</option>
+      </select>
+      <label for="topic">Topic Hint</label>
+      <input id="topic" placeholder="optional topic" />
+      <label for="notes">Extra Notes</label>
+      <textarea id="notes" placeholder="optional context to prepend"></textarea>
+    </details>
     <button id="clipButton">Clip Current Page</button>
-    <div id="preview" class="preview" hidden></div>
-    <div id="status" class="hint"></div>
-    <div class="hint">Tip: right-click page/selection for quick clip. Shortcut: Alt+Shift+V.</div>
     <script src="popup.js"></script>
   </body>
   </html>

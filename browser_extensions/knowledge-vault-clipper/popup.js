@@ -2,27 +2,57 @@ const apiBaseInput = document.getElementById("apiBase");
 const modeInput = document.getElementById("mode");
 const topicInput = document.getElementById("topic");
 const notesInput = document.getElementById("notes");
-const previewButton = document.getElementById("previewButton");
 const clipButton = document.getElementById("clipButton");
 const statusNode = document.getElementById("status");
-const previewNode = document.getElementById("preview");
+const queuePill = document.getElementById("queuePill");
+const autoClipToggle = document.getElementById("autoClipToggle");
+const autoClipDwell = document.getElementById("autoClipDwell");
+const autoClipBlocklist = document.getElementById("autoClipBlocklist");
+const autoClipAllowlist = document.getElementById("autoClipAllowlist");
+
+const DEFAULT_AUTO_BLOCKLIST = [
+  "mail.google.com",
+  "accounts.google.com",
+  "login.live.com",
+  "outlook.live.com",
+  "outlook.office.com",
+  "chrome.google.com",
+  "127.0.0.1",
+  "localhost",
+].join("\n");
 
 async function loadSettings() {
-  const saved = await chrome.storage.local.get(["apiBase", "mode", "topic"]);
-  if (saved.apiBase) {
-    apiBaseInput.value = saved.apiBase;
-  }
-  if (saved.mode) {
-    modeInput.value = saved.mode;
-  }
-  if (saved.topic) {
-    topicInput.value = saved.topic;
-  }
+  const saved = await chrome.storage.local.get([
+    "apiBase",
+    "mode",
+    "topic",
+    "autoClipEnabled",
+    "autoClipDwellMs",
+    "autoClipBlocklist",
+    "autoClipAllowlist",
+  ]);
+  if (saved.apiBase) apiBaseInput.value = saved.apiBase;
+  if (saved.mode) modeInput.value = saved.mode;
+  if (saved.topic) topicInput.value = saved.topic;
+
+  // Auto-clip is opt-out: undefined == on.
+  autoClipToggle.checked = saved.autoClipEnabled !== false;
+  autoClipDwell.value = Math.max(4, Math.round((saved.autoClipDwellMs ?? 10_000) / 1000));
+  autoClipBlocklist.value =
+    saved.autoClipBlocklist !== undefined ? saved.autoClipBlocklist : DEFAULT_AUTO_BLOCKLIST;
+  autoClipAllowlist.value = saved.autoClipAllowlist ?? "";
 }
 
 function setStatus(message, isError = false) {
   statusNode.textContent = message;
   statusNode.style.color = isError ? "#b91c1c" : "#57534e";
+}
+
+function showQueueConfirmation(title) {
+  const trimmed = (title || "Untitled page").slice(0, 70);
+  queuePill.textContent = `✓ Queued for ingestion: ${trimmed}`;
+  queuePill.classList.add("visible");
+  setTimeout(() => queuePill.classList.remove("visible"), 6000);
 }
 
 async function getActiveTab() {
@@ -57,12 +87,14 @@ function prependNotes(markdown) {
   return notes ? `## Operator Notes\n\n${notes}\n\n${markdown}` : markdown;
 }
 
-function renderPreview(payload) {
-  previewNode.hidden = false;
-  const content = prependNotes(payload.markdown);
-  const maxChars = 1400;
-  previewNode.textContent = content.length > maxChars ? `${content.slice(0, maxChars)}\n\n...` : content;
-  setStatus(`Preview ready (${content.length} chars).`);
+async function persistAutoClipSettings() {
+  const dwellSeconds = Math.max(4, Number(autoClipDwell.value) || 10);
+  await chrome.storage.local.set({
+    autoClipEnabled: autoClipToggle.checked,
+    autoClipDwellMs: dwellSeconds * 1000,
+    autoClipBlocklist: autoClipBlocklist.value,
+    autoClipAllowlist: autoClipAllowlist.value,
+  });
 }
 
 async function submitClip() {
@@ -92,30 +124,26 @@ async function submitClip() {
   return payload;
 }
 
-previewButton.addEventListener("click", async () => {
-  try {
-    previewButton.disabled = true;
-    setStatus("Building preview...");
-    const payload = await extractPayload(modeInput.value);
-    renderPreview(payload);
-  } catch (error) {
-    setStatus(error instanceof Error ? error.message : "Clip failed.", true);
-  } finally {
-    previewButton.disabled = false;
-  }
-});
-
 clipButton.addEventListener("click", async () => {
   try {
     clipButton.disabled = true;
     setStatus("Sending clip to vault...");
     const payload = await submitClip();
     setStatus(`Queued "${payload.title}" for ingestion.`);
+    showQueueConfirmation(payload.title);
+    void chrome.runtime
+      .sendMessage({ type: "vault-clip-success", title: payload.title, source: "manual" })
+      .catch(() => {});
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Clip failed.", true);
+    void chrome.runtime.sendMessage({ type: "vault-clip-failure" }).catch(() => {});
   } finally {
     clipButton.disabled = false;
   }
+});
+
+[autoClipToggle, autoClipDwell, autoClipBlocklist, autoClipAllowlist].forEach((el) => {
+  el.addEventListener("change", () => void persistAutoClipSettings());
 });
 
 void loadSettings();

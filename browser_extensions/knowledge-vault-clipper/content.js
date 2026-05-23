@@ -45,3 +45,64 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     });
   }
 });
+
+// --- Auto-clip ----------------------------------------------------------
+// Once per page load, ask the background whether this URL/host is eligible
+// for auto-clipping. If so, wait the configured dwell time (so the user has
+// a chance to leave) and then submit. Each tab/load triggers at most once.
+
+const MIN_DWELL_MS = 4_000;
+
+let autoClipScheduled = false;
+let autoClipTimer = null;
+
+function clearAutoClipTimer() {
+  if (autoClipTimer) {
+    clearTimeout(autoClipTimer);
+    autoClipTimer = null;
+  }
+}
+
+async function scheduleAutoClip() {
+  if (autoClipScheduled) return;
+  autoClipScheduled = true;
+  let decision;
+  try {
+    decision = await chrome.runtime.sendMessage({
+      type: "vault-auto-clip-check",
+      url: location.href,
+    });
+  } catch (_e) {
+    return;
+  }
+  if (!decision?.allow) return;
+
+  const { autoClipDwellMs } = await chrome.storage.local.get(["autoClipDwellMs"]);
+  const dwell = Math.max(MIN_DWELL_MS, Number(autoClipDwellMs) || 10_000);
+
+  autoClipTimer = setTimeout(async () => {
+    if (document.visibilityState === "hidden") return;
+    try {
+      const payload = extractPayload("article");
+      if (!payload.markdown || payload.markdown.length < 200) return;
+      await chrome.runtime.sendMessage({
+        type: "vault-auto-clip-submit",
+        payload,
+      });
+    } catch (_e) {
+      // background reports failures via badge; nothing to do here
+    }
+  }, dwell);
+}
+
+// Cancel pending auto-clip if user navigates away or hides the tab early.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") clearAutoClipTimer();
+});
+window.addEventListener("beforeunload", clearAutoClipTimer);
+
+if (document.readyState === "complete") {
+  void scheduleAutoClip();
+} else {
+  window.addEventListener("load", () => void scheduleAutoClip(), { once: true });
+}
