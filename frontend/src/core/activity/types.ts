@@ -1,4 +1,4 @@
-export type ActivityActor = "capybara" | "baby_capy" | "system";
+export type ActivityActor = "capyhome" | "baby_capy" | "system";
 
 export interface ActivityEvent {
   id?: string;

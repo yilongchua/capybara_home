@@ -18,7 +18,7 @@ export const DEFAULT_LOCAL_SETTINGS: LocalSettings = {
   },
 };
 
-const LOCAL_SETTINGS_KEY = "capybara-home.local-settings";
+const LOCAL_SETTINGS_KEY = "CapyHome.local-settings";
 const LEGACY_REMOVED_TOOL_KEYS = new Set(["tavily_search_results_json"]);
 
 export interface LocalSettings {

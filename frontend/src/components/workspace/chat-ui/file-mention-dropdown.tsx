@@ -19,7 +19,7 @@ import { useFileMention } from "@/hooks/use-file-mention";
 import { cn } from "@/lib/utils";
 
 const MAX_VISIBLE = 120;
-export const FILE_MENTION_ACTIVITY_EVENT = "capybara:file-mention-activity";
+export const FILE_MENTION_ACTIVITY_EVENT = "capyhome:file-mention-activity";
 
 function fuzzyMatch(file: MountedFolderFile, query: string): boolean {
   if (!query) return true;

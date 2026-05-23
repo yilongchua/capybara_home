@@ -1,12 +1,12 @@
 /**
- * About Capybara Home markdown content. Inlined to avoid raw-loader dependency
+ * About CapyHome markdown content. Inlined to avoid raw-loader dependency
  * (Turbopack cannot resolve raw-loader for .md imports).
  */
-export const aboutMarkdown = `# About Capybara Home
+export const aboutMarkdown = `# About CapyHome
 
 > **Super Agent Harness — Batteries Included, Fully Extensible**
 
-**Capybara Home** is an open-source super agent harness that orchestrates sub-agents, memory, and sandboxes to perform complex, multi-step tasks — powered by extensible skills.
+**CapyHome** is an open-source super agent harness that orchestrates sub-agents, memory, and sandboxes to perform complex, multi-step tasks — powered by extensible skills.
 
 ---
 
@@ -23,7 +23,7 @@ export const aboutMarkdown = `# About Capybara Home
 
 ## License
 
-Capybara Home is open source and distributed under the **MIT License**.
+CapyHome is open source and distributed under the **MIT License**.
 
 ---
 

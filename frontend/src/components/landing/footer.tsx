@@ -12,7 +12,7 @@ export function Footer() {
       </div>
       <div className="text-muted-foreground container mb-8 flex flex-col items-center justify-center text-xs">
         <p>Licensed under MIT License</p>
-        <p>&copy; {year} Capybara Home</p>
+        <p>&copy; {year} CapyHome</p>
       </div>
     </footer>
   );

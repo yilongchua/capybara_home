@@ -7,7 +7,7 @@ import {
   type LocalSettings,
 } from "./local";
 
-const SETTINGS_CHANGE_EVENT = "capybara-home:local-settings-change";
+const SETTINGS_CHANGE_EVENT = "CapyHome:local-settings-change";
 
 export function useLocalSettings(): [
   LocalSettings,

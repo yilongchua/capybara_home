@@ -21,7 +21,7 @@ const DEFAULT_ICON = {
   src: "/Logo.webp",
   width: 32,
   height: 32,
-  alt: "Capybara Home",
+  alt: "CapyHome",
 };
 
 const PLAN_MODE_ICON = {
@@ -112,7 +112,7 @@ export function WorkspaceHeader({ className }: { className?: string }) {
                   priority
                 />
                 <span className="text-primary font-sans text-base font-bold tracking-tight">
-                  Capybara Home
+                  CapyHome
                 </span>
               </Link>
             ) : (
@@ -126,7 +126,7 @@ export function WorkspaceHeader({ className }: { className?: string }) {
                   priority
                 />
                 <span className="text-primary font-sans text-base font-bold tracking-tight">
-                  Capybara Home
+                  CapyHome
                 </span>
               </div>
             )}

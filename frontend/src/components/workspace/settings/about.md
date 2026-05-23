@@ -1,8 +1,8 @@
-# About Capybara Home
+# About CapyHome
 
 > **Super Agent Harness — Batteries Included, Fully Extensible**
 
-**Capybara Home** is an open-source super agent harness that orchestrates sub-agents, memory, and sandboxes to perform complex, multi-step tasks — powered by extensible skills.
+**CapyHome** is an open-source super agent harness that orchestrates sub-agents, memory, and sandboxes to perform complex, multi-step tasks — powered by extensible skills.
 
 ---
 
@@ -19,7 +19,7 @@
 
 ## License
 
-Capybara Home is open source and distributed under the **MIT License**.
+CapyHome is open source and distributed under the **MIT License**.
 
 ---
 

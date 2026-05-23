@@ -698,13 +698,13 @@ export function useThreadStream({
           thinkingSignalEmittedRef.current = true;
           syntheticActivitySeqRef.current += 1;
           appendActivityLiveEvent({
-            id: `synthetic-activity:capybara-thinking:${syntheticActivitySeqRef.current}`,
+            id: `synthetic-activity:capyhome-thinking:${syntheticActivitySeqRef.current}`,
             run_id: currentRunIdRef.current ?? "run-unknown",
             seq: syntheticActivitySeqRef.current,
             timestamp: Date.now() / 1000,
-            actor: "capybara",
+            actor: "capyhome",
             kind: "thinking",
-            line: "Capybara is thinking...",
+            line: "CapyHome is thinking...",
           });
         }
         dispatchThinking({ type: "append", chunk: event.content });
@@ -1319,15 +1319,15 @@ export function useThreadStream({
         thinkingSignalEmittedRef.current = false;
         syntheticActivitySeqRef.current += 1;
         appendActivityLiveEvent({
-          id: `synthetic-activity:capybara-working:${syntheticActivitySeqRef.current}`,
+          id: `synthetic-activity:capyhome-working:${syntheticActivitySeqRef.current}`,
           run_id: currentRunIdRef.current ?? "run-unknown",
           seq: syntheticActivitySeqRef.current,
           timestamp: Date.now() / 1000,
-          actor: "capybara",
+          actor: "capyhome",
           kind: "work_started",
           line: text
-            ? `Capybara is working on ${text.slice(0, 140)}...`
-            : "Capybara is working on the next step...",
+            ? `CapyHome is working on ${text.slice(0, 140)}...`
+            : "CapyHome is working on the next step...",
         });
         const outboundMessages = text || filesForSubmit.length > 0
           ? [

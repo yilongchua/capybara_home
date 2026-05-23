@@ -36,7 +36,7 @@ export function GET() {
       {
         name: "knowledge-vault",
         description:
-          "Use this skill to ingest web articles into Capybara Home's Obsidian-compatible knowledge_vault, keep source notes current, and compile durable knowledge indexes for continuous learning.",
+          "Use this skill to ingest web articles into CapyHome's Obsidian-compatible knowledge_vault, keep source notes current, and compile durable knowledge indexes for continuous learning.",
         license: null,
         category: "public",
         enabled: true,

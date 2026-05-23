@@ -9,9 +9,9 @@ import { cn } from "@/lib/utils";
 
 import { SettingsSection } from "./settings-section";
 
-type ThemeMode = "light" | "dark" | "capybara";
+type ThemeMode = "light" | "dark" | "capyhome";
 
-function CapybaraIcon({ className }: SVGProps<SVGSVGElement>) {
+function CapyHomeIcon({ className }: SVGProps<SVGSVGElement>) {
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
@@ -43,15 +43,15 @@ export function AppearanceSettingsPage() {
         icon: MoonIcon,
       },
       {
-        id: "capybara" as const,
-        label: t.settings.appearance.capybara,
-        description: t.settings.appearance.capybaraDescription,
-        icon: CapybaraIcon,
+        id: "capyhome" as const,
+        label: t.settings.appearance.capyhome,
+        description: t.settings.appearance.capyHomeDescription,
+        icon: CapyHomeIcon,
       },
     ],
     [
-      t.settings.appearance.capybara,
-      t.settings.appearance.capybaraDescription,
+      t.settings.appearance.capyhome,
+      t.settings.appearance.capyHomeDescription,
       t.settings.appearance.dark,
       t.settings.appearance.darkDescription,
       t.settings.appearance.light,
@@ -101,13 +101,13 @@ function ThemePreviewCard({
   const previewClasses =
     mode === "dark"
       ? "border-neutral-800 bg-neutral-900 text-neutral-200"
-      : mode === "capybara"
+      : mode === "capyhome"
         ? "border-amber-900/30 bg-[oklch(0.945_0.035_75)] text-[oklch(0.28_0.045_55)]"
         : "border-slate-200 bg-white text-slate-900";
   const dotClass =
     mode === "dark"
       ? "bg-emerald-400"
-      : mode === "capybara"
+      : mode === "capyhome"
         ? "bg-amber-700"
         : "bg-emerald-500";
   return (

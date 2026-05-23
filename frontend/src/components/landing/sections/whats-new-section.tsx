@@ -52,8 +52,8 @@ export function WhatsNewSection({ className }: { className?: string }) {
   return (
     <Section
       className={cn("", className)}
-      title="Whats New in Capybara Home 2.0"
-      subtitle="Capybara Home is now evolving from a Deep Research agent into a full-stack Super Agent"
+      title="Whats New in CapyHome 2.0"
+      subtitle="CapyHome is now evolving from a Deep Research agent into a full-stack Super Agent"
     >
       <div className="flex w-full items-center justify-center">
         <MagicBento data={features} />

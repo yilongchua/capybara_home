@@ -29,7 +29,7 @@ export function warnUnsupportedStreamModes(
   }
 
   warn(
-    `[capybara-home] Dropped unsupported LangGraph stream mode(s): ${unseenModes.join(", ")}`,
+    `[CapyHome] Dropped unsupported LangGraph stream mode(s): ${unseenModes.join(", ")}`,
   );
 }
 
