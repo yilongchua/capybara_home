@@ -15,7 +15,7 @@ from src.config.paths import Paths
 def _configure_memory(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("src.agents.memory.store.get_paths", lambda: Paths(base_dir=tmp_path))
     set_memory_config(MemoryConfig(enabled=True, storage_path="memory.json"))
-    set_memory_versioning_config(MemoryVersioningConfig(enabled=True, storage_dir=".capybara-home/memory_versions", require_expected_sha=False))
+    set_memory_versioning_config(MemoryVersioningConfig(enabled=True, storage_dir=".capyhome/memory_versions", require_expected_sha=False))
     yield
 
 

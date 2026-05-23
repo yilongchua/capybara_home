@@ -67,7 +67,7 @@ def test_before_model_converts_runtime_events_and_updates_context_metrics(monkey
 
     lines = [event.get("line", "") for event in update["activity_timeline"]["events"]]
     assert any(line.startswith("Baby Capy - source-researcher is working on") for line in lines)
-    assert any(line == "Capybara is thinking..." for line in lines)
+    assert any(line == "CapyHome is thinking..." for line in lines)
     subagent_event = next(event for event in update["activity_timeline"]["events"] if event.get("actor") == "baby_capy")
     assert subagent_event.get("group_title") == "source-researcher: Research Bali remote work"
     assert subagent_event.get("group_role") == "step"
@@ -107,7 +107,7 @@ def test_after_model_emits_thinking_and_response_events(monkeypatch) -> None:
     assert "thinking" in kinds
     assert "model_response" in kinds
     lines = [event.get("line") for event in events]
-    assert "Capybara is thinking..." in lines
+    assert "CapyHome is thinking..." in lines
 
 
 def test_tool_wrap_persists_plan_gate_activity(monkeypatch) -> None:

@@ -29,7 +29,7 @@ def test_ingest_creates_raw_and_compiled_layout(tmp_path: Path, monkeypatch) -> 
         def __init__(self) -> None:
             self.text = (
                 "<html><head><title>Test Article</title></head>"
-                "<body><main><p>Hello Capybara Home Vault. Maritime data quality improves.</p></main></body></html>"
+                "<body><main><p>Hello CapyHome Vault. Maritime data quality improves.</p></main></body></html>"
             )
 
         def raise_for_status(self) -> None:

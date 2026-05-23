@@ -186,16 +186,16 @@ class TestAppConfigLoadsCheckpointer:
 
 
 # ---------------------------------------------------------------------------
-# CapybaraClient falls back to config checkpointer
+# CapyHomeClient falls back to config checkpointer
 # ---------------------------------------------------------------------------
 
 
 class TestClientCheckpointerFallback:
     def test_client_uses_config_checkpointer_when_none_provided(self):
-        """CapybaraClient._ensure_agent falls back to get_checkpointer() when checkpointer=None."""
+        """CapyHomeClient._ensure_agent falls back to get_checkpointer() when checkpointer=None."""
         from langgraph.checkpoint.memory import InMemorySaver
 
-        from src.client import CapybaraClient
+        from src.client import CapyHomeClient
 
         load_checkpointer_config_from_dict({"type": "memory"})
 
@@ -217,9 +217,9 @@ class TestClientCheckpointerFallback:
             patch("src.client.create_chat_model", return_value=MagicMock()),
             patch("src.client._build_middlewares", return_value=[]),
             patch("src.client.apply_prompt_template", return_value=""),
-            patch("src.client.CapybaraClient._get_tools", return_value=[]),
+            patch("src.client.CapyHomeClient._get_tools", return_value=[]),
         ):
-            client = CapybaraClient(checkpointer=None)
+            client = CapyHomeClient(checkpointer=None)
             config = client._get_runnable_config("test-thread")
             client._ensure_agent(config)
 
@@ -228,7 +228,7 @@ class TestClientCheckpointerFallback:
 
     def test_client_explicit_checkpointer_takes_precedence(self):
         """An explicitly provided checkpointer is used even when config checkpointer is set."""
-        from src.client import CapybaraClient
+        from src.client import CapyHomeClient
 
         load_checkpointer_config_from_dict({"type": "memory"})
 
@@ -251,9 +251,9 @@ class TestClientCheckpointerFallback:
             patch("src.client.create_chat_model", return_value=MagicMock()),
             patch("src.client._build_middlewares", return_value=[]),
             patch("src.client.apply_prompt_template", return_value=""),
-            patch("src.client.CapybaraClient._get_tools", return_value=[]),
+            patch("src.client.CapyHomeClient._get_tools", return_value=[]),
         ):
-            client = CapybaraClient(checkpointer=explicit_cp)
+            client = CapyHomeClient(checkpointer=explicit_cp)
             config = client._get_runnable_config("test-thread")
             client._ensure_agent(config)
 

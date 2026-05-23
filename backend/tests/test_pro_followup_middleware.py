@@ -27,7 +27,7 @@ class TestPlanFollowupFailureSurfacing:
 
         mod = self._mod
 
-        # CapybaraClient is imported locally inside the function (from src.client import …).
+        # CapyHomeClient is imported locally inside the function (from src.client import …).
         # Inject a lightweight stub so we don't pull in the full src.client dep tree.
         mock_client_instance = MagicMock()
         mock_client_instance._get_runnable_config.return_value = {"configurable": {}}
@@ -36,7 +36,7 @@ class TestPlanFollowupFailureSurfacing:
 
         mock_client_cls = MagicMock(return_value=mock_client_instance)
         stub_module = types.ModuleType("src.client")
-        stub_module.CapybaraClient = mock_client_cls  # type: ignore[attr-defined]
+        stub_module.CapyHomeClient = mock_client_cls  # type: ignore[attr-defined]
 
         original = sys.modules.get("src.client")
         sys.modules["src.client"] = stub_module

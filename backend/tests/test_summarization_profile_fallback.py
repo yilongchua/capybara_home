@@ -33,7 +33,7 @@ def _install_common(monkeypatch, cfg: SummarizationConfig, *, model=None, contex
     monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: _app_config(context_window=context_window))
     monkeypatch.setattr(lead_agent_module, "create_chat_model", lambda **kwargs: fake_model)
     monkeypatch.setattr(lead_agent_module, "get_memory_config", lambda: SimpleNamespace(enabled=False))
-    monkeypatch.setattr(lead_agent_module, "CapybaraSummarizationMiddleware", _FakeSummarizationMiddleware)
+    monkeypatch.setattr(lead_agent_module, "CapyHomeSummarizationMiddleware", _FakeSummarizationMiddleware)
 
 
 def test_fraction_trigger_resolves_from_model_profile(monkeypatch):

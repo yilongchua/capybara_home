@@ -35,7 +35,7 @@ def test_run_work_mode_handoff_uses_async_invoke(monkeypatch):
     mock_client._get_runnable_config.return_value = {"configurable": {}}
     mock_client._agent = mock_agent
 
-    monkeypatch.setattr("src.client.CapybaraClient", lambda **kwargs: mock_client)
+    monkeypatch.setattr("src.client.CapyHomeClient", lambda **kwargs: mock_client)
     monkeypatch.setattr(
         "src.agents.middlewares.work_run_handoff.spawn_title_handoff_if_missing",
         lambda **kwargs: None,
@@ -63,7 +63,7 @@ def test_run_background_followup_uses_async_invoke(monkeypatch):
     mock_client._get_runnable_config.return_value = {"configurable": {}}
     mock_client._agent = mock_agent
 
-    monkeypatch.setattr("src.client.CapybaraClient", lambda **kwargs: mock_client)
+    monkeypatch.setattr("src.client.CapyHomeClient", lambda **kwargs: mock_client)
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
 
     _run_background_followup(

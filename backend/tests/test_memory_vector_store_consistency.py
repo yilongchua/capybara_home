@@ -33,7 +33,7 @@ def _memory_payload() -> dict:
         "scopeId": "global",
         "facts": [
             {"id": "fact-thread", "content": "Thread-only alpaca fact", "category": "context", "confidence": 0.9, "source": "thread-1"},
-            {"id": "fact-keep", "content": "Shared capybara fact", "category": "context", "confidence": 0.9, "source": "thread-2"},
+            {"id": "fact-keep", "content": "Shared capyhome fact", "category": "context", "confidence": 0.9, "source": "thread-2"},
         ],
         "behaviorRules": [],
     }
@@ -50,7 +50,7 @@ def test_forget_thread_facts_removes_deleted_ids_from_vector_store(_configure_me
     assert removed == 1
     remaining_ids = [fact["id"] for fact in vector_store.query(query="alpaca", scopes=[("global", "global")], top_k=5)]
     assert "fact-thread" not in remaining_ids
-    kept = vector_store.query(query="capybara", scopes=[("global", "global")], top_k=5)
+    kept = vector_store.query(query="capyhome", scopes=[("global", "global")], top_k=5)
     assert [fact["id"] for fact in kept] == ["fact-keep"]
 
 
@@ -62,7 +62,7 @@ def test_clear_memory_removes_all_scope_vectors(_configure_memory: MemoryVectorS
 
     clear_memory(scope="global")
 
-    assert vector_store.query(query="capybara", scopes=[("global", "global")], top_k=5) == []
+    assert vector_store.query(query="capyhome", scopes=[("global", "global")], top_k=5) == []
 
 
 def test_llm_removed_facts_are_deleted_from_vector_store(_configure_memory: MemoryVectorStore, monkeypatch):
@@ -86,7 +86,7 @@ def test_llm_removed_facts_are_deleted_from_vector_store(_configure_memory: Memo
     assert ok is True
     remaining_ids = [fact["id"] for fact in vector_store.query(query="alpaca", scopes=[("global", "global")], top_k=5)]
     assert "fact-thread" not in remaining_ids
-    assert [fact["id"] for fact in vector_store.query(query="capybara", scopes=[("global", "global")], top_k=5)] == ["fact-keep"]
+    assert [fact["id"] for fact in vector_store.query(query="capyhome", scopes=[("global", "global")], top_k=5)] == ["fact-keep"]
 
 
 def test_max_facts_eviction_deletes_vector_rows(_configure_memory: MemoryVectorStore, monkeypatch):
@@ -96,7 +96,7 @@ def test_max_facts_eviction_deletes_vector_rows(_configure_memory: MemoryVectorS
     memory["facts"] = [
         {"id": "fact-evict", "content": "Evicted walrus fact", "category": "context", "confidence": 0.1, "source": "thread-1"},
         *[
-            {"id": f"fact-keep-{idx}", "content": f"High confidence capybara fact {idx}", "category": "context", "confidence": 0.9, "source": "thread-1"}
+            {"id": f"fact-keep-{idx}", "content": f"High confidence capyhome fact {idx}", "category": "context", "confidence": 0.9, "source": "thread-1"}
             for idx in range(10)
         ],
     ]

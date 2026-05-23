@@ -14,9 +14,9 @@ import pytest
 # ---------------------------------------------------------------------------
 
 # Stub out src.client so _run_plan_mode_rerun can be imported without
-# pulling in the full CapybaraClient dependency tree.
+# pulling in the full CapyHomeClient dependency tree.
 _stub_client_module = types.ModuleType("src.client")
-_stub_client_module.CapybaraClient = MagicMock()  # type: ignore[attr-defined]
+_stub_client_module.CapyHomeClient = MagicMock()  # type: ignore[attr-defined]
 sys.modules.setdefault("src.client", _stub_client_module)
 
 

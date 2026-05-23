@@ -626,7 +626,7 @@ class TestChannelManager:
         _run(go())
 
     def test_each_message_creates_new_thread(self):
-        """Every chat message should create a new Capybara Home thread (one-shot Q&A)."""
+        """Every chat message should create a new CapyHome thread (one-shot Q&A)."""
         from src.channels.manager import ChannelManager
 
         async def go():
@@ -677,7 +677,7 @@ class TestChannelManager:
         _run(go())
 
     def test_same_topic_reuses_thread(self):
-        """Messages with the same topic_id should reuse the same Capybara Home thread."""
+        """Messages with the same topic_id should reuse the same CapyHome thread."""
         from src.channels.manager import ChannelManager
 
         async def go():

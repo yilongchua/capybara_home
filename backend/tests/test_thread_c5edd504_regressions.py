@@ -11,7 +11,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from src.agents.checkpointer.extended_sqlite_saver import ExtendedAsyncSqliteSaver
-from src.agents.middlewares.summarization_middleware import CapybaraSummarizationMiddleware
+from src.agents.middlewares.summarization_middleware import CapyHomeSummarizationMiddleware
 from src.agents.middlewares.write_file_artifact_middleware import WriteFileArtifactMiddleware
 from src.agents.report_quality import QualityCheckResult
 from src.community.web_search import tools as web_search_tools
@@ -265,7 +265,7 @@ def test_summarization_trigger_type_uses_preserved_trigger_tuples():
     model.invoke = MagicMock(return_value=MagicMock(content="summary"))
 
     with patch("langchain.agents.middleware.summarization.init_chat_model", return_value=model):
-        middleware = CapybaraSummarizationMiddleware(
+        middleware = CapyHomeSummarizationMiddleware(
             model="mock-model",
             trigger=[("tokens", 1000), ("messages", 50)],
             keep=("messages", 10),

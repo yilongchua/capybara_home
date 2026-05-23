@@ -93,5 +93,5 @@ def test_health_endpoint_reports_degraded_components(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "degraded"
-    assert payload["service"] == "capybara-home-gateway"
+    assert payload["service"] == "capyhome-gateway"
     assert payload["components"]["channels"]["status"] == "failed"

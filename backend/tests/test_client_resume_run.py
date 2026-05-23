@@ -1,11 +1,11 @@
-"""Tests for CapybaraClient resume_run helper."""
+"""Tests for CapyHomeClient resume_run helper."""
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage
 
-from src.client import CapybaraClient
+from src.client import CapyHomeClient
 from src.config.resume_config import ResumeConfig, set_resume_config
 
 
@@ -33,7 +33,7 @@ def test_resume_run_returns_final_text(mock_app_config):
     )
 
     with patch("src.client.get_app_config", return_value=mock_app_config):
-        client = CapybaraClient()
+        client = CapyHomeClient()
     with patch.object(client, "_ensure_agent"), patch.object(client, "_agent", agent):
         result = client.resume_run("thread-1", "run-1")
 
@@ -45,6 +45,6 @@ def test_resume_run_returns_final_text(mock_app_config):
 def test_resume_run_rejects_when_disabled(mock_app_config):
     set_resume_config(ResumeConfig(enabled=False, require_checkpoint=True, max_resume_depth=3))
     with patch("src.client.get_app_config", return_value=mock_app_config):
-        client = CapybaraClient()
+        client = CapyHomeClient()
     with pytest.raises(ValueError, match="disabled"):
         client.resume_run("thread-1", "run-1")

@@ -1,4 +1,4 @@
-"""Live integration tests for CapybaraClient with real API.
+"""Live integration tests for CapyHomeClient with real API.
 
 These tests require a working config.yaml with valid API credentials.
 They are skipped in CI and must be run explicitly:
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from src.client import CapybaraClient, StreamEvent
+from src.client import CapyHomeClient, StreamEvent
 
 # Skip entire module in CI or when no config.yaml exists
 _skip_reason = None
@@ -33,8 +33,8 @@ if _skip_reason:
 
 @pytest.fixture(scope="module")
 def client():
-    """Create a real CapybaraClient (no mocks)."""
-    return CapybaraClient(thinking_enabled=False)
+    """Create a real CapyHomeClient (no mocks)."""
+    return CapyHomeClient(thinking_enabled=False)
 
 
 @pytest.fixture

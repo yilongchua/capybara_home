@@ -1,4 +1,4 @@
-"""Tests for CapybaraSummarizationMiddleware — skill rescue and hook dispatch."""
+"""Tests for CapyHomeSummarizationMiddleware — skill rescue and hook dispatch."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from src.agents.memory.summarization_hook import memory_flush_hook
 from src.agents.middlewares.summarization_middleware import (
     DEFAULT_SUMMARY_PROMPT,
     BeforeSummarizationHook,
-    CapybaraSummarizationMiddleware,
+    CapyHomeSummarizationMiddleware,
     SummarizationEvent,
 )
 
@@ -51,13 +51,13 @@ def _make_mw(
     skill_tokens=10_000,
     trigger=("messages", 1),
     keep=("messages", 1),
-) -> CapybaraSummarizationMiddleware:
+) -> CapyHomeSummarizationMiddleware:
     model_mock = MagicMock()
     model_mock._llm_type = "mock"
     model_mock.profile = None
     model_mock.invoke.return_value = MagicMock(text="[summary]")
     with patch("langchain.agents.middleware.summarization.init_chat_model", return_value=model_mock):
-        mw = CapybaraSummarizationMiddleware(
+        mw = CapyHomeSummarizationMiddleware(
             model="mock-model",
             trigger=trigger,
             keep=keep,
@@ -232,7 +232,7 @@ def test_hook_protocol_satisfied():
     assert isinstance(my_hook, BeforeSummarizationHook)
 
 
-def test_default_summary_prompt_owned_by_capybara_middleware():
+def test_default_summary_prompt_owned_by_capyhome_middleware():
     mw = _make_mw()
 
     assert mw.summary_prompt == DEFAULT_SUMMARY_PROMPT

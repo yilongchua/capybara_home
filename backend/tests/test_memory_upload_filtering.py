@@ -54,7 +54,7 @@ class TestFilterMessagesForMemory:
         combined = _UPLOAD_BLOCK + "\n\nWhat does this file contain?"
         msgs = [
             _human(combined),
-            _ai("The file contains: Hello Capybara Home."),
+            _ai("The file contains: Hello CapyHome."),
         ]
         result = _filter_messages_for_memory(msgs)
 
@@ -62,7 +62,7 @@ class TestFilterMessagesForMemory:
         human_result = result[0]
         assert "<uploaded_files>" not in human_result.content
         assert "What does this file contain?" in human_result.content
-        assert result[1].content == "The file contains: Hello Capybara Home."
+        assert result[1].content == "The file contains: Hello CapyHome."
 
     # --- non-upload turns pass through unchanged ---
 
@@ -178,10 +178,10 @@ class TestStripUploadMentionsFromMemory:
 
     def test_uploading_a_test_file_removed(self):
         """'uploading a test file' (with intervening words) must be caught."""
-        mem = self._make_memory("User conducted a hands-on test by uploading a test file titled 'test_capybara-home_memory_bug.txt'. User is also learning Python.")
+        mem = self._make_memory("User conducted a hands-on test by uploading a test file titled 'test_capyhome_memory_bug.txt'. User is also learning Python.")
         result = _strip_upload_mentions_from_memory(mem)
         summary = result["user"]["topOfMind"]["summary"]
-        assert "test_capybara-home_memory_bug.txt" not in summary
+        assert "test_capyhome_memory_bug.txt" not in summary
         assert "uploading a test file" not in summary
 
     # --- facts ---

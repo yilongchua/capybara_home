@@ -68,4 +68,4 @@ def test_defaults_when_project_not_set(monkeypatch):
     _reset_tracing_cache()
     cfg = tracing_module.get_tracing_config()
 
-    assert cfg.project == "capybara-home"
+    assert cfg.project == "CapyHome"
