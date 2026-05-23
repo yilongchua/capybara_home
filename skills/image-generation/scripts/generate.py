@@ -87,7 +87,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output-file",
         required=True,
-        help="Output file name hint (basename is used for capybara/{name})",
+        help="Output file name hint (basename is used for capyhome/{name})",
     )
     parser.add_argument(
         "--aspect-ratio",

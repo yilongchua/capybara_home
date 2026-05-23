@@ -7,7 +7,7 @@ description: Use this skill when the user requests to generate, create, or imagi
 
 ## Overview
 
-This skill submits async video generation jobs to ComfyUI through the Capybara Home generation API.
+This skill submits async video generation jobs to ComfyUI through the CapyHome generation API.
 The execution path is:
 
 1. Create prompt file (plain text or JSON) in `/mnt/user-data/workspace/`
@@ -81,7 +81,7 @@ The backend patches these fields in `text_to_video_wan.json` before sending to C
 - Nodes with `class_type == "CLIPTextEncode"` where `_meta.title` contains `positive`:
   - `inputs.text <- request.prompt`
 - All nodes with `class_type == "SaveVideo"`:
-  - `inputs.filename_prefix <- "capybara/{output_name}"`
+  - `inputs.filename_prefix <- "capyhome/{output_name}"`
 
 Not patched by this async path:
 - Negative prompt text node
@@ -144,7 +144,7 @@ python /mnt/skills/public/video-generation/scripts/generate.py \
 After submission:
 
 - The script returns quickly with a `job_id`
-- Background poller completes generation and copies the final file into `/mnt/user-data/workspace/capybara/`
+- Background poller completes generation and copies the final file into `/mnt/user-data/workspace/capyhome/`
 - Completion appears in chat automatically with output path
 - You can still iterate by submitting another job
 

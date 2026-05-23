@@ -181,7 +181,7 @@ This report was compiled using:
 
 ---
 
-**Report Prepared By:** Github Deep Research by Capybara Home
+**Report Prepared By:** Github Deep Research by CapyHome
 **Date:** {REPORT_DATE}
 **Report Version:** 1.0
 **Status:** Complete

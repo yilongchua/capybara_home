@@ -20,7 +20,7 @@ def _get_xtts_speaker_wav() -> str | None:
     if default_path.exists():
         return str(default_path)
 
-    # Best-effort fallback for when this runs inside the full capybara-home app environment.
+    # Best-effort fallback for when this runs inside the full CapyHome app environment.
     try:
         from backend.config.config import settings  # type: ignore
 

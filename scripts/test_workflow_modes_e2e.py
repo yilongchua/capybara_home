@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end workflow smoke test across chat modes.
 
-Runs a direct Capybara Home workflow invocation for:
+Runs a direct CapyHome workflow invocation for:
   - ultra
   - pro
   - reason (alias of thinking)
@@ -39,7 +39,7 @@ os.chdir(BACKEND_DIR)
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from src.client import CapybaraClient  # noqa: E402
+from src.client import CapyHomeClient  # noqa: E402
 
 
 MODE_ALIASES = {
@@ -78,7 +78,7 @@ def _normalize_mode(mode: str) -> str:
 
 
 def _run_mode(
-    client: CapybaraClient,
+    client: CapyHomeClient,
     *,
     requested_mode: str,
     message: str,
@@ -169,7 +169,7 @@ def _run_mode(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Capybara Home mode-based workflow E2E smoke tests.")
+    parser = argparse.ArgumentParser(description="Run CapyHome mode-based workflow E2E smoke tests.")
     parser.add_argument(
         "--modes",
         default="ultra,pro,reason,fast",
@@ -206,7 +206,7 @@ def main() -> int:
         print("No modes provided.")
         return 2
 
-    client = CapybaraClient(thinking_enabled=True)
+    client = CapyHomeClient(thinking_enabled=True)
     results: list[ModeResult] = []
 
     print(f"Running workflow E2E test for modes: {', '.join(modes)}")

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# start.sh - Start all Capybara Home development services
+# start.sh - Start all CapyHome development services
 #
 # Must be run from the repo root directory.
 
@@ -37,14 +37,14 @@ nginx -c "$REPO_ROOT/docker/nginx/nginx.local.conf" -p "$REPO_ROOT" -s quit 2>/d
 sleep 1
 pkill -9 nginx 2>/dev/null || true
 killall -9 nginx 2>/dev/null || true
-./scripts/cleanup-containers.sh capybara-home-sandbox 2>/dev/null || true
+./scripts/cleanup-containers.sh capyhome-sandbox 2>/dev/null || true
 sleep 1
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 
 echo ""
 echo "=========================================="
-echo "  Starting Capybara Home Development Server"
+echo "  Starting CapyHome Development Server"
 echo "=========================================="
 echo ""
 if $DEV_MODE; then
@@ -68,7 +68,7 @@ if ! { \
         [ -f backend/config.yaml ] || \
         [ -f config.yaml ]; \
     }; then
-    echo "✗ No Capybara Home config file found."
+    echo "✗ No CapyHome config file found."
     echo "  Checked these locations:"
     echo "    - $CAPYBARA_HOME_CONFIG_PATH (when CAPYBARA_HOME_CONFIG_PATH is set)"
     echo "    - backend/config.yaml"
@@ -98,7 +98,7 @@ cleanup() {
     pkill -9 nginx 2>/dev/null || true
     killall -9 nginx 2>/dev/null || true
     echo "Cleaning up sandbox containers..."
-    ./scripts/cleanup-containers.sh capybara-home-sandbox 2>/dev/null || true
+    ./scripts/cleanup-containers.sh capyhome-sandbox 2>/dev/null || true
     echo "✓ All services stopped"
     exit 0
 }
@@ -165,9 +165,9 @@ echo "✓ Nginx started on localhost:2026"
 echo ""
 echo "=========================================="
 if $DEV_MODE; then
-    echo "  ✓ Capybara Home development server is running!"
+    echo "  ✓ CapyHome development server is running!"
 else
-    echo "  ✓ Capybara Home production server is running!"
+    echo "  ✓ CapyHome production server is running!"
 fi
 echo "=========================================="
 echo ""

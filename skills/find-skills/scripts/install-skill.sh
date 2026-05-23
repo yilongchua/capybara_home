@@ -22,11 +22,11 @@ if [[ -z "$SKILL_NAME" || "$SKILL_NAME" == "$FULL_SKILL_NAME" ]]; then
   exit 1
 fi
 
-# Find project root by looking for capybara-home.code-workspace
+# Find project root by looking for CapyHome.code-workspace
 find_project_root() {
   local dir="$PWD"
   while [[ "$dir" != "/" ]]; do
-    if [[ -f "$dir/capybara-home.code-workspace" ]]; then
+    if [[ -f "$dir/CapyHome.code-workspace" ]]; then
       echo "$dir"
       return 0
     fi
@@ -39,7 +39,7 @@ find_project_root() {
 PROJECT_ROOT=$(find_project_root)
 
 if [[ -z "$PROJECT_ROOT" ]]; then
-  echo "Error: Could not find project root (capybara-home.code-workspace not found)"
+  echo "Error: Could not find project root (CapyHome.code-workspace not found)"
   exit 1
 fi
 

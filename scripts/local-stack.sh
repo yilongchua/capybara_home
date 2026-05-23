@@ -70,7 +70,7 @@ websearch_compose() {
 
 print_header() {
     echo "=========================================="
-    echo "  Capybara Home Local Research Stack"
+    echo "  CapyHome Local Research Stack"
     echo "=========================================="
 }
 
@@ -258,7 +258,7 @@ start_stack() {
     echo "ComfyUI : ${COMFYUI_BASE_URL}"
     echo "WebSearch: ${WEBSEARCH_BASE_URL}"
     echo "Browser : ${BROWSER_AUTOMATION_BASE_URL}"
-    echo "Capybara Home is excluded from integration startup."
+    echo "CapyHome is excluded from integration startup."
 }
 
 start_websearch_compose() {
@@ -320,7 +320,7 @@ stop_stack() {
     stop_optional_process "LLAMA_CPP" "$LLAMA_CPP_PID_FILE"
     stop_websearch_compose || true
 
-    echo -e "${BLUE}Stopping Capybara Home...${NC}"
+    echo -e "${BLUE}Stopping CapyHome...${NC}"
     (cd "$CAPYBARA_ROOT" && ./scripts/docker.sh stop) || true
 
     echo -e "${GREEN}Local stack is stopped.${NC}"
@@ -339,7 +339,7 @@ stack_status() {
 
     echo ""
     echo "HTTP checks:"
-    curl -s -o /dev/null -w "  capybara-home  %{http_code}\n" "http://localhost:${CAPYBARA_UI_PORT}/" || true
+    curl -s -o /dev/null -w "  CapyHome  %{http_code}\n" "http://localhost:${CAPYBARA_UI_PORT}/" || true
     curl -s -o /dev/null -w "  llama.cpp %{http_code}\n" "${LLAMA_CPP_BASE_URL%/}/models" || true
     curl -s -o /dev/null -w "  comfyui   %{http_code}\n" "${COMFYUI_BASE_URL}/system_stats" || true
     curl -s -o /dev/null -w "  websearch %{http_code}\n" "${WEBSEARCH_BASE_URL}/health" || true
@@ -372,13 +372,13 @@ stack_status() {
     echo ""
     echo "Containers:"
     docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | \
-        rg "capybara-home|websearch|NAMES" || true
+        rg "CapyHome|websearch|NAMES" || true
 }
 
 stack_logs() {
     print_header
     echo "Use these focused log commands:"
-    echo "  Capybara Home:  cd \"$CAPYBARA_ROOT\" && ./scripts/docker.sh logs"
+    echo "  CapyHome:  cd \"$CAPYBARA_ROOT\" && ./scripts/docker.sh logs"
     echo "  websearch: docker logs -f websearch"
     echo "  llama.cpp: tail -f \"$LLAMA_CPP_LOG_FILE\""
     echo "  ComfyUI:   tail -f \"$COMFYUI_LOG_FILE\""

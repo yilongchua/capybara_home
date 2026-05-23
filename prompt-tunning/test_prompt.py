@@ -3,7 +3,7 @@
 
 All runs use plan mode, matching the LangGraph ``context`` the browser sends on
 ``thread.submit`` (see ``frontend/src/core/threads/hooks.ts``) and the embedded
-``CapybaraClient`` stream context (see ``backend/src/client.py``).
+``CapyHomeClient`` stream context (see ``backend/src/client.py``).
 
 Usage:
     cd prompt-tunning
@@ -55,12 +55,12 @@ def ensure_backend_python() -> None:
 
 ensure_backend_python()
 sys.path.insert(0, str(BACKEND_DIR))
-os.environ.setdefault("CAPYBARA_HOME", str(BACKEND_DIR / ".capybara-home"))
+os.environ.setdefault("CAPYBARA_HOME", str(BACKEND_DIR / ".capyhome"))
 os.environ.setdefault("CAPYBARA_PROMPT_LOGGING_ENABLED", "1")
 
 from src.agents.checkpointer import reset_checkpointer  # noqa: E402
 from src.agents.memory.updater import clear_memory  # noqa: E402
-from src.client import CapybaraClient  # noqa: E402
+from src.client import CapyHomeClient  # noqa: E402
 from src.config.paths import get_paths  # noqa: E402
 
 PROMPTS: list[dict[str, str]] = [
@@ -128,7 +128,7 @@ PROMPTS: list[dict[str, str]] = [
 
 # Mirrors frontend thread.submit context when mode === "plan":
 #   frontend/src/core/threads/hooks.ts (context block on submit)
-# Embedded client derives the same fields via CapybaraClient._get_runnable_config.
+# Embedded client derives the same fields via CapyHomeClient._get_runnable_config.
 RUN_MODE = "plan"
 RUN_PLAN_BEHAVIOR = "plan_foreground"
 RUN_RECURSION_LIMIT = 3000
@@ -343,7 +343,7 @@ async def run_prompt_server(
     return str(metadata["status"])
 
 
-def run_prompt_embedded(client: CapybaraClient, *, cycle_id: int, prompt_id: int, prompt: dict[str, str], model_name: str) -> str:
+def run_prompt_embedded(client: CapyHomeClient, *, cycle_id: int, prompt_id: int, prompt: dict[str, str], model_name: str) -> str:
     prompt_dir = SCRIPT_DIR / f"prompt_id_{prompt_id}"
     prompt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -416,7 +416,7 @@ def main() -> int:
     client = None
     if args.runtime == "embedded":
         config_path = str(CONFIG_PATH) if CONFIG_PATH.exists() else None
-        client = CapybaraClient(
+        client = CapyHomeClient(
             config_path=config_path,
             model_name=args.model_name,
             thinking_enabled=True,

@@ -1,6 +1,6 @@
-# Capybara Home Sandbox Provisioner
+# CapyHome Sandbox Provisioner
 
-The **Sandbox Provisioner** is a FastAPI service that dynamically manages sandbox Pods in Kubernetes. It provides a REST API for the Capybara Home backend to create, monitor, and destroy isolated sandbox environments for code execution.
+The **Sandbox Provisioner** is a FastAPI service that dynamically manages sandbox Pods in Kubernetes. It provides a REST API for the CapyHome backend to create, monitor, and destroy isolated sandbox environments for code execution.
 
 ## Architecture
 
@@ -22,7 +22,7 @@ The **Sandbox Provisioner** is a FastAPI service that dynamically manages sandbo
 
 1. **Backend Request**: When the backend needs to execute code, it sends a `POST /api/sandboxes` request with a `sandbox_id` and `thread_id`.
 
-2. **Pod Creation**: The provisioner creates a dedicated Pod in the `capybara-home` namespace with:
+2. **Pod Creation**: The provisioner creates a dedicated Pod in the `CapyHome` namespace with:
    - The sandbox container image (all-in-one-sandbox)
    - HostPath volumes mounted for:
      - `/mnt/skills` → Read-only access to public skills
@@ -133,7 +133,7 @@ The provisioner is configured via environment variables (set in [docker-compose-
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `K8S_NAMESPACE` | `capybara-home` | Kubernetes namespace for sandbox resources |
+| `K8S_NAMESPACE` | `CapyHome` | Kubernetes namespace for sandbox resources |
 | `SANDBOX_IMAGE` | `enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest` | Container image for sandbox Pods |
 | `SKILLS_HOST_PATH` | - | **Host machine** path to skills directory (must be absolute) |
 | `THREADS_HOST_PATH` | - | **Host machine** path to threads data directory (must be absolute) |
@@ -174,9 +174,9 @@ kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}'
 
 3. **Kubernetes Access**:
    - The provisioner needs permissions to:
-     - Create/read/delete Pods in the `capybara-home` namespace
-     - Create/read/delete Services in the `capybara-home` namespace
-     - Read Namespaces (to create `capybara-home` if missing)
+     - Create/read/delete Pods in the `CapyHome` namespace
+     - Create/read/delete Services in the `CapyHome` namespace
+     - Read Namespaces (to create `CapyHome` if missing)
 
 4. **Host Paths**:
    - The `SKILLS_HOST_PATH` and `THREADS_HOST_PATH` must be **absolute paths on the host machine**
@@ -192,7 +192,7 @@ The provisioner runs as part of the docker-compose-dev stack:
 make docker-start
 
 # Or start just the provisioner
-docker compose -p capybara-home-dev -f docker/docker-compose-dev.yaml up -d provisioner
+docker compose -p capyhome-dev -f docker/docker-compose-dev.yaml up -d provisioner
 ```
 
 The compose file:
@@ -209,21 +209,21 @@ The compose file:
 curl http://localhost:8002/health
 
 # Create a sandbox (via provisioner container for internal DNS)
-docker exec capybara-home-provisioner curl -X POST http://localhost:8002/api/sandboxes \
+docker exec capyhome-provisioner curl -X POST http://localhost:8002/api/sandboxes \
   -H "Content-Type: application/json" \
   -d '{"sandbox_id":"test-001","thread_id":"thread-001"}'
 
 # Check sandbox status
-docker exec capybara-home-provisioner curl http://localhost:8002/api/sandboxes/test-001
+docker exec capyhome-provisioner curl http://localhost:8002/api/sandboxes/test-001
 
 # List all sandboxes
-docker exec capybara-home-provisioner curl http://localhost:8002/api/sandboxes
+docker exec capyhome-provisioner curl http://localhost:8002/api/sandboxes
 
 # Verify Pod and Service in K8s
-kubectl get pod,svc -n capybara-home -l sandbox-id=test-001
+kubectl get pod,svc -n CapyHome -l sandbox-id=test-001
 
 # Delete sandbox
-docker exec capybara-home-provisioner curl -X DELETE http://localhost:8002/api/sandboxes/test-001
+docker exec capyhome-provisioner curl -X DELETE http://localhost:8002/api/sandboxes/test-001
 ```
 
 ### Verify from Backend Containers
@@ -232,10 +232,10 @@ Once a sandbox is created, the backend containers (gateway, langgraph) can acces
 
 ```bash
 # Get sandbox URL from provisioner
-SANDBOX_URL=$(docker exec capybara-home-provisioner curl -s http://localhost:8002/api/sandboxes/test-001 | jq -r .sandbox_url)
+SANDBOX_URL=$(docker exec capyhome-provisioner curl -s http://localhost:8002/api/sandboxes/test-001 | jq -r .sandbox_url)
 
 # Test from gateway container
-docker exec capybara-home-gateway curl -s $SANDBOX_URL/v1/sandbox
+docker exec capyhome-gateway curl -s $SANDBOX_URL/v1/sandbox
 ```
 
 ## Troubleshooting
@@ -257,7 +257,7 @@ docker exec capybara-home-gateway curl -s $SANDBOX_URL/v1/sandbox
 - Ensure the compose mount source is a file (e.g., `~/.kube/config`) not a directory
 - Verify inside container:
   ```bash
-  docker exec capybara-home-provisioner ls -ld /root/.kube/config
+  docker exec capyhome-provisioner ls -ld /root/.kube/config
   ```
 - Expected output should indicate a regular file (`-`), not a directory (`d`)
 
@@ -285,7 +285,7 @@ docker exec capybara-home-gateway curl -s $SANDBOX_URL/v1/sandbox
 - Verify the paths exist on your host machine:
   ```bash
   ls -la /path/to/skills
-  ls -la /path/to/backend/.capybara-home/threads
+  ls -la /path/to/backend/.capyhome/threads
   ```
 
 ### Issue: Pod stuck in "ContainerCreating"
@@ -294,7 +294,7 @@ docker exec capybara-home-gateway curl -s $SANDBOX_URL/v1/sandbox
 
 **Solution**:
 - Pre-pull the image: `make docker-init`
-- Check Pod events: `kubectl describe pod sandbox-XXX -n capybara-home`
+- Check Pod events: `kubectl describe pod sandbox-XXX -n CapyHome`
 - Check node: `kubectl get nodes`
 
 ### Issue: Cannot access sandbox URL from backend
@@ -302,7 +302,7 @@ docker exec capybara-home-gateway curl -s $SANDBOX_URL/v1/sandbox
 **Cause**: NodePort not reachable or `NODE_HOST` misconfigured.
 
 **Solution**:
-- Verify the Service exists: `kubectl get svc -n capybara-home`
+- Verify the Service exists: `kubectl get svc -n CapyHome`
 - Test from host: `curl http://localhost:NODE_PORT/v1/sandbox`
 - Ensure `extra_hosts` is set in docker-compose (Linux)
 - Check `NODE_HOST` env var matches how backend reaches host
@@ -313,7 +313,7 @@ docker exec capybara-home-gateway curl -s $SANDBOX_URL/v1/sandbox
 
 2. **Resource Limits**: Each sandbox Pod has CPU, memory, and storage limits to prevent resource exhaustion.
 
-3. **Network Isolation**: Sandbox Pods run in the `capybara-home` namespace but share the host's network namespace via NodePort. Consider NetworkPolicies for stricter isolation.
+3. **Network Isolation**: Sandbox Pods run in the `CapyHome` namespace but share the host's network namespace via NodePort. Consider NetworkPolicies for stricter isolation.
 
 4. **kubeconfig Access**: The provisioner has full access to your Kubernetes cluster via the mounted kubeconfig. Run it only in trusted environments.
 

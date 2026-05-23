@@ -1,6 +1,6 @@
 ---
 name: knowledge-vault
-description: Use this skill to ingest web articles into Capybara Home's Obsidian-compatible knowledge_vault, keep source notes up to date, and compile index/log pages for continuous learning workflows.
+description: Use this skill to ingest web articles into CapyHome's Obsidian-compatible knowledge_vault, keep source notes up to date, and compile index/log pages for continuous learning workflows.
 ---
 
 # Knowledge Vault Skill
