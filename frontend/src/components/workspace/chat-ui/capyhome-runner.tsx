@@ -1,6 +1,5 @@
 import { Brain, Code2, FileSearch, Globe, Hammer, Search, Terminal } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
-import Image from "next/image";
 
 import { useI18n } from "@/core/i18n/hooks";
 import { cn } from "@/lib/utils";
@@ -83,13 +82,6 @@ export function CapyHomeRunner({
 
   const dotText = DOTS_INTERVALS[dotIndex % DOTS_INTERVALS.length];
   const icon = useMemo(() => getTaskIcon(taskDescription), [taskDescription]);
-  const showWorkingGif = actor === "capyhome" || actor === "baby_capy";
-  const gifClassName = cn(
-    "shrink-0 object-contain",
-    size === "sm" && "size-4",
-    size === "md" && "size-5",
-    size === "lg" && "size-6",
-  );
 
   return (
     <div
@@ -102,16 +94,6 @@ export function CapyHomeRunner({
     >
       {taskDescription ? (
         <>
-          {showWorkingGif && (
-            <Image
-              src="/capyhome-working.gif"
-              alt={actor === "baby_capy" ? "Baby Capy working" : "CapyHome working"}
-              width={20}
-              height={20}
-              unoptimized
-              className={gifClassName}
-            />
-          )}
           <span className="text-muted-foreground font-medium">
             {actor === "baby_capy"
               ? t.chatUI.capyHomeRunner.babyWorkingOn
@@ -125,24 +107,12 @@ export function CapyHomeRunner({
           </span>
         </>
       ) : (
-        <>
-          {showWorkingGif && (
-            <Image
-              src="/capyhome-working.gif"
-              alt={actor === "baby_capy" ? "Baby Capy thinking" : "CapyHome thinking"}
-              width={20}
-              height={20}
-              unoptimized
-              className={gifClassName}
-            />
-          )}
-          <span className="text-muted-foreground animate-pulse">
-            {actor === "baby_capy"
-              ? t.chatUI.capyHomeRunner.babyThinking
-              : t.chatUI.capyHomeRunner.thinking}
-            <span className="animate-pulse">{dotText}</span>
-          </span>
-        </>
+        <span className="text-muted-foreground animate-pulse">
+          {actor === "baby_capy"
+            ? t.chatUI.capyHomeRunner.babyThinking
+            : t.chatUI.capyHomeRunner.thinking}
+          <span className="animate-pulse">{dotText}</span>
+        </span>
       )}
     </div>
   );
