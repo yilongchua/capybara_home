@@ -759,6 +759,7 @@ function ChatPageContent({
     <ThreadContext.Provider value={{ thread, isMock, forkDraft, setForkDraft }}>
       <ChatBox
         threadId={threadId}
+        isNewThread={isNewThread}
         extraDirectoryFiles={combinedArtifacts}
         onSubmitPlanRevision={handleSubmitPlanRevision}
       >
@@ -836,7 +837,7 @@ function ChatPageContent({
                   "relative w-full",
                   isNewThread && "-translate-y-[calc(50vh-96px)]",
                   isNewThread
-                    ? "max-w-(--container-width-sm)"
+                    ? "max-w-[50vw]"
                     : "max-w-(--container-width-md)",
                 )}
               >

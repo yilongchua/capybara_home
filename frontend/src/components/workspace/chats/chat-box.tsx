@@ -48,11 +48,13 @@ function isDirectoryArtifactPath(file: string) {
 const ChatBox: React.FC<{
   children: React.ReactNode;
   threadId: string;
+  isNewThread?: boolean;
   extraDirectoryFiles?: string[];
   onSubmitPlanRevision?: (markdown: string) => Promise<void> | void;
 }> = ({
   children,
   threadId,
+  isNewThread = false,
   extraDirectoryFiles = [],
   onSubmitPlanRevision,
 }) => {
@@ -74,7 +76,7 @@ const ChatBox: React.FC<{
   const [mountedDirectoryPath, setMountedDirectoryPath] = useState("");
 
   const [activeTab, setActiveTab] = useState<"activity" | "directory">("activity");
-  const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
+  const [isPanelCollapsed, setIsPanelCollapsed] = useState(isNewThread);
   const stableThreadId = sanitizeThreadId(threadId);
   const tabsActivityTriggerId = `chatbox-tabs-trigger-activity-${stableThreadId}`;
   const tabsDirectoryTriggerId = `chatbox-tabs-trigger-directory-${stableThreadId}`;
@@ -108,6 +110,16 @@ const ChatBox: React.FC<{
     thread.values.artifacts,
     threadId,
   ]);
+
+  useEffect(() => {
+    if (isNewThread) {
+      setIsPanelCollapsed(true);
+      panelRef.current?.collapse();
+    } else {
+      setIsPanelCollapsed(false);
+      panelRef.current?.expand();
+    }
+  }, [isNewThread, panelRef]);
 
   useEffect(() => {
     if (!directoryOpen) {
@@ -228,7 +240,7 @@ const ChatBox: React.FC<{
         />
         <ResizablePanel
           panelRef={panelRef}
-          defaultSize={34}
+          defaultSize={isNewThread ? 0 : 34}
           minSize={24}
           collapsible
           collapsedSize={0}
