@@ -243,6 +243,33 @@ function getMountedFolderDisplayName(path: string): string {
   return segments[segments.length - 1] ?? normalized;
 }
 
+const CAPY_PLACEHOLDERS = [
+  "Start chatting with Capy",
+  "Spill the tea, Capy's listening",
+  "What's the vibe today?",
+  "Drop your wildest idea",
+  "Ask Capy literally anything",
+  "No question is too sus",
+  "Capy's down for whatever",
+  "Hit me with your best shot",
+  "Lock in. Let's go.",
+  "What's the side quest today?",
+  "Today's the day. What's the move?",
+  "Plot twist: you're the main character",
+  "Big brain energy starts here",
+  "Say less, do more",
+  "Touch grass later, chat with Capy now",
+  "Manifest your goals here",
+  "Make it iconic",
+  "You got this. What's first?",
+  "Capy believes in you",
+  "Let's get this bread with nutella",
+  "Rise -> grind -> prompt -> sleep",
+  "What're we cooking today?",
+  "Drop a thought, change the day",
+  "Low-key genius hours, let's go",
+];
+
 export function InputBox({
   className,
   disabled,
@@ -351,6 +378,12 @@ export function InputBox({
     () => parseLeadingSlashCommand(textInput.value ?? ""),
     [textInput.value],
   );
+  const [placeholderText, setPlaceholderText] = useState<string>(t.inputBox.placeholder);
+  useEffect(() => {
+    const pick =
+      CAPY_PLACEHOLDERS[Math.floor(Math.random() * CAPY_PLACEHOLDERS.length)];
+    if (pick) setPlaceholderText(pick);
+  }, []);
   const refreshAnalyseStatus = useCallback(async () => {
     try {
       const response = await fetch(
@@ -1330,31 +1363,6 @@ export function InputBox({
     setTimeout(() => requestFormSubmit(), 0);
   }, [pendingSuggestion, requestFormSubmit, textInput]);
 
-  const hasStartedChat = useMemo(
-    () =>
-      thread.messages.some((m) => {
-        if (m.type !== "human" && m.type !== "ai") {
-          return false;
-        }
-        const content = (textOfMessage(m) ?? "").trim();
-        return content.length > 0;
-      }),
-    [thread.messages],
-  );
-  const canStartAutoresearch =
-    !Boolean(disabled) &&
-    !isMock &&
-    !isNewThread &&
-    hasStartedChat &&
-    status !== "streaming";
-
-  const handleOpenAutoresearch = useCallback(() => {
-    if (!canStartAutoresearch) {
-      return;
-    }
-    textInput.setInput("/autoresearch ");
-  }, [canStartAutoresearch, textInput]);
-
   const lastMessageId = thread.messages[thread.messages.length - 1]?.id ?? null;
 
   useEffect(() => {
@@ -1494,7 +1502,7 @@ export function InputBox({
           <PromptInputTextarea
             className={cn("size-full")}
             disabled={disabled}
-            placeholder={t.inputBox.placeholder}
+            placeholder={placeholderText}
             autoFocus={autoFocus}
             defaultValue={initialValue}
             onSpecialKeyDown={handleInputSpecialKeyDown}
@@ -1513,10 +1521,8 @@ export function InputBox({
               <PrivacyAndAutoMenu
                 mode={context.mode}
                 autoModeEnabled={autoModeEnabled}
-                canStartAutoresearch={canStartAutoresearch}
                 onTogglePlanMode={handleTogglePlanMode}
                 onToggleAutoMode={handleToggleAutoMode}
-                onOpenAutoresearch={handleOpenAutoresearch}
                 triggerId={privacyMenuTriggerId}
               />
             )}

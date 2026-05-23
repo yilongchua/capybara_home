@@ -292,6 +292,40 @@
   font-weight: 300;
 }
 
+.capybara {
+  --background: oklch(0.945 0.035 75);
+  --foreground: oklch(0.28 0.045 55);
+  --card: oklch(0.965 0.03 75);
+  --card-foreground: oklch(0.28 0.045 55);
+  --popover: oklch(0.965 0.03 75);
+  --popover-foreground: oklch(0.28 0.045 55);
+  --primary: oklch(0.48 0.095 55);
+  --primary-foreground: oklch(0.975 0.025 80);
+  --secondary: oklch(0.88 0.045 70);
+  --secondary-foreground: oklch(0.3 0.045 55);
+  --muted: oklch(0.9 0.035 70);
+  --muted-foreground: oklch(0.44 0.045 55);
+  --accent: oklch(0.855 0.05 70);
+  --accent-foreground: oklch(0.28 0.045 55);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.82 0.04 65);
+  --input: oklch(0.8 0.045 65);
+  --ring: transparent;
+  --chart-1: oklch(0.55 0.1 55);
+  --chart-2: oklch(0.65 0.12 80);
+  --chart-3: oklch(0.5 0.08 100);
+  --chart-4: oklch(0.7 0.1 65);
+  --chart-5: oklch(0.45 0.1 45);
+  --sidebar: oklch(0.885 0.045 70);
+  --sidebar-foreground: oklch(0.28 0.045 55);
+  --sidebar-primary: oklch(0.45 0.095 55);
+  --sidebar-primary-foreground: oklch(0.975 0.025 80);
+  --sidebar-accent: oklch(0.83 0.055 70);
+  --sidebar-accent-foreground: oklch(0.28 0.045 55);
+  --sidebar-border: oklch(0.78 0.045 65);
+  --sidebar-ring: oklch(0.55 0.08 55);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

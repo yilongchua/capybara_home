@@ -313,6 +313,8 @@ export interface Translations {
       systemDescription: string;
       lightDescription: string;
       darkDescription: string;
+      capybara: string;
+      capybaraDescription: string;
       languageTitle: string;
       languageDescription: string;
     };

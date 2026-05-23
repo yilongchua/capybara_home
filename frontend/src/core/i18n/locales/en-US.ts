@@ -177,7 +177,7 @@ export const enUS: Translations = {
 
   // Sidebar
   sidebar: {
-    newChat: "New chat",
+    newChat: "Chat with Capy",
     chats: "Chats",
     recentChats: "Recent chats",
     demoChats: "Demo chats",
@@ -201,7 +201,7 @@ export const enUS: Translations = {
     deleteConfirm:
       "Are you sure you want to delete this agent? This action cannot be undone.",
     deleteSuccess: "Agent deleted",
-    newChat: "New chat",
+    newChat: "Chat with Capy",
     createPageTitle: "Design your Agent",
     createPageSubtitle:
       "Describe the agent you want — I'll help you create it through conversation.",
@@ -260,7 +260,7 @@ export const enUS: Translations = {
   pages: {
     appName: "Capybara Home",
     chats: "Chats",
-    newChat: "New chat",
+    newChat: "Chat with Capy",
     untitled: "Untitled",
     pipelines: "Scheduled Pipeline",
     vault: "Knowledge Vault",
@@ -367,6 +367,8 @@ export const enUS: Translations = {
       systemDescription: "Match the operating system preference automatically.",
       lightDescription: "Bright palette with higher contrast for daytime.",
       darkDescription: "Dim palette that reduces glare for focus.",
+      capybara: "Capybara",
+      capybaraDescription: "Warm earthy browns inspired by the capybara.",
       languageTitle: "Language",
       languageDescription: "Switch between languages.",
     },

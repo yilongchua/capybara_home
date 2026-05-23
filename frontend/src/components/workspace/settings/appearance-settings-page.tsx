@@ -9,27 +9,49 @@ import { cn } from "@/lib/utils";
 
 import { SettingsSection } from "./settings-section";
 
+type ThemeMode = "light" | "dark" | "capybara";
+
+function CapybaraIcon({ className }: SVGProps<SVGSVGElement>) {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src="/icon.png"
+      alt=""
+      aria-hidden
+      className={cn("object-contain", className)}
+    />
+  );
+}
+
 export function AppearanceSettingsPage() {
   const { t } = useI18n();
   const { theme, setTheme } = useTheme();
-  const currentTheme = (theme ?? "light") as "light" | "dark";
+  const currentTheme = (theme ?? "light") as ThemeMode;
 
   const themeOptions = useMemo(
     () => [
       {
-        id: "light",
+        id: "light" as const,
         label: t.settings.appearance.light,
         description: t.settings.appearance.lightDescription,
         icon: SunIcon,
       },
       {
-        id: "dark",
+        id: "dark" as const,
         label: t.settings.appearance.dark,
         description: t.settings.appearance.darkDescription,
         icon: MoonIcon,
       },
+      {
+        id: "capybara" as const,
+        label: t.settings.appearance.capybara,
+        description: t.settings.appearance.capybaraDescription,
+        icon: CapybaraIcon,
+      },
     ],
     [
+      t.settings.appearance.capybara,
+      t.settings.appearance.capybaraDescription,
       t.settings.appearance.dark,
       t.settings.appearance.darkDescription,
       t.settings.appearance.light,
@@ -51,7 +73,7 @@ export function AppearanceSettingsPage() {
               label={option.label}
               description={option.description}
               active={currentTheme === option.id}
-              mode={option.id as "light" | "dark"}
+              mode={option.id}
               onSelect={(value) => setTheme(value)}
             />
           ))}
@@ -73,9 +95,21 @@ function ThemePreviewCard({
   label: string;
   description: string;
   active: boolean;
-  mode: "light" | "dark";
-  onSelect: (mode: "light" | "dark") => void;
+  mode: ThemeMode;
+  onSelect: (mode: ThemeMode) => void;
 }) {
+  const previewClasses =
+    mode === "dark"
+      ? "border-neutral-800 bg-neutral-900 text-neutral-200"
+      : mode === "capybara"
+        ? "border-amber-900/30 bg-[oklch(0.945_0.035_75)] text-[oklch(0.28_0.045_55)]"
+        : "border-slate-200 bg-white text-slate-900";
+  const dotClass =
+    mode === "dark"
+      ? "bg-emerald-400"
+      : mode === "capybara"
+        ? "bg-amber-700"
+        : "bg-emerald-500";
   return (
     <button
       type="button"
@@ -101,18 +135,11 @@ function ThemePreviewCard({
       <div
         className={cn(
           "relative overflow-hidden rounded-md border text-xs transition-colors",
-          mode === "dark"
-            ? "border-neutral-800 bg-neutral-900 text-neutral-200"
-            : "border-slate-200 bg-white text-slate-900",
+          previewClasses,
         )}
       >
         <div className="border-border/50 flex items-center gap-2 border-b px-3 py-2">
-          <div
-            className={cn(
-              "h-2 w-2 rounded-full",
-              mode === "dark" ? "bg-emerald-400" : "bg-emerald-500",
-            )}
-          />
+          <div className={cn("h-2 w-2 rounded-full", dotClass)} />
           <div className="h-2 w-10 rounded-full bg-current/20" />
           <div className="h-2 w-6 rounded-full bg-current/15" />
         </div>

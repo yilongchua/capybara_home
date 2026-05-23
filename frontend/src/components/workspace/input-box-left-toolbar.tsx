@@ -1,9 +1,9 @@
 "use client";
 
 import {
-  BotIcon,
   CheckIcon,
-  LightbulbIcon,
+  ClipboardListIcon,
+  MoonIcon,
   SparklesIcon,
   WorkflowIcon,
   ZapIcon,
@@ -131,18 +131,14 @@ export function ModeSelectorMenu({
 export function PrivacyAndAutoMenu({
   mode,
   autoModeEnabled,
-  canStartAutoresearch,
   onTogglePlanMode,
   onToggleAutoMode,
-  onOpenAutoresearch,
   triggerId,
 }: {
   mode: InputMode | undefined;
   autoModeEnabled: boolean;
-  canStartAutoresearch: boolean;
   onTogglePlanMode: () => void;
   onToggleAutoMode: () => void;
-  onOpenAutoresearch: () => void;
   triggerId: string;
 }) {
   const { t } = useI18n();
@@ -153,16 +149,16 @@ export function PrivacyAndAutoMenu({
       <DropdownMenuTrigger asChild>
         <PromptInputButton
           id={triggerId}
-          aria-label="Auto mode and autoresearch tools"
+          aria-label="Plan mode and auto mode tools"
           className="gap-1 px-2"
         >
-          <BotIcon className="size-3" />
-          <LightbulbIcon className="size-3" />
+          <ClipboardListIcon className="size-3" />
+          <MoonIcon className="size-3" />
         </PromptInputButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-72">
         <DropdownMenuLabel className="text-muted-foreground text-xs">
-          Auto Mode & Autoresearch
+          Plan Mode & Auto Mode
         </DropdownMenuLabel>
         <DropdownMenuItem
           aria-label={`Toggle ${t.inputBox.planMode} mode`}
@@ -175,7 +171,6 @@ export function PrivacyAndAutoMenu({
             planModeEnabled && "text-accent-foreground",
           )}
         >
-          <div />
           <span>Plan Mode</span>
           <Switch
             checked={planModeEnabled}
@@ -201,18 +196,6 @@ export function PrivacyAndAutoMenu({
             onCheckedChange={() => onToggleAutoMode()}
             aria-label="Auto mode"
           />
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          aria-label="Start autoresearch"
-          onSelect={onOpenAutoresearch}
-          disabled={!canStartAutoresearch}
-          className="flex items-center justify-between gap-2"
-        >
-          <span>Autoresearch</span>
-          <span className="text-muted-foreground text-xs">
-            {canStartAutoresearch ? "Ready" : "Requires started chat"}
-          </span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

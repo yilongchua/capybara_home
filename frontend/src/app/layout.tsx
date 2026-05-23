@@ -33,9 +33,10 @@ export default async function RootLayout({
       <body>
         <ThemeProvider
           attribute="class"
-          defaultTheme="light"
+          defaultTheme="capybara"
           enableSystem={false}
           disableTransitionOnChange
+          themes={["light", "dark", "capybara"]}
         >
           <I18nProvider initialLocale={locale}>{children}</I18nProvider>
         </ThemeProvider>
