@@ -577,6 +577,44 @@ class VaultLearningManager:
         sentences = [item.strip() for item in re.split(r"(?<=[.!?])\s+", text.strip()) if item.strip()]
         return sentences[: max(1, limit)]
 
+    _ENTITY_STOPWORDS: frozenset[str] = frozenset(
+        {
+            # pronouns / determiners
+            "the", "and", "for", "with", "from", "into", "onto", "your", "their", "there", "they",
+            "them", "our", "ours", "his", "her", "hers", "its", "this", "that", "these", "those",
+            "what", "which", "who", "whom", "whose", "why", "how", "when", "where",
+            # generic adjectives / fillers commonly capitalized in titles
+            "best", "good", "great", "top", "new", "old", "use", "uses", "using", "ancient",
+            "modern", "more", "most", "less", "many", "much", "some", "any", "all", "every",
+            "guide", "intro", "overview", "review", "tips", "ways", "list", "blog", "post",
+            "article", "page", "site", "home", "next", "back", "here", "now", "soon", "today",
+            "yesterday", "tomorrow", "still", "just", "also", "ever", "even", "only", "very",
+            "really", "quite", "rather", "such", "than", "then", "still", "yet", "again",
+            "etc", "via", "about", "above", "below", "across", "after", "before", "between",
+            "during", "without", "within", "behind", "beyond", "under", "over",
+            "is", "are", "was", "were", "be", "been", "being",
+            # generic nouns that aren't useful as entities
+            "thing", "things", "stuff", "people", "person", "way", "ways", "part", "parts",
+            "kind", "kinds", "type", "types", "case", "cases", "fact", "facts", "idea", "ideas",
+        }
+    )
+
+    @classmethod
+    def _is_quality_entity(cls, token: str) -> bool:
+        cleaned = token.strip(" -_/&")
+        if len(cleaned) < 4:
+            return False
+        lowered = cleaned.lower()
+        if lowered in cls._ENTITY_STOPWORDS:
+            return False
+        # Require at least one vowel (filters acronyms / typos / pure punctuation residue)
+        if not re.search(r"[aeiouAEIOU]", cleaned):
+            return False
+        # Reject if all characters are the same letter or it's purely numeric
+        if cleaned.isdigit():
+            return False
+        return True
+
     def _heuristic_analysis(
         self,
         *,
@@ -591,9 +629,15 @@ class VaultLearningManager:
     ) -> dict[str, Any]:
         summary = " ".join(self._heuristic_sentences(raw_text, limit=3))[:1000]
         key_claims = self._heuristic_sentences(raw_text, limit=5)
-        title_tokens = [token for token in re.findall(r"[A-Z][A-Za-z0-9&/-]{2,}", title) if token.lower() not in {"the", "and"}]
-        topic_words = [item for item in re.findall(r"[A-Za-z0-9]+", topic) if len(item) > 4]
-        entities = list(dict.fromkeys(entity_refs + title_tokens[:5]))
+        # Prefer multi-word capitalized phrases (proper nouns) over isolated capitalized words,
+        # which in titles are usually just adjectives ("Best", "Ancient", "Your").
+        multiword = re.findall(r"(?:[A-Z][A-Za-z0-9&/-]{2,}(?:\s+[A-Z][A-Za-z0-9&/-]{2,})+)", title)
+        single = re.findall(r"[A-Z][A-Za-z0-9&/-]{3,}", title)
+        candidate_tokens = list(dict.fromkeys(multiword + single))
+        title_tokens = [token for token in candidate_tokens if self._is_quality_entity(token)]
+        topic_words = [item for item in re.findall(r"[A-Za-z0-9]+", topic) if len(item) > 4 and self._is_quality_entity(item)]
+        cleaned_entity_refs = [ref for ref in entity_refs if self._is_quality_entity(ref)]
+        entities = list(dict.fromkeys(cleaned_entity_refs + title_tokens[:5]))
         concepts = list(dict.fromkeys(concept_refs + topic_words[:6]))
         synthesis_refs = list(dict.fromkeys(target_synthesis_refs + topic_tags[:3] + ([self._topic_slug(topic)] if topic else [])))
         open_questions = [f"What evidence is still missing around {topic or title}?", f"Which facts should be re-verified from {url}?"]
@@ -668,6 +712,7 @@ class VaultLearningManager:
                 merged[key] = fallback.get(key, [])
             else:
                 merged[key] = [str(item).strip() for item in value if str(item).strip()]
+        merged["entities"] = [item for item in merged["entities"] if self._is_quality_entity(item)]
         merged["summary"] = str(merged.get("summary") or fallback["summary"]).strip()
         return merged
 
@@ -887,6 +932,29 @@ class VaultLearningManager:
                 item["reason"] = reason
             item.pop("claimed_at", None)
         self._save_queue(queue)
+
+    def requeue_all_claimed_items(self, *, reason: str = "orphaned_from_prior_run") -> int:
+        """Return *every* item currently in 'claimed' state back to 'queued'.
+
+        Used at ingest job start to recover from prior runs that died mid-flight
+        (backend restart, crash, hard kill) and left items orphaned in 'claimed'
+        with no live worker. Returns the number of items requeued.
+        """
+        queue = self._load_queue()
+        now = _utcnow_iso()
+        count = 0
+        for item in queue:
+            if str(item.get("status") or "") != "claimed":
+                continue
+            item["status"] = "queued"
+            item["updated_at"] = now
+            if reason:
+                item["reason"] = reason
+            item.pop("claimed_at", None)
+            count += 1
+        if count:
+            self._save_queue(queue)
+        return count
 
     def clear_queued_search_results(self, *, reason: str = "rejected_by_user") -> int:
         queue = self._load_queue()
@@ -1473,14 +1541,23 @@ class VaultLearningManager:
 
         if queue_item_ids:
             ingested_ids = {item["url"] for item in ingested if item.get("url")}
+            skipped_ids = {item["url"] for item in skipped_unchanged if item.get("url")}
             rejected_ids = {item["url"] for item in rejected_for_trust if item.get("url")}
             policy_rejected_ids = {item["url"] for item in rejected_for_policy if item.get("url")}
             queue_to_ingested = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in ingested_ids]
+            queue_to_skipped = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in skipped_ids]
             queue_to_rejected = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in rejected_ids]
             queue_to_failed = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in policy_rejected_ids]
             self._mark_queue_items(queue_to_ingested, status="ingested", reason="converted_to_vault_source")
+            self._mark_queue_items(queue_to_skipped, status="ingested", reason="content_hash_unchanged")
             self._mark_queue_items(queue_to_rejected, status="rejected", reason="trust_score_below_threshold")
             self._mark_queue_items(queue_to_failed, status="rejected", reason="policy_or_fetch_error")
+            # Final safety net: any queue_item with a known queue_id that didn't end up
+            # in any of the buckets above must not be left in "claimed" state.
+            handled = set(queue_to_ingested) | set(queue_to_skipped) | set(queue_to_rejected) | set(queue_to_failed)
+            unhandled = [qid for qid in queue_item_ids if qid and qid not in handled]
+            if unhandled:
+                self.requeue_claimed_items(unhandled, reason="unhandled_status_retry")
         report = {
             "source": source,
             "topic": topic,

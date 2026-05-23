@@ -1308,6 +1308,21 @@ class ControlPlaneService:
             try:
                 manager = self._default_vault_manager()
 
+                # Phase 0 — rescue orphaned claims from prior runs (e.g. backend
+                # restart killed the worker thread mid-ingest). Any item still
+                # in "claimed" status at job start cannot belong to a live job
+                # because we hold the ingest lock and just transitioned to running.
+                try:
+                    orphaned = manager.requeue_all_claimed_items(reason="orphaned_from_prior_run")
+                    if orphaned:
+                        logger_obj.info(
+                            "vault_ingest_orphan_requeue job_id=%s requeued=%d",
+                            job_id,
+                            orphaned,
+                        )
+                except Exception:
+                    logger_obj.exception("vault_ingest_orphan_requeue_failed job_id=%s", job_id)
+
                 # Phase 1 — drain queued search results directly. Approval gating
                 # has been removed; the UI's Run Ingest button is the trigger.
                 claimed_items: list[dict[str, Any]] = []
