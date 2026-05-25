@@ -91,6 +91,7 @@ function buildSubtaskUpdates(
   const taskCallIds = new Set<string>();
 
   for (const message of messages) {
+    if (!message) continue;
     if (message.type === "ai") {
       for (const toolCall of message.tool_calls ?? []) {
         if (toolCall.name !== "task" || !toolCall.id) {
