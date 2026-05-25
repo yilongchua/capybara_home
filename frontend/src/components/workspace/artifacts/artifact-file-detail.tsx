@@ -57,12 +57,14 @@ function truncateFilename(name: string): string {
 
 export function ArtifactFileDetail({
   className,
+  headerClassName,
   filepath: filepathFromProps,
   threadId,
   onClose,
   onSubmitPlanRevision,
 }: {
   className?: string;
+  headerClassName?: string;
   filepath: string;
   threadId: string;
   onClose?: () => void;
@@ -214,7 +216,7 @@ export function ArtifactFileDetail({
   const hasPlanChanges = shouldRenderPlan && planDraft !== displayContent;
   return (
     <Artifact className={cn(className)}>
-      <ArtifactHeader className="px-2">
+      <ArtifactHeader className={cn("px-2", headerClassName)}>
         <div className="flex items-center gap-2">
           <ArtifactTitle>
             {isWriteFile ? (

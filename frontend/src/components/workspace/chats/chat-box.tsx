@@ -1,5 +1,5 @@
 import { ChevronLeftIcon, ChevronRightIcon, FilesIcon, RefreshCwIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
 
 import { ConversationEmptyState } from "@/components/ai-elements/conversation";
@@ -61,6 +61,12 @@ const ChatBox: React.FC<{
   const { thread } = useThread();
   const threadIdRef = useRef(threadId);
   const panelRef = usePanelRef();
+  const directoryExplorerPanelRef = usePanelRef();
+  const activityDirectoryOpenedRef = useRef(false);
+  const activityDirectorySizeRef = useRef(30);
+  const directoryExplorerOpenedRef = useRef(false);
+  const directoryExplorerSizeRef = useRef(50);
+  const isOuterPanelCollapsingRef = useRef(false);
 
   const {
     directoryFiles,
@@ -72,26 +78,36 @@ const ChatBox: React.FC<{
   } = useDirectory();
 
   const [sandboxOutputFiles, setSandboxOutputFiles] = useState<string[]>([]);
-  const [createdDirectoryPath, setCreatedDirectoryPath] = useState("");
-  const [mountedDirectoryPath, setMountedDirectoryPath] = useState("");
 
   const [activeTab, setActiveTab] = useState<"activity" | "directory">("activity");
-  const [isPanelCollapsed, setIsPanelCollapsed] = useState(isNewThread);
+  const [isPanelCollapsed, setIsPanelCollapsed] = useState(true);
+  const [isDirectoryExplorerCollapsed, setIsDirectoryExplorerCollapsed] = useState(true);
   const stableThreadId = sanitizeThreadId(threadId);
   const tabsActivityTriggerId = `chatbox-tabs-trigger-activity-${stableThreadId}`;
   const tabsDirectoryTriggerId = `chatbox-tabs-trigger-directory-${stableThreadId}`;
   const tabsActivityContentId = `chatbox-tabs-content-activity-${stableThreadId}`;
   const tabsDirectoryContentId = `chatbox-tabs-content-directory-${stableThreadId}`;
+  const restoreDirectoryExplorerIfOpen = useCallback(() => {
+    if (isDirectoryExplorerCollapsed) return;
+    window.requestAnimationFrame(() => {
+      directoryExplorerPanelRef.current?.resize(`${directoryExplorerSizeRef.current}%`);
+    });
+  }, [directoryExplorerPanelRef, isDirectoryExplorerCollapsed]);
 
   useEffect(() => {
     if (threadIdRef.current !== threadId) {
       threadIdRef.current = threadId;
       deselect();
-      setCreatedDirectoryPath("");
-      setMountedDirectoryPath("");
       setActiveTab("activity");
-      setIsPanelCollapsed(false);
-      panelRef.current?.expand();
+      setIsPanelCollapsed(true);
+      setIsDirectoryExplorerCollapsed(true);
+      activityDirectoryOpenedRef.current = false;
+      activityDirectorySizeRef.current = 30;
+      directoryExplorerOpenedRef.current = false;
+      directoryExplorerSizeRef.current = 50;
+      isOuterPanelCollapsingRef.current = false;
+      panelRef.current?.collapse();
+      directoryExplorerPanelRef.current?.collapse();
     }
 
     const nextDirectoryFiles = Array.from(
@@ -102,6 +118,7 @@ const ChatBox: React.FC<{
     }
   }, [
     directoryFiles,
+    directoryExplorerPanelRef,
     deselect,
     extraDirectoryFiles,
     panelRef,
@@ -112,13 +129,9 @@ const ChatBox: React.FC<{
   ]);
 
   useEffect(() => {
-    if (isNewThread) {
-      setIsPanelCollapsed(true);
-      panelRef.current?.collapse();
-    } else {
-      setIsPanelCollapsed(false);
-      panelRef.current?.expand();
-    }
+    setIsPanelCollapsed(true);
+    isOuterPanelCollapsingRef.current = false;
+    panelRef.current?.collapse();
   }, [isNewThread, panelRef]);
 
   useEffect(() => {
@@ -130,8 +143,14 @@ const ChatBox: React.FC<{
     }
     setActiveTab("directory");
     setIsPanelCollapsed(false);
-    panelRef.current?.expand();
-  }, [activeTab, directoryOpen, panelRef]);
+    if (activityDirectoryOpenedRef.current) {
+      panelRef.current?.resize(`${activityDirectorySizeRef.current}%`);
+    } else {
+      activityDirectoryOpenedRef.current = true;
+      panelRef.current?.resize("30%");
+    }
+    restoreDirectoryExplorerIfOpen();
+  }, [activeTab, directoryOpen, panelRef, restoreDirectoryExplorerIfOpen]);
 
   useEffect(() => {
     const shouldPollDirectories =
@@ -206,13 +225,36 @@ const ChatBox: React.FC<{
 
 
   const handleCollapse = () => {
+    isOuterPanelCollapsingRef.current = true;
     setIsPanelCollapsed(true);
     panelRef.current?.collapse();
   };
 
   const handleExpand = () => {
     setIsPanelCollapsed(false);
-    panelRef.current?.expand();
+    isOuterPanelCollapsingRef.current = false;
+    if (activityDirectoryOpenedRef.current) {
+      panelRef.current?.resize(`${activityDirectorySizeRef.current}%`);
+    } else {
+      activityDirectoryOpenedRef.current = true;
+      panelRef.current?.resize("30%");
+    }
+    restoreDirectoryExplorerIfOpen();
+  };
+
+  const handleCollapseDirectoryExplorer = () => {
+    setIsDirectoryExplorerCollapsed(true);
+    directoryExplorerPanelRef.current?.collapse();
+  };
+
+  const handleExpandDirectoryExplorer = () => {
+    setIsDirectoryExplorerCollapsed(false);
+    if (directoryExplorerOpenedRef.current) {
+      directoryExplorerPanelRef.current?.resize(`${directoryExplorerSizeRef.current}%`);
+    } else {
+      directoryExplorerOpenedRef.current = true;
+      directoryExplorerPanelRef.current?.resize("50%");
+    }
   };
 
   const handleTabChange = (value: string) => {
@@ -229,14 +271,18 @@ const ChatBox: React.FC<{
       >
         <ResizablePanel
           panelRef={panelRef}
-          defaultSize={isNewThread ? 0 : 34}
-          minSize={24}
+          defaultSize={0}
+          minSize={30}
           collapsible
           collapsedSize={0}
           id="activity-directory"
           onResize={(size) => {
             const collapsed = size.asPercentage < 1;
             setIsPanelCollapsed(collapsed);
+            if (!collapsed) {
+              activityDirectoryOpenedRef.current = true;
+              activityDirectorySizeRef.current = size.asPercentage;
+            }
           }}
         >
           <Tabs
@@ -293,29 +339,69 @@ const ChatBox: React.FC<{
             >
               <div className="size-full p-3">
                 <ResizablePanelGroup orientation="horizontal" id="workspace-directory-panel-group">
-                  <ResizablePanel defaultSize={42} minSize={24} id="workspace-directory-explorer">
-                    <div className="size-full overflow-y-auto rounded-md border p-2">
+                  <ResizablePanel
+                    panelRef={directoryExplorerPanelRef}
+                    defaultSize={0}
+                    minSize={24}
+                    collapsible
+                    collapsedSize={0}
+                    id="workspace-directory-explorer"
+                    onResize={(size) => {
+                      const collapsed = size.asPercentage < 1;
+                      setIsDirectoryExplorerCollapsed(collapsed);
+                      if (!collapsed && !isOuterPanelCollapsingRef.current) {
+                        directoryExplorerOpenedRef.current = true;
+                        directoryExplorerSizeRef.current = size.asPercentage;
+                      }
+                    }}
+                  >
+                    <div className="flex size-full flex-col rounded-md border">
+                      <div className="flex shrink-0 justify-end border-b p-1">
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          onClick={handleCollapseDirectoryExplorer}
+                          aria-label="Collapse directory explorer"
+                          title="Collapse directory explorer"
+                        >
+                          <ChevronLeftIcon className="size-4" />
+                        </Button>
+                      </div>
                       <ArtifactFileList
-                        className="size-full"
+                        className="min-h-0 flex-1 p-2"
                         files={directoryFiles ?? []}
                         threadId={threadId}
-                        createdPath={createdDirectoryPath}
-                        onCreatedPathChange={setCreatedDirectoryPath}
-                        mountedPath={mountedDirectoryPath}
-                        onMountedPathChange={setMountedDirectoryPath}
                       />
                     </div>
                   </ResizablePanel>
                   <ResizableHandle
                     id="workspace-directory-panel-separator"
                     withHandle
-                    className="mx-1 w-2 bg-muted/85 opacity-100 transition-colors hover:bg-muted"
+                    className={cn(
+                      "mx-1 w-2 bg-muted/85 opacity-100 transition-colors hover:bg-muted",
+                      isDirectoryExplorerCollapsed && "pointer-events-none opacity-0",
+                    )}
                   />
-                  <ResizablePanel defaultSize={58} minSize={24} id="workspace-directory-preview">
-                    <div className="size-full overflow-y-auto rounded-md">
+                  <ResizablePanel defaultSize={100} minSize={24} id="workspace-directory-preview">
+                    <div className="relative size-full overflow-y-auto rounded-md">
+                      {isDirectoryExplorerCollapsed && (
+                        <div className="absolute top-2 left-2 z-10">
+                          <Button
+                            size="icon-sm"
+                            variant="secondary"
+                            className="border shadow-sm"
+                            onClick={handleExpandDirectoryExplorer}
+                            aria-label="Open directory explorer"
+                            title="Open directory explorer"
+                          >
+                            <ChevronRightIcon className="size-4" />
+                          </Button>
+                        </div>
+                      )}
                       {selectedFile ? (
                         <ArtifactFileDetail
                           className="size-full"
+                          headerClassName={isDirectoryExplorerCollapsed ? "pl-12" : undefined}
                           filepath={selectedFile}
                           threadId={threadId}
                           onSubmitPlanRevision={onSubmitPlanRevision}
@@ -354,7 +440,7 @@ const ChatBox: React.FC<{
             size="icon-sm"
             className="border shadow-sm"
             onClick={handleExpand}
-            aria-label="Open activity panel"
+            aria-label="Open activity and directories panel"
           >
             <ChevronRightIcon className="size-4" />
           </Button>

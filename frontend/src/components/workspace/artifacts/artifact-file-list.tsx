@@ -2,8 +2,6 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   DownloadIcon,
-  FolderIcon,
-  FolderOpenIcon,
   LoaderIcon,
   PackageIcon,
   RefreshCwIcon,
@@ -23,11 +21,7 @@ import {
 import { useMountedFolderFiles } from "@/core/dreamy/hooks/use-mounted-folder-files";
 import { useI18n } from "@/core/i18n/hooks";
 import { installSkill } from "@/core/skills/api";
-import {
-  getFileExtensionDisplayName,
-  getFileIcon,
-  getFileName,
-} from "@/core/utils/files";
+import { getFileName } from "@/core/utils/files";
 import { cn } from "@/lib/utils";
 
 import { useDirectory } from "./context";
@@ -36,6 +30,7 @@ type FileTreeNode = {
   name: string;
   fullPath: string;
   kind: "directory" | "file";
+  source: "workspace" | "mounted";
   children: FileTreeNode[];
 };
 
@@ -43,18 +38,10 @@ export function ArtifactFileList({
   className,
   files,
   threadId,
-  createdPath: _createdPath,
-  onCreatedPathChange: _onCreatedPathChange,
-  mountedPath: _mountedPath,
-  onMountedPathChange: _onMountedPathChange,
 }: {
   className?: string;
   files: string[];
   threadId: string;
-  createdPath: string;
-  onCreatedPathChange: (path: string) => void;
-  mountedPath: string;
-  onMountedPathChange: (path: string) => void;
 }) {
   const { t } = useI18n();
   const { select: selectFile, setOpen } = useDirectory();
@@ -93,7 +80,7 @@ export function ArtifactFileList({
     [mountedFolderFiles],
   );
 
-  const createdIndex = useMemo(() => {
+  const workspaceIndex = useMemo(() => {
     const root = "/mnt/user-data/workspace/";
     const map = new Map<string, string>();
     for (const file of createdFiles) {
@@ -115,11 +102,14 @@ export function ArtifactFileList({
     return map;
   }, [mountedFiles]);
 
-  const buildTree = useCallback((index: Map<string, string>, rootLabel: string) => {
-    const roots: FileTreeNode[] = [
-      { name: rootLabel, fullPath: rootLabel, kind: "directory", children: [] },
-    ];
-    const root = roots[0]!;
+  const buildTree = useCallback((index: Map<string, string>, rootLabel: string, rootPath: string, source: "workspace" | "mounted") => {
+    const root: FileTreeNode = {
+      name: rootLabel,
+      fullPath: rootPath,
+      kind: "directory",
+      source,
+      children: [],
+    };
     for (const [rel, full] of index.entries()) {
       const parts = rel.split("/").filter(Boolean);
       let cursor = root;
@@ -133,6 +123,7 @@ export function ArtifactFileList({
             name: part,
             fullPath: nextFull,
             kind: isLeaf ? "file" : "directory",
+            source,
             children: [],
           };
           cursor.children.push(child);
@@ -151,14 +142,16 @@ export function ArtifactFileList({
     return root;
   }, []);
 
-  const createdTree = useMemo(
-    () => buildTree(createdIndex, "/mnt/user-data/workspace"),
-    [buildTree, createdIndex],
-  );
-  const mountedTree = useMemo(
-    () => buildTree(mountedIndex, "/mnt/user-data/mounted"),
-    [buildTree, mountedIndex],
-  );
+  const rootTrees = useMemo(() => {
+    const roots: FileTreeNode[] = [];
+    if (workspaceIndex.size > 0) {
+      roots.push(buildTree(workspaceIndex, "workspace", "/mnt/user-data/workspace", "workspace"));
+    }
+    if (mountedFolder && mountedIndex.size > 0) {
+      roots.push(buildTree(mountedIndex, mountedFolder, "/mnt/user-data/mounted", "mounted"));
+    }
+    return roots;
+  }, [buildTree, mountedFolder, mountedIndex, workspaceIndex]);
 
   const handleClick = useCallback(
     (filepath: string) => {
@@ -221,24 +214,54 @@ export function ArtifactFileList({
   const mountedFolderActionDisabled =
     isPicking || saveMountedFolder.isPending || clearMountedFolder.isPending;
 
-  const renderRowContent = useCallback(
-    (file: string, source: "created" | "mounted") => {
-      const metadata = `${getFileExtensionDisplayName(file)} file`;
+  const mountedFolderActions = useMemo(
+    () =>
+      mountedFolder ? (
+        <div className="flex shrink-0 items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            disabled={mountedFolderActionDisabled}
+            onClick={() => void handleChangeMountedFolder()}
+            title={t.chatUI.mountFolder.change}
+            aria-label={t.chatUI.mountFolder.change}
+          >
+            <RefreshCwIcon className={cn("size-3.5", isPicking && "animate-spin")} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-destructive hover:text-destructive"
+            disabled={mountedFolderActionDisabled}
+            onClick={() => void handleUnmountMountedFolder()}
+            title={t.chatUI.mountFolder.unmount}
+            aria-label={t.chatUI.mountFolder.unmount}
+          >
+            <XIcon className="size-3.5" />
+          </Button>
+        </div>
+      ) : null,
+    [
+      handleChangeMountedFolder,
+      handleUnmountMountedFolder,
+      isPicking,
+      mountedFolder,
+      mountedFolderActionDisabled,
+      t.chatUI.mountFolder.change,
+      t.chatUI.mountFolder.unmount,
+    ],
+  );
 
+  const renderRowContent = useCallback(
+    (node: FileTreeNode) => {
+      const file = node.fullPath;
       return (
         <div
-          className="hover:bg-muted/50 grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-1.5"
+          className="hover:bg-muted/50 grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-1"
           onClick={() => handleClick(file)}
+          title={file}
         >
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="text-muted-foreground shrink-0">
-              {getFileIcon(file, "size-4")}
-            </span>
-            <div className="min-w-0">
-              <p className="text-sm font-medium whitespace-normal break-all">{getFileName(file)}</p>
-              <p className="text-muted-foreground truncate text-xs">{metadata}</p>
-            </div>
-          </div>
+          <span className="min-w-0 text-sm break-all">{getFileName(file)}</span>
           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
             {file.endsWith(".skill") && (
               <Button
@@ -249,13 +272,13 @@ export function ArtifactFileList({
                 title={t.common.install}
               >
                 {installingFile === file ? (
-                  <LoaderIcon className="size-4 animate-spin" />
+                  <LoaderIcon className="size-3.5 animate-spin" />
                 ) : (
-                  <PackageIcon className="size-4" />
+                  <PackageIcon className="size-3.5" />
                 )}
               </Button>
             )}
-            {source === "created" && (
+            {node.source === "workspace" && (
               <a
                 href={urlOfArtifact({
                   filepath: file,
@@ -265,7 +288,7 @@ export function ArtifactFileList({
                 target="_blank"
               >
                 <Button variant="ghost" size="icon-sm" title={t.common.download}>
-                  <DownloadIcon className="size-4" />
+                  <DownloadIcon className="size-3.5" />
                 </Button>
               </a>
             )}
@@ -277,110 +300,68 @@ export function ArtifactFileList({
   );
 
   const renderTree = useCallback(
-    (node: FileTreeNode, source: "created" | "mounted", depth = 0): React.ReactNode => {
+    (node: FileTreeNode, depth = 0): React.ReactNode => {
       if (node.kind === "file") {
         return (
-          <div key={node.fullPath} className={depth > 0 ? "ml-0" : ""}>
+          <div key={node.fullPath}>
             <div style={{ paddingLeft: `${depth * 14}px` }}>
-              {renderRowContent(node.fullPath, source)}
+              {renderRowContent(node)}
             </div>
           </div>
         );
       }
-      const isOpen = expandedPaths[node.fullPath] ?? depth <= 1;
+      const isOpen = expandedPaths[node.fullPath] ?? false;
       return (
         <div key={node.fullPath}>
-          <button
-            type="button"
-            className="hover:bg-muted/50 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left"
+          <div
+            className="hover:bg-muted/50 flex w-full items-center justify-between gap-2 rounded-md py-1 pr-2"
             style={{ paddingLeft: `${depth * 14 + 8}px` }}
-            onClick={() =>
-              setExpandedPaths((current) => ({
-                ...current,
-                [node.fullPath]: !isOpen,
-              }))
-            }
           >
-            {isOpen ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
-            <FolderIcon className="text-muted-foreground size-4 shrink-0" />
-            <div className="min-w-0">
-              <p className={cn("truncate text-sm", depth <= 1 ? "font-medium" : "")}>{node.name}</p>
-            </div>
-          </button>
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-2 text-left"
+              onClick={() =>
+                setExpandedPaths((current) => ({
+                  ...current,
+                  [node.fullPath]: !isOpen,
+                }))
+              }
+            >
+              {isOpen ? <ChevronDownIcon className="size-3.5 shrink-0" /> : <ChevronRightIcon className="size-3.5 shrink-0" />}
+              <span className={cn("min-w-0 truncate text-sm", depth === 0 ? "font-medium" : "")}>{node.name}</span>
+            </button>
+            {depth === 0 && node.source === "mounted" ? mountedFolderActions : null}
+          </div>
           {isOpen && node.children.length > 0 ? (
-            <div className="space-y-0.5">{node.children.map((child) => renderTree(child, source, depth + 1))}</div>
+            <div className="space-y-0.5">{node.children.map((child) => renderTree(child, depth + 1))}</div>
           ) : null}
         </div>
       );
     },
-    [expandedPaths, renderRowContent],
+    [expandedPaths, mountedFolderActions, renderRowContent],
   );
 
   return (
-    <div className={cn("flex w-full flex-col gap-4 overflow-y-auto", className)}>
-      <section className="space-y-2">
-        <div className="text-muted-foreground flex items-center gap-1.5 px-1 text-xs">
-          <FolderOpenIcon className="size-3.5" />
-          <span className="font-medium uppercase tracking-wide">Created Files</span>
+    <div className={cn("flex w-full flex-col gap-3 overflow-y-auto", className)}>
+      {mountedFolder && hasDocsFolder && (
+        <div className="text-muted-foreground px-1 font-mono text-[11px]">
+          Detected folder: <span className="text-foreground">/mnt/user-data/mounted/.docs</span>
         </div>
-        {createdFiles.length > 0 ? (
-          <div className="space-y-0.5 rounded-md border p-1">
-            {renderTree(createdTree, "created")}
-          </div>
-        ) : (
-          <div className="text-muted-foreground rounded-md border px-3 py-2 text-xs">
-            No files found in /mnt/user-data/workspace
-          </div>
-        )}
-      </section>
-
-      {mountedFolder && (
-        <section className="space-y-2">
-          <div className="text-muted-foreground space-y-1 px-1 text-xs">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-1.5">
-                <FolderOpenIcon className="size-3.5 shrink-0" />
-                <span className="font-medium uppercase tracking-wide">Mounted Files</span>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={mountedFolderActionDisabled}
-                  onClick={() => void handleChangeMountedFolder()}
-                >
-                  <RefreshCwIcon className={cn("size-3.5", isPicking && "animate-spin")} />
-                  {t.chatUI.mountFolder.change}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-destructive hover:text-destructive"
-                  disabled={mountedFolderActionDisabled}
-                  onClick={() => void handleUnmountMountedFolder()}
-                >
-                  <XIcon className="size-3.5" />
-                  {t.chatUI.mountFolder.unmount}
-                </Button>
-              </div>
-            </div>
-            <div className="font-mono text-[11px] break-all">{mountedFolder}</div>
-            {hasDocsFolder && (
-              <div className="font-mono text-[11px]">
-                Detected folder: <span className="text-foreground">/mnt/user-data/mounted/.docs</span>
-              </div>
-            )}
-          </div>
-          {mountedFiles.length > 0 ? (
-            <div className="space-y-0.5 rounded-md border p-1">
-              {renderTree(mountedTree, "mounted")}
-            </div>
-          ) : (
-            <div className="text-muted-foreground rounded-md border px-3 py-2 text-xs">
-              No files found in mounted folder.
-            </div>
-          )}
-        </section>
+      )}
+      {rootTrees.length > 0 ? (
+        <div className="space-y-0.5 p-1">
+          {rootTrees.map((root) => renderTree(root))}
+        </div>
+      ) : (
+        <div className="text-muted-foreground px-3 py-2 text-xs">
+          No files found in /mnt/user-data/workspace
+          {mountedFolder ? " or mounted folder." : "."}
+        </div>
+      )}
+      {mountedFolder && mountedFiles.length === 0 && (
+        <div className="text-muted-foreground px-3 py-2 text-xs">
+          No files found in mounted folder.
+        </div>
       )}
     </div>
   );
