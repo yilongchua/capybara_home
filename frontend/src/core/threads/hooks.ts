@@ -1377,14 +1377,10 @@ export function useThreadStream({
             checkpoint: options?.checkpoint,
             config: {
               recursion_limit: 1000,
-              configurable: {
-                ...runConfigurable,
-                ...extraContext,
-              },
             },
             context: {
-              ...extraContext,
               ...runConfigurable,
+              ...extraContext,
             },
           },
         );

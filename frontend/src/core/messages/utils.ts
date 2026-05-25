@@ -34,6 +34,7 @@ const SYNTHETIC_HUMAN_MESSAGE_NAMES = new Set([
   "plan_followup_prompt",
   "work_mode_plan_rerun",
   "active_skills",
+  "execute_plan",
 ]);
 
 export function isSyntheticHumanMessage(message: Message) {

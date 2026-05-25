@@ -228,12 +228,14 @@ class PlanExecutionGateMiddleware(AgentMiddleware[PlanExecutionGateState]):
         tool_args = request.tool_call.get("args") or {}
         in_plan_mode = _is_plan_mode(request.runtime)
 
-        # Scope-gated search tools require classifier verdict whenever the
-        # plan is draft OR we are in Plan Mode (even without a plan yet —
-        # PhaseToolFilterMiddleware should have hidden them, but if we are
-        # here, the LLM bypassed that and we must enforce policy).
-        plan_status = _normalize_plan_status(plan.get("status")) if isinstance(plan, dict) else "draft"
-        if tool_name in _SCOPE_GATED_TOOLS and (in_plan_mode or plan_status == "draft"):
+        has_plan = isinstance(plan, dict)
+        plan_status = _normalize_plan_status(plan.get("status")) if has_plan else "draft"
+        # Scope-vs-content classification is a Plan-Mode-only concern. In Work
+        # Mode the user has committed to an execution intent; if a draft plan
+        # still exists, the draft-plan branch below already blocks execution
+        # tools with a clearer "approve the plan" message, so running the
+        # classifier first would only waste a model call.
+        if tool_name in _SCOPE_GATED_TOOLS and in_plan_mode:
             user_prompt = self._extract_latest_user_prompt(state)
             verdict = self._classify_scope_intent(
                 request=request,
@@ -246,7 +248,7 @@ class PlanExecutionGateMiddleware(AgentMiddleware[PlanExecutionGateState]):
             return self._build_block_command(
                 request,
                 (
-                    f"[plan_gate] Plan Mode allows scope-clarifying search only. "
+                    "[plan_gate] Plan Mode allows scope-clarifying search only. "
                     f"`{tool_name}` looks like content gathering for execution; use "
                     "`scope_search` (or refine plan.md / answer the pending clarification) "
                     "before approval. (This block is a backstop — the phase filter "

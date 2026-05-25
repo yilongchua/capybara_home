@@ -147,6 +147,8 @@ type ExecutePlanResponse = {
   acknowledged: boolean;
   status: "accepted" | "duplicate" | "conflict" | "failed";
   plan_status?: string | null;
+  run_id?: string | null;
+  assistant_id?: string | null;
 };
 
 function getExecutePlanFailureMessage(result: ExecutePlanResponse): string | null {
@@ -418,6 +420,16 @@ function ChatPageContent({
         executePlanRetryCountRef.current = 0;
         setPendingExecutePlan(false);
         setIsExecutingPlan(false);
+        // The Work Mode run is now a server-registered LangGraph run.
+        // Join its SSE stream immediately so the chat starts updating without
+        // waiting up to 15s for `useRunningRun` polling to discover it.
+        if (typeof result.run_id === "string" && result.run_id) {
+          void thread.joinStream(result.run_id).catch((error) => {
+            console.warn("Failed to join Work Mode run stream directly:", error);
+          });
+        }
+        // Bump the poller as a backup discovery path in case the direct join
+        // races the run's registration window.
         setRunPollBump((value) => value + 1);
         publishWorkspaceRefresh(["runs", "threads", `thread:${threadId}`], {
           source: "execute-plan",
@@ -442,6 +454,7 @@ function ChatPageContent({
     setSettings,
     settings.context,
     settings.context.auto_mode,
+    thread,
     threadId,
     thread.isLoading,
   ]);

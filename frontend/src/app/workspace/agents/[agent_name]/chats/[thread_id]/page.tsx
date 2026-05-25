@@ -53,6 +53,8 @@ type ExecutePlanResponse = {
   acknowledged: boolean;
   status: "accepted" | "duplicate" | "conflict" | "failed";
   plan_status?: string | null;
+  run_id?: string | null;
+  assistant_id?: string | null;
 };
 
 function getExecutePlanFailureMessage(result: ExecutePlanResponse): string | null {
@@ -183,13 +185,18 @@ function AgentChatPageContent({
         toast.error(`Failed to execute plan. ${failureMessage}`);
         return;
       }
+      if (typeof result.run_id === "string" && result.run_id) {
+        void thread.joinStream(result.run_id).catch((error) => {
+          console.warn("Failed to join Work Mode run stream directly:", error);
+        });
+      }
       setRunPollBump((value) => value + 1);
       publishWorkspaceRefresh(["runs", "threads", `thread:${threadId}`], {
         source: "execute-plan",
       });
     };
     void run();
-  }, [setSettings, settings.context, settings.context.auto_mode, threadId]);
+  }, [setSettings, settings.context, settings.context.auto_mode, thread, threadId]);
 
   const handleSubmit = useCallback(
     (message: PromptInputMessage, options?: InputBoxSubmitOptions) => {

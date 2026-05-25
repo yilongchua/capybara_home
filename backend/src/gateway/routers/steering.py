@@ -18,10 +18,10 @@ from src.agents.middlewares.plan_execution import (
     build_clarification_prompt_message,
     execute_plan_should_duplicate,
     mark_handoff_requested,
+    mark_handoff_succeeded,
     resolve_auto_mode,
     resolve_original_user_request,
 )
-from src.agents.middlewares.work_run_handoff import spawn_work_mode_handoff
 from src.agents.steering_queue_store import enqueue_steering_intent
 
 router = APIRouter(prefix="/api", tags=["steering"])
@@ -82,6 +82,15 @@ class ExecutePlanResponse(BaseModel):
     plan_id: str | None = None
     plan_status: str | None = None
     status: Literal["accepted", "duplicate", "conflict", "failed"]
+    run_id: str | None = Field(
+        default=None,
+        description="Run id of the newly-created Work Mode run (when status='accepted'). "
+        "Frontend should join its SSE stream to receive Work Mode events.",
+    )
+    assistant_id: str | None = Field(
+        default=None,
+        description="Assistant/graph id of the Work Mode run (e.g. 'lead_agent').",
+    )
 
 
 class ClarifyPlanRequest(BaseModel):
@@ -170,6 +179,77 @@ def _requested_model_from_values(values: dict[str, Any]) -> str | None:
     if isinstance(model_name, str) and model_name.strip():
         return model_name.strip()
     return None
+
+
+_WORK_MODE_ASSISTANT_ID = "lead_agent"
+_WORK_MODE_TRIGGER_CONTENT = "<execute_plan/>"
+
+
+async def _create_work_mode_run(
+    *,
+    client: Any,
+    thread_id: str,
+    requested_model_name: str | None,
+    auto_mode: bool,
+    original_user_request: str | None,
+) -> tuple[str, str]:
+    """Create a server-registered Work Mode run on the existing thread.
+
+    Replaces the previous daemon-thread handoff path. The run is created via
+    the LangGraph Server's runs API so it appears in `runs.list({status:"running"})`
+    and the frontend's `useRejoinRunningRun` can subscribe to its SSE stream.
+
+    The lead agent reads `plan.md` from workspace and the existing message
+    history from the checkpointer; the trigger message is just a tick to start
+    the turn in Work Mode.
+    """
+    configurable: dict[str, Any] = {
+        "mode": "work",
+        "is_plan_mode": False,
+        "background_followup": False,
+        "plan_behavior": "work_interactive",
+        "subagent_enabled": True,
+        "thinking_enabled": True,
+        "auto_mode": auto_mode,
+    }
+    if requested_model_name:
+        configurable["model_name"] = requested_model_name
+
+    context: dict[str, Any] = {
+        "thread_id": thread_id,
+        "mode": "work",
+        "is_plan_mode": False,
+        "background_followup": False,
+        "plan_behavior": "work_interactive",
+        "auto_mode": auto_mode,
+    }
+    if requested_model_name:
+        context["model_name"] = requested_model_name
+    if original_user_request and original_user_request.strip():
+        context["current_turn_text"] = original_user_request.strip()
+        context["original_user_request"] = original_user_request.strip()
+
+    trigger_message = {
+        "type": "human",
+        "name": "execute_plan",
+        "content": _WORK_MODE_TRIGGER_CONTENT,
+    }
+
+    created = await client.runs.create(
+        thread_id,
+        _WORK_MODE_ASSISTANT_ID,
+        input={"messages": [trigger_message]},
+        config={"configurable": configurable},
+        context=context,
+        metadata={"trigger": "execute_plan"},
+    )
+    if isinstance(created, dict):
+        run_id = str(created.get("run_id") or "").strip()
+    else:
+        run_id = str(created).strip()
+    if not run_id:
+        raise RuntimeError("LangGraph runs.create did not return a run_id")
+    return run_id, _WORK_MODE_ASSISTANT_ID
 
 
 def _as_plan(raw: Any) -> dict[str, Any]:
@@ -449,19 +529,25 @@ async def execute_plan(thread_id: str, request: ExecutePlanRequest) -> ExecutePl
             # Recover stalled approved plans or retry after a failed handoff.
             next_plan = mark_handoff_requested(plan)
             await client.threads.update_state(thread_id, {"plan": next_plan})
-            spawn_work_mode_handoff(
+            run_id, assistant_id = await _create_work_mode_run(
+                client=client,
                 thread_id=thread_id,
                 requested_model_name=_requested_model_from_values(values),
                 auto_mode=auto_mode,
                 original_user_request=resolve_original_user_request(values),
-                thread_name_suffix="-execute-plan-recover",
+            )
+            await client.threads.update_state(
+                thread_id,
+                {"plan": mark_handoff_succeeded(next_plan)},
             )
             return ExecutePlanResponse(
                 thread_id=thread_id,
                 acknowledged=True,
                 plan_id=plan_id,
-                plan_status=current_status,
+                plan_status="executing",
                 status="accepted",
+                run_id=run_id,
+                assistant_id=assistant_id,
             )
 
         messages = values.get("messages")
@@ -515,19 +601,25 @@ async def execute_plan(thread_id: str, request: ExecutePlanRequest) -> ExecutePl
                 "plan_history": history,
             },
         )
-        spawn_work_mode_handoff(
+        run_id, assistant_id = await _create_work_mode_run(
+            client=client,
             thread_id=thread_id,
             requested_model_name=_requested_model_from_values(values),
             auto_mode=auto_mode,
             original_user_request=resolve_original_user_request(values),
-            thread_name_suffix="-execute-plan",
+        )
+        await client.threads.update_state(
+            thread_id,
+            {"plan": mark_handoff_succeeded(next_plan)},
         )
         return ExecutePlanResponse(
             thread_id=thread_id,
             acknowledged=True,
             plan_id=plan_id,
-            plan_status="approved",
+            plan_status="executing",
             status="accepted",
+            run_id=run_id,
+            assistant_id=assistant_id,
         )
     except HTTPException:
         raise

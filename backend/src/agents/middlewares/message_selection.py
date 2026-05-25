@@ -14,6 +14,7 @@ _SYNTHETIC_HUMAN_NAMES = {
     "plan_followup_prompt",
     "work_mode_plan_rerun",
     "active_skills",
+    "execute_plan",
 }
 # Keep this set in sync with `SYNTHETIC_HUMAN_MESSAGE_NAMES` in
 # `frontend/src/core/messages/utils.ts` — both halves of the rendering contract

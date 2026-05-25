@@ -17,7 +17,6 @@ import {
   ChainOfThoughtContent,
   ChainOfThoughtStep,
 } from "@/components/ai-elements/chain-of-thought";
-import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Button } from "@/components/ui/button";
 import { ShineBorder } from "@/components/ui/shine-border";
 import { useI18n } from "@/core/i18n/hooks";
@@ -150,13 +149,7 @@ export function SubtaskCard({
                 className="font-normal"
                 label={
                   task.status === "in_progress" ? (
-                    isStaleRunning
-                      ? taskLabel
-                      : (
-                        <Shimmer duration={3} spread={3}>
-                          {taskLabel}
-                        </Shimmer>
-                      )
+                    taskLabel
                   ) : task.status === "completed" ? (
                     <span className="text-muted-foreground line-through decoration-muted-foreground/70">
                       {taskLabel}
