@@ -10,10 +10,6 @@ class QuestionGenerationConfig(BaseModel):
         default=False,
         description="Whether to enable follow-up question generation after each final model response.",
     )
-    enabled_in_dreamy: bool = Field(
-        default=False,
-        description="Whether to generate follow-up questions in dreamy mode. Requires enabled=true.",
-    )
     count: int = Field(
         default=3,
         ge=1,

@@ -184,7 +184,6 @@ export const enUS: Translations = {
     agents: "Agents",
     pipelines: "Scheduled Pipeline",
     vault: "Knowledge Vault",
-    dreamy: "Dreamy",
   },
 
   // Agents
@@ -565,20 +564,6 @@ export const enUS: Translations = {
     retrying: "Retrying...",
     failedRetrying: "Steering failed. Will retry after queue progress.",
     emptyMessageFallback: "(empty message)",
-  },
-
-  dreamy: {
-    directory: {
-      noFilesYet: "No files yet",
-      noFilesDescription: "Uploaded files and files created during the workflow will appear here.",
-      noFilesInFolder: "No files in folder",
-      mountedFolder: "Mounted Folder",
-      filesSection: "Files",
-    },
-    filePreview: {
-      previewUnavailable: "Preview unavailable",
-      liveRows: (count: number) => `live · ${count} rows`,
-    },
   },
 
   chatActivity: {

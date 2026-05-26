@@ -67,7 +67,6 @@ def test_create_thread_handoff_generates_package_and_copies_workspace(monkeypatc
 
     values = {
         "title": "Build Handoff",
-        "dreamy_mode": False,
         "messages": [
             {"id": "m1", "type": "human", "content": "Please continue the current implementation carefully."},
             {"id": "m2", "type": "ai", "content": "I updated the plan and changed app.py."},
@@ -129,17 +128,6 @@ def test_create_thread_handoff_generates_package_and_copies_workspace(monkeypatc
     )
 
 
-def test_create_thread_handoff_blocks_dreamy(monkeypatch):
-    threads = _ThreadsClient({"dreamy_mode": True})
-    monkeypatch.setattr("langgraph_sdk.get_client", lambda url: _Client(threads))
-
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(create_thread_handoff("thread-source"))
-
-    assert exc.value.status_code == 409
-    assert "/dreamy-exit" in str(exc.value.detail)
-
-
 def test_create_thread_handoff_handles_missing_graph_id_update_state(monkeypatch, tmp_path):
     paths = Paths(tmp_path)
     source_thread_id = "thread-source"
@@ -150,7 +138,6 @@ def test_create_thread_handoff_handles_missing_graph_id_update_state(monkeypatch
 
     values = {
         "title": "Build Handoff",
-        "dreamy_mode": False,
         "messages": [{"id": "m1", "type": "human", "content": "Fork this."}],
     }
     threads = _ThreadsClient(values)
@@ -176,7 +163,6 @@ def test_create_thread_handoff_handles_ambiguous_update_state(monkeypatch, tmp_p
 
     values = {
         "title": "Build Handoff",
-        "dreamy_mode": False,
         "messages": [{"id": "m1", "type": "human", "content": "Fork this."}],
     }
     threads = _ThreadsClient(values)

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { MountedFolderFile } from "@/core/dreamy/hooks/use-mounted-folder-files";
+import type { MountedFolderFile } from "@/core/workspace-io/hooks/use-mounted-folder-files";
 
 interface FileMentionState {
   active: boolean;

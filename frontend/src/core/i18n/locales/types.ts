@@ -143,7 +143,6 @@ export interface Translations {
     agents: string;
     pipelines: string;
     vault: string;
-    dreamy: string;
   };
 
   // Agents
@@ -477,7 +476,7 @@ export interface Translations {
     };
   };
 
-  // Steering dialog (shared between chats and dreamy)
+  // Steering dialog
   steering: {
     title: string;
     description: string;
@@ -497,21 +496,6 @@ export interface Translations {
     retrying: string;
     failedRetrying: string;
     emptyMessageFallback: string;
-  };
-
-  // Dreamy workspace
-  dreamy: {
-    directory: {
-      noFilesYet: string;
-      noFilesDescription: string;
-      noFilesInFolder: string;
-      mountedFolder: string;
-      filesSection: string;
-    };
-    filePreview: {
-      previewUnavailable: string;
-      liveRows: (count: number) => string;
-    };
   };
 
   // Chat activity panel

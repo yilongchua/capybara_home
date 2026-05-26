@@ -50,7 +50,7 @@ def to_virtual_path(path: str | None, thread_data: ThreadDataState | None) -> st
 
     Returns the original `path` unchanged when it does not match a known
     physical base. Used by middlewares that materialize artifacts on disk
-    (planner, evaluator, dreamy bootstrap) before exposing them in state.
+    (planner, evaluator) before exposing them in state.
 
     Why: storing absolute host paths in `state.artifacts` causes the frontend
     to construct `/api/threads/{id}/artifacts/Users/.../plan.md` which the

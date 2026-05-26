@@ -250,10 +250,7 @@ summarization:
   max_context_tokens: 128000
   trim_tokens_to_summarize: 15564
   modes:
-    # `default` is the baseline profile for non-dreamy chat flows.
     default:
-      trim_tokens_to_summarize: 32000
-    dreamy:
       trim_tokens_to_summarize: 32000
 
 # -----------------------------------------------------------------------------
@@ -277,7 +274,6 @@ title:
 
 question_generation:
   enabled: false
-  enabled_in_dreamy: false
   count: 3
   max_response_chars: 2000
   model_name: null
@@ -389,21 +385,6 @@ benchmarks:
   regression_threshold: 0.02
   suite: coding
   report_dir: .capyhome/benchmarks
-
-# -----------------------------------------------------------------------------
-# Dreamy Workflow — bootstrap, timeout watchdog, proof-of-concept mode
-# -----------------------------------------------------------------------------
-
-dreamy_timeout:
-  enabled: true
-  max_run_wall_clock: 1800.0
-  max_model_call_duration: 600.0
-  model_call_warn_threshold: 300.0
-  bootstrap_loader_timeout_seconds: 15.0
-  bootstrap_validate_data_source: true
-  checkpoint_on_after_agent: true
-  executor_poc_threshold: 4
-  executor_poc_max_rows: 50
 
 # -----------------------------------------------------------------------------
 # Routing & Scheduling — per-stage timeouts, model routing, background jobs

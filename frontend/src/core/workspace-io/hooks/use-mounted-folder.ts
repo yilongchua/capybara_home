@@ -3,15 +3,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { getBackendBaseURL } from "@/core/config";
-import { api } from "@/core/dreamy/api";
+import { api } from "@/core/workspace-io/api";
 import {
   MOUNTED_FOLDER_REFRESH_EMPTY,
   MOUNTED_FOLDER_REFRESH_HAS_DATA,
   MOUNTED_FOLDER_STALE_TIME,
-} from "@/core/dreamy/constants";
+} from "@/core/workspace-io/constants";
 
 async function fetchMountedFolder(threadId: string): Promise<string | null> {
-  const res = await fetch(`${getBackendBaseURL()}${api.threads.dreamy.mountFolder(threadId)}`);
+  const res = await fetch(`${getBackendBaseURL()}${api.threads.workspaceIO.mountFolder(threadId)}`);
   if (!res.ok) {
     throw new Error("failed to load mounted folder");
   }
@@ -20,7 +20,7 @@ async function fetchMountedFolder(threadId: string): Promise<string | null> {
 }
 
 async function saveMountedFolder(threadId: string, path: string): Promise<string> {
-  const res = await fetch(`${getBackendBaseURL()}${api.threads.dreamy.mountFolder(threadId)}`, {
+  const res = await fetch(`${getBackendBaseURL()}${api.threads.workspaceIO.mountFolder(threadId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path }),
@@ -34,7 +34,7 @@ async function saveMountedFolder(threadId: string, path: string): Promise<string
 }
 
 async function clearMountedFolder(threadId: string): Promise<null> {
-  const res = await fetch(`${getBackendBaseURL()}${api.threads.dreamy.mountFolder(threadId)}`, {
+  const res = await fetch(`${getBackendBaseURL()}${api.threads.workspaceIO.mountFolder(threadId)}`, {
     method: "DELETE",
   });
   if (!res.ok) {

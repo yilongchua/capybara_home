@@ -69,8 +69,6 @@ _TRACEABLE_RUNTIME_EVENTS = {
     "compaction",
     "context_tokens",
     "memory_flush_failed",
-    "dreamy_state_preserved",
-    "dreamy_resumption_rehydrated",
 }
 
 _TRACEABLE_TOOL_NAMES = {"web_search", "query_knowledge_vault", "task"}

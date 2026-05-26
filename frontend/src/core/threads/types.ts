@@ -97,15 +97,6 @@ export interface AgentThreadState extends Record<string, unknown> {
   artifacts: string[];
   uploaded_files?: UploadedFileMeta[] | null;
   plan?: PlanState | null;
-  dreamy_mode?: boolean;
-  dreamy_intent?: {
-    shape: string;
-    intent_class: string;
-    confidence: number;
-    extracted_fields: string[];
-    inferred_goal: string;
-    workflow_requested: boolean;
-  };
   todos?: Todo[];
   execution_trace?: ExecutionTraceState;
   activity_timeline?: ActivityTimelineState;
@@ -131,7 +122,6 @@ export interface AgentThreadContext extends Record<string, unknown> {
   thinking_enabled: boolean;
   is_plan_mode: boolean;
   subagent_enabled: boolean;
-  dreamy_mode?: boolean;
   reasoning_effort?: "minimal" | "low" | "medium" | "high";
   agent_name?: string;
   auto_mode?: boolean;

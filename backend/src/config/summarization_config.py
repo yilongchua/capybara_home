@@ -55,7 +55,7 @@ class SummarizationConfig(BaseModel):
     )
     modes: dict[str, "SummarizationModeOverride"] = Field(
         default_factory=dict,
-        description="Optional per-mode overrides keyed by mode name: work, plan, dreamy. Legacy aliases fast/pro are also recognized.",
+        description="Optional per-mode overrides keyed by mode name: work, plan. Legacy aliases fast/pro are also recognized.",
     )
 
 

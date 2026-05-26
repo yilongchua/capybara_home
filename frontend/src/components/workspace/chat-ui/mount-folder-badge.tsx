@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { RefreshCwIcon, FolderOpenIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { useMountedFolder } from "@/core/dreamy/hooks/use-mounted-folder";
+import { useMountedFolder } from "@/core/workspace-io/hooks/use-mounted-folder";
 import { cn } from "@/lib/utils";
 
 import { Tooltip } from "../tooltip";

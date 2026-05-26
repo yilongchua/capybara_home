@@ -109,19 +109,17 @@ def test_modes_inherit_token_only_policy(monkeypatch):
         max_context_tokens=128000,
         modes={
             "default": SummarizationModeOverride(trim_tokens_to_summarize=32000),
-            "dreamy": SummarizationModeOverride(trim_tokens_to_summarize=32000),
         },
     )
     _install_common(monkeypatch, cfg)
 
     lead_agent_module._create_summarization_middleware(mode="work")
     lead_agent_module._create_summarization_middleware(mode="plan")
-    lead_agent_module._create_summarization_middleware(mode="work", dreamy_mode=True)
 
     for call in _FakeSummarizationMiddleware.calls:
         assert call["trigger"] == ("tokens", 102400)
         assert call["keep"] == ("tokens", 32000)
-    assert len(_FakeSummarizationMiddleware.calls) == 3
+    assert len(_FakeSummarizationMiddleware.calls) == 2
 
 
 def test_summary_prompt_omitted_when_config_uses_middleware_default(monkeypatch):

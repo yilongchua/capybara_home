@@ -1,4 +1,10 @@
-"""Gateway routes for Dreamy tab — workflow.json CRUD."""
+"""Gateway routes for workspace I/O — mounted-folder config, /analyse mirror+manifest pipeline, repo overview refresh, /publishdocs, native folder picker, and macOS file actions.
+
+Historically owned by the now-removed Dreamy mode; the URL paths retain the
+``/dreamy/`` prefix and on-disk artifact names (``dreamy_mount.json``) for
+backward compatibility with existing threads and existing frontend code.
+The endpoints themselves are general-purpose and back the ``/mount`` /
+``/analyse`` / ``/publishdocs`` slash commands used in Work and Plan modes."""
 
 import asyncio
 import csv
@@ -27,7 +33,7 @@ from src.utils.runtime_artifact_ignore import should_skip_relative_path
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", tags=["dreamy"])
+router = APIRouter(prefix="/api", tags=["workspace_io"])
 
 _REPO_OVERVIEW_PROMPT = """Conduct an indepth analysis of the mounted folder at /mnt/user-data/mounted and write a complete report on all critical files and main features of the mounted folder.
 for specific files, there is a mirror repo created within "mnt/user-data/workspace/.docs/" as a identical mirrored(markdownfiles) of the mounted folder."""
@@ -503,10 +509,6 @@ def _summarize_markdown_corpus(docs_root: Path) -> dict[str, object]:
     }
 
 
-def _workflow_path(thread_id: str) -> Path:
-    return get_paths().sandbox_outputs_dir(thread_id) / "workflow.json"
-
-
 def _mount_config_path(thread_id: str) -> Path:
     return get_paths().sandbox_user_data_dir(thread_id) / "dreamy_mount.json"
 
@@ -717,71 +719,6 @@ async def _enqueue_repo_overview_refresh(
     task = asyncio.create_task(_run_repo_overview_refresh_job(job_id, source_root, docs_root, analyse_root))
     _REPO_OVERVIEW_TASKS[job_id] = task
     return RepoOverviewRefreshStartResponse(job_id=job_id, status=job.status, already_running=False, queued_at=job.created_at)
-
-
-def _maybe_migrate_v1(data: dict) -> dict:
-    """In-memory migration from v1 DAG schema to v2 steps schema. Does not rewrite the file."""
-    if data.get("version") != "1":
-        return data
-    ts = data.get("task_source", {})
-    es = data.get("execution_state", {})
-    phase = es.get("phase", "design")
-    if phase == "approval":
-        phase = "awaiting_approval"
-    return {
-        "version": "2",
-        "thread_id": data.get("thread_id"),
-        "created_at": data.get("created_at"),
-        "data_source": {
-            "type": ts.get("type", "inline"),
-            "filename": ts.get("filename", ""),
-            "total_rows": ts.get("total_tasks", 0),
-            "fields": ts.get("fields", []),
-            "sample_rows": ts.get("sample_tasks", []),
-        },
-        "steps": [],
-        "execution_state": {
-            "phase": phase,
-            "current_row_index": es.get("current_task_index", 0),
-            "current_step_id": es.get("active_node_id"),
-            "total_rows": es.get("total_tasks", 0),
-            "poc_results": [],
-            "seconds_per_row_estimate": None,
-            "estimated_completion_iso": es.get("estimated_completion_iso"),
-            "started_at": es.get("started_at"),
-        },
-    }
-
-
-@router.get("/threads/{thread_id}/dreamy/workflow")
-async def get_workflow(thread_id: str) -> dict:
-    """Return the current workflow.json for a Dreamy thread (auto-migrates v1 → v2 in memory)."""
-    path = _workflow_path(thread_id)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="workflow.json not found")
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return _maybe_migrate_v1(data)
-    except Exception as exc:
-        logger.error("Failed to read workflow.json for thread %s: %s", thread_id, exc)
-        raise HTTPException(status_code=500, detail="Failed to read workflow.json") from exc
-
-
-class WorkflowPatchRequest(BaseModel):
-    workflow: dict
-
-
-@router.patch("/threads/{thread_id}/dreamy/workflow")
-async def patch_workflow(thread_id: str, req: WorkflowPatchRequest) -> dict:
-    """Persist user edits to workflow.json from the node editor."""
-    path = _workflow_path(thread_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        path.write_text(json.dumps(req.workflow, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as exc:
-        logger.error("Failed to write workflow.json for thread %s: %s", thread_id, exc)
-        raise HTTPException(status_code=500, detail="Failed to write workflow.json") from exc
-    return {"success": True}
 
 
 class MountFolderRequest(BaseModel):
@@ -1500,52 +1437,6 @@ async def delete_mount_folder(thread_id: str) -> dict:
         logger.error("Failed to delete dreamy mount config for thread %s: %s", thread_id, exc)
         raise HTTPException(status_code=500, detail="Failed to clear mounted folder") from exc
     return {"path": None}
-
-
-# ─── Dreamy Executor control ──────────────────────────────────────────────────
-
-def _signal_path(thread_id: str) -> Path:
-    return get_paths().sandbox_outputs_dir(thread_id) / "pause_signal.json"
-
-
-def _progress_path(thread_id: str) -> Path:
-    return get_paths().sandbox_outputs_dir(thread_id) / "progress.json"
-
-
-def _write_executor_signal(thread_id: str, signal: str) -> None:
-    path = _signal_path(thread_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"signal": signal}), encoding="utf-8")
-
-
-def _read_executor_progress(thread_id: str) -> dict:
-    path = _progress_path(thread_id)
-    if not path.exists():
-        return {"state": "not_started"}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {"state": "unknown"}
-
-
-@router.post("/threads/{thread_id}/dreamy/executor/pause")
-async def pause_executor(thread_id: str) -> dict:
-    """Signal the Dreamy Executor to stop at the next row boundary."""
-    _write_executor_signal(thread_id, "pause")
-    return {"signal": "pause", "thread_id": thread_id}
-
-
-@router.post("/threads/{thread_id}/dreamy/executor/stop")
-async def stop_executor(thread_id: str) -> dict:
-    """Signal the Dreamy Executor to stop immediately after the current tool call."""
-    _write_executor_signal(thread_id, "stop")
-    return {"signal": "stop", "thread_id": thread_id}
-
-
-@router.get("/threads/{thread_id}/dreamy/executor/status")
-async def executor_status(thread_id: str) -> dict:
-    """Return the current progress.json for the Dreamy Executor."""
-    return _read_executor_progress(thread_id)
 
 
 # ─── Native folder picker ─────────────────────────────────────────────────────

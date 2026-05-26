@@ -46,7 +46,7 @@ export function DirectoryProvider({ children }: DirectoryProviderProps) {
       setSelectedFile(file);
       // Only close the sidebar on explicit user selections — not on automatic
       // selections triggered by streaming tool results (present_files, write_file).
-      // Auto-closing on every agent file write breaks the dreamy sidebar experience.
+      // Auto-closing on every agent file write breaks the sidebar experience.
       if (env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true" && !autoSelect) {
         setSidebarOpen(false);
       }

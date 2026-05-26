@@ -12,13 +12,13 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { urlOfArtifact } from "@/core/artifacts/utils";
-import { useFolderPicker } from "@/core/dreamy/hooks/use-folder-picker";
+import { useFolderPicker } from "@/core/workspace-io/hooks/use-folder-picker";
 import {
   useClearMountedFolder,
   useMountedFolder,
   useSaveMountedFolder,
-} from "@/core/dreamy/hooks/use-mounted-folder";
-import { useMountedFolderFiles } from "@/core/dreamy/hooks/use-mounted-folder-files";
+} from "@/core/workspace-io/hooks/use-mounted-folder";
+import { useMountedFolderFiles } from "@/core/workspace-io/hooks/use-mounted-folder-files";
 import { useI18n } from "@/core/i18n/hooks";
 import { installSkill } from "@/core/skills/api";
 import { getFileName } from "@/core/utils/files";

@@ -32,12 +32,12 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { clearThreadClientCache, getAPIClient } from "@/core/api/api-client";
 import { getBackendBaseURL } from "@/core/config";
-import { api } from "@/core/dreamy/api";
-import { useFolderPicker } from "@/core/dreamy/hooks/use-folder-picker";
+import { api } from "@/core/workspace-io/api";
+import { useFolderPicker } from "@/core/workspace-io/hooks/use-folder-picker";
 import {
   useMountedFolder,
   useSaveMountedFolder,
-} from "@/core/dreamy/hooks/use-mounted-folder";
+} from "@/core/workspace-io/hooks/use-mounted-folder";
 import { useI18n } from "@/core/i18n/hooks";
 import { useModels } from "@/core/models/hooks";
 import type { AgentThreadContext } from "@/core/threads";
@@ -224,10 +224,6 @@ export function InputBox({
   threadId,
   newChatHref,
   initialValue,
-  dreamy,
-  dreamyActive,
-  onActivateDreamy,
-  onDeactivateDreamy,
   onContextChange,
   onSubmit,
   onStop,
@@ -238,8 +234,6 @@ export function InputBox({
   assistantId?: string | null;
   status?: ChatStatus;
   disabled?: boolean;
-  dreamy?: boolean;
-  dreamyActive?: boolean;
   context: Omit<
     AgentThreadContext,
     "thread_id" | "is_plan_mode" | "thinking_enabled" | "subagent_enabled"
@@ -265,8 +259,6 @@ export function InputBox({
     message: PromptInputMessage,
     options?: InputBoxSubmitOptions,
   ) => void;
-  onActivateDreamy?: () => Promise<void> | void;
-  onDeactivateDreamy?: () => Promise<void> | void;
   onStop?: () => void;
   onCompaction?: (event: {
     messagesCompressed?: number;
@@ -326,7 +318,7 @@ export function InputBox({
   const refreshAnalyseStatus = useCallback(async () => {
     try {
       const response = await fetch(
-        `${getBackendBaseURL()}${api.threads.dreamy.analyseStatus(threadId)}`,
+        `${getBackendBaseURL()}${api.threads.workspaceIO.analyseStatus(threadId)}`,
       );
       if (!response.ok) {
         setHasStagedDocs(false);
@@ -339,7 +331,7 @@ export function InputBox({
     }
   }, [threadId]);
   const repoOverviewJobStorageKey = useMemo(
-    () => `dreamy.repo_overview_refresh_job.${threadId}`,
+    () => `repo_overview_refresh_job.${threadId}`,
     [threadId],
   );
   const stopRepoOverviewPolling = useCallback(() => {
@@ -360,7 +352,7 @@ export function InputBox({
         void (async () => {
           try {
             const statusRes = await fetch(
-              `${getBackendBaseURL()}${api.threads.dreamy.repoOverviewRefreshStatus(threadId, normalized)}`,
+              `${getBackendBaseURL()}${api.threads.workspaceIO.repoOverviewRefreshStatus(threadId, normalized)}`,
             );
             if (!statusRes.ok) return;
             const statusPayload = (await statusRes.json()) as {
@@ -511,7 +503,6 @@ export function InputBox({
   );
   const autoModeEnabled = context.auto_mode === true;
   const isPlanMode = context.mode === "plan";
-  const isDreamyThread = [dreamy, dreamyActive].some(Boolean);
   const toolbarIconButtonClass =
     "rounded-md border border-border/60 bg-muted/70 hover:bg-muted text-foreground";
 
@@ -629,7 +620,7 @@ export function InputBox({
           mountedPath: path,
           createdAt: Date.now(),
         });
-        await fetch(`${getBackendBaseURL()}${api.threads.dreamy.mountFolder(createdThreadId)}`, {
+        await fetch(`${getBackendBaseURL()}${api.threads.workspaceIO.mountFolder(createdThreadId)}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path }),
@@ -813,7 +804,7 @@ export function InputBox({
     }
     try {
       const response = await fetch(
-        `${getBackendBaseURL()}${api.threads.dreamy.analyse(threadId)}`,
+        `${getBackendBaseURL()}${api.threads.workspaceIO.analyse(threadId)}`,
         { method: "POST" },
       );
       if (!response.ok) {
@@ -867,7 +858,7 @@ export function InputBox({
     }
     try {
       const response = await fetch(
-        `${getBackendBaseURL()}${api.threads.dreamy.publishDocs(threadId)}`,
+        `${getBackendBaseURL()}${api.threads.workspaceIO.publishDocs(threadId)}`,
         { method: "POST" },
       );
       if (!response.ok) {
@@ -1231,7 +1222,6 @@ export function InputBox({
         messages: recent,
         n: 3,
         model_name: context.model_name ?? undefined,
-        dreamy: isDreamyThread,
       }),
       signal: controller.signal,
     })
@@ -1256,7 +1246,7 @@ export function InputBox({
       });
 
     return () => controller.abort();
-  }, [context.model_name, disabled, isDreamyThread, isMock, status, threadId, lastMessageId]);
+  }, [context.model_name, disabled, isMock, status, threadId, lastMessageId]);
 
   return (
     <div ref={promptRootRef} className="relative">
@@ -1338,16 +1328,14 @@ export function InputBox({
               isPicking={isPicking}
               className={toolbarIconButtonClass}
             />
-            {!dreamy && (
-              <PrivacyAndAutoMenu
-                mode={context.mode}
-                autoModeEnabled={autoModeEnabled}
-                onTogglePlanMode={handleTogglePlanMode}
-                onToggleAutoMode={handleToggleAutoMode}
-                triggerId={privacyMenuTriggerId}
-                triggerClassName={toolbarIconButtonClass}
-              />
-            )}
+            <PrivacyAndAutoMenu
+              mode={context.mode}
+              autoModeEnabled={autoModeEnabled}
+              onTogglePlanMode={handleTogglePlanMode}
+              onToggleAutoMode={handleToggleAutoMode}
+              triggerId={privacyMenuTriggerId}
+              triggerClassName={toolbarIconButtonClass}
+            />
             <ReasoningEffortMenu
               show={supportReasoningEffort}
               reasoningEffort={context.reasoning_effort}
@@ -1357,7 +1345,7 @@ export function InputBox({
             />
           </PromptInputTools>
           <PromptInputTools className="ml-auto min-w-0 flex-wrap justify-end">
-            {!dreamy && isPlanMode ? (
+            {isPlanMode ? (
               <div className="rounded-full border border-yellow-300 bg-yellow-100 px-2 py-1 text-[11px] font-medium text-yellow-700 dark:border-yellow-600/70 dark:bg-yellow-900/35 dark:text-yellow-300">
                 Plan mode
               </div>

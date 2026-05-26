@@ -26,9 +26,9 @@ import { ThreadTitle } from "@/components/workspace/thread-title";
 import { Welcome } from "@/components/workspace/welcome";
 import { urlOfArtifact } from "@/core/artifacts/utils";
 import { getBackendBaseURL } from "@/core/config";
-import { api } from "@/core/dreamy/api";
-import { useMountedFolder } from "@/core/dreamy/hooks/use-mounted-folder";
-import { useMountedFolderFiles } from "@/core/dreamy/hooks/use-mounted-folder-files";
+import { api } from "@/core/workspace-io/api";
+import { useMountedFolder } from "@/core/workspace-io/hooks/use-mounted-folder";
+import { useMountedFolderFiles } from "@/core/workspace-io/hooks/use-mounted-folder-files";
 import {
   type LiveGenerationNotice,
   useGenerationCompletions,

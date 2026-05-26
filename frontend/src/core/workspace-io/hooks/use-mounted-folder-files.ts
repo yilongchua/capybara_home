@@ -3,10 +3,10 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { getBackendBaseURL } from "@/core/config";
-import { api } from "@/core/dreamy/api";
+import { api } from "@/core/workspace-io/api";
 import {
   MOUNTED_FOLDER_STALE_TIME,
-} from "@/core/dreamy/constants";
+} from "@/core/workspace-io/constants";
 
 export interface MountedFolderFile {
   name: string;
@@ -23,7 +23,7 @@ export interface MountedFolderFilesResult {
 
 async function fetchMountedFolderFiles(threadId: string): Promise<MountedFolderFilesResult> {
   const res = await fetch(
-    `${getBackendBaseURL()}${api.threads.dreamy.mountFolderFiles(threadId)}?limit=2000`,
+    `${getBackendBaseURL()}${api.threads.workspaceIO.mountFolderFiles(threadId)}?limit=2000`,
   );
   if (!res.ok) throw new Error("Failed to list mounted folder files");
   return res.json() as Promise<MountedFolderFilesResult>;

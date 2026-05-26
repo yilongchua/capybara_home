@@ -18,7 +18,6 @@ from src.config.control_plane_config import (
     SchedulerConfig,
     ToolBackendsConfig,
 )
-from src.config.dreamy_timeout_config import DreamyTimeoutConfig, load_dreamy_timeout_config_from_dict
 from src.config.evaluator_config import EvaluatorConfig, load_evaluator_config_from_dict
 from src.config.execution_trace_config import ExecutionTraceConfig, load_execution_trace_config_from_dict
 from src.config.extensions_config import ExtensionsConfig
@@ -71,10 +70,6 @@ class AppConfig(BaseModel):
     trajectory: TrajectoryConfig = Field(default_factory=TrajectoryConfig, description="Trajectory logging configuration")
     metrics: MetricsConfig = Field(default_factory=MetricsConfig, description="Runtime metrics configuration")
     execution_trace: ExecutionTraceConfig = Field(default_factory=ExecutionTraceConfig, description="Execution trace middleware configuration")
-    dreamy_timeout: DreamyTimeoutConfig = Field(
-        default_factory=DreamyTimeoutConfig,
-        description="Dreamy runtime timeout and watchdog configuration",
-    )
     subagents: SubagentsAppConfig = Field(default_factory=SubagentsAppConfig, description="Subagent timeout and concurrency policy")
     progress_guard: ProgressGuardConfig = Field(default_factory=ProgressGuardConfig, description="Progress guard configuration")
     recursion_pivot: RecursionPivotConfig = Field(default_factory=RecursionPivotConfig, description="Recursion-budget evaluator pivot configuration")
@@ -195,9 +190,6 @@ class AppConfig(BaseModel):
 
         # Load execution trace config
         load_execution_trace_config_from_dict(config_data.get("execution_trace", {}))
-
-        # Load dreamy timeout/watchdog config
-        load_dreamy_timeout_config_from_dict(config_data.get("dreamy_timeout", {}))
 
         # Load harness kill-switch config (single toggle that drops the full
         # middleware chain back to the minimal plumbing subset — see

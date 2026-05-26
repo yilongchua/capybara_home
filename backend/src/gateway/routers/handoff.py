@@ -695,11 +695,6 @@ async def create_thread_handoff(thread_id: str) -> HandoffResponse:
         source_graph_id = _extract_graph_id(source_thread)
         source_state = await client.threads.get_state(thread_id)
         source_values = _extract_state_values(source_state)
-        if bool(source_values.get("dreamy_mode")):
-            raise HTTPException(
-                status_code=409,
-                detail="Exit Dreamy with /dreamy-exit before creating a handoff.",
-            )
 
         if source_graph_id:
             new_thread = await client.threads.create(graph_id=source_graph_id)

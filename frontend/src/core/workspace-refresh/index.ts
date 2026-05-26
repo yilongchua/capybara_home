@@ -21,8 +21,7 @@ type StaticWorkspaceRefreshDomain =
 export type WorkspaceRefreshDomain =
   | StaticWorkspaceRefreshDomain
   | `thread:${string}`
-  | `uploads:${string}`
-  | `dreamy:${string}`;
+  | `uploads:${string}`;
 
 export type WorkspaceRefreshEvent = {
   id: string;

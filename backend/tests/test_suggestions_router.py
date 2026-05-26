@@ -48,7 +48,7 @@ def test_generate_suggestions_parses_and_limits(monkeypatch):
     monkeypatch.setattr(
         suggestions,
         "get_question_generation_config",
-        lambda: QuestionGenerationConfig(enabled=True, enabled_in_dreamy=True),
+        lambda: QuestionGenerationConfig(enabled=True),
     )
     monkeypatch.setattr(suggestions, "create_chat_model", lambda **kwargs: fake_model)
 
@@ -68,7 +68,7 @@ def test_generate_suggestions_returns_empty_on_model_error(monkeypatch):
     monkeypatch.setattr(
         suggestions,
         "get_question_generation_config",
-        lambda: QuestionGenerationConfig(enabled=True, enabled_in_dreamy=True),
+        lambda: QuestionGenerationConfig(enabled=True),
     )
     monkeypatch.setattr(suggestions, "create_chat_model", lambda **kwargs: fake_model)
 

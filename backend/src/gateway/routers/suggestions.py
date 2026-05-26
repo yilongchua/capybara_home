@@ -21,7 +21,6 @@ class SuggestionsRequest(BaseModel):
     messages: list[SuggestionMessage] = Field(..., description="Recent conversation messages")
     n: int = Field(default=3, ge=1, le=5, description="Number of suggestions to generate")
     model_name: str | None = Field(default=None, description="Optional model override")
-    dreamy: bool = Field(default=False, description="Whether the request originates from dreamy mode")
 
 
 class SuggestionsResponse(BaseModel):
@@ -84,8 +83,6 @@ def _format_conversation(messages: list[SuggestionMessage]) -> str:
 async def generate_suggestions(thread_id: str, request: SuggestionsRequest) -> SuggestionsResponse:
     cfg = get_question_generation_config()
     if not cfg.enabled:
-        return SuggestionsResponse(suggestions=[])
-    if request.dreamy and not cfg.enabled_in_dreamy:
         return SuggestionsResponse(suggestions=[])
 
     if not request.messages:

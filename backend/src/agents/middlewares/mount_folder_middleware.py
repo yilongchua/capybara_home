@@ -30,9 +30,10 @@ class MountFolderState(AgentState):
 class MountFolderMiddleware(AgentMiddleware[MountFolderState]):
     """Inject mounted folder info into agent context for work mode only.
 
-    Reads dreamy_mount.json, registers the real path under the virtual path
-    /mnt/user-data/mounted so all sandbox tools (read_file, write_file, bash,
-    str_replace) can access it.
+    Reads the per-thread mount config (dreamy_mount.json, kept under that
+    legacy filename for backward compatibility with existing threads) and
+    registers the real path under the virtual path /mnt/user-data/mounted so
+    all sandbox tools (read_file, write_file, bash, str_replace) can access it.
 
     To reduce token bloat, the <mounted_folder> block is prepended only once per
     mounted path and only for work-mode runs. Plan mode relies on persistent
@@ -71,7 +72,7 @@ class MountFolderMiddleware(AgentMiddleware[MountFolderState]):
             data = json.loads(mount_config.read_text(encoding="utf-8"))
             mounted_path_str = data.get("path")
         except Exception as exc:
-            logger.warning("Failed to read dreamy mount config for thread %s: %s", thread_id, exc)
+            logger.warning("Failed to read mount config for thread %s: %s", thread_id, exc)
             return None
 
         if not mounted_path_str:

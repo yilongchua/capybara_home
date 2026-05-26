@@ -9,17 +9,11 @@ from langchain_core.runnables import RunnableConfig
 
 from src.agents.lead_agent.prompt import apply_prompt_template
 from src.agents.lead_agent.todo_prompts import TODO_LIST_SYSTEM_PROMPT, TODO_LIST_TOOL_DESCRIPTION
-from src.agents.memory.dreamy_state_preservation_hook import dreamy_state_preservation_hook
 from src.agents.memory.summarization_hook import memory_flush_hook
 from src.agents.middlewares.activity_timeline_middleware import ActivityTimelineMiddleware
 from src.agents.middlewares.autoresearch_middleware import AutoresearchMiddleware
 from src.agents.middlewares.clarification_middleware import ClarificationMiddleware
 from src.agents.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware
-from src.agents.middlewares.dreamy_bootstrap_middleware import DreamyBootstrapMiddleware
-from src.agents.middlewares.dreamy_execution_middleware import DreamyExecutionMiddleware
-from src.agents.middlewares.dreamy_intent_middleware import DreamyIntentMiddleware
-from src.agents.middlewares.dreamy_poc_middleware import DreamyPocMiddleware
-from src.agents.middlewares.dreamy_watchdog_middleware import DreamyWatchdogMiddleware
 from src.agents.middlewares.evaluator_middleware import EvaluatorMiddleware
 from src.agents.middlewares.execution_trace_middleware import ExecutionTraceMiddleware
 from src.agents.middlewares.hooks_middleware import HooksMiddleware
@@ -220,7 +214,7 @@ def _normalize_token_only_keep(keep: tuple, context_tokens: int) -> tuple:
     return ("tokens", _DEFAULT_COMPACTION_KEEP_TOKENS)
 
 
-def _create_summarization_middleware(*, mode: str = "", dreamy_mode: bool = False) -> CapyHomeSummarizationMiddleware | None:
+def _create_summarization_middleware(*, mode: str = "") -> CapyHomeSummarizationMiddleware | None:
     """Create and configure the summarization middleware from config."""
     config = get_summarization_config()
 
@@ -229,9 +223,8 @@ def _create_summarization_middleware(*, mode: str = "", dreamy_mode: bool = Fals
     if config.trim_tokens_to_summarize is None:
         logger.warning("Summarization is enabled with trim_tokens_to_summarize unset; large contexts may be summarized without pre-trimming.")
 
-    normalized_mode = "dreamy" if dreamy_mode else mode
     legacy_mode_aliases = {"work": "fast", "plan": "pro"}
-    mode_override = config.modes.get(normalized_mode) or config.modes.get(legacy_mode_aliases.get(normalized_mode, normalized_mode)) or config.modes.get("default")
+    mode_override = config.modes.get(mode) or config.modes.get(legacy_mode_aliases.get(mode, mode)) or config.modes.get("default")
 
     # Prepare model parameter
     summary_model_name = _resolve_model_name(config.model_name)
@@ -274,8 +267,6 @@ def _create_summarization_middleware(*, mode: str = "", dreamy_mode: bool = Fals
         kwargs["summary_prompt"] = summary_prompt
 
     hooks = [memory_flush_hook] if get_memory_config().enabled else []
-    if dreamy_mode:
-        hooks.append(dreamy_state_preservation_hook)
 
     return CapyHomeSummarizationMiddleware(
         **kwargs,
@@ -545,13 +536,12 @@ def _build_middleware_registry(
     cfg = config.get("configurable") or {}
     app_config = get_app_config()
     subagents_cfg = get_subagents_app_config()
-    dreamy_mode = bool(cfg.get("dreamy_mode", False))
     mode = _normalize_runtime_mode(cfg.get("mode", ""))
     explicit_plan_mode = bool(cfg.get("is_plan_mode", False))
     ctx = _RegistryContext(
         is_plan_mode=explicit_plan_mode or mode == "plan",
         is_work_mode=(mode == "work"),
-        subagent_enabled=False if dreamy_mode else cfg.get("subagent_enabled", False),
+        subagent_enabled=cfg.get("subagent_enabled", False),
         max_concurrent_subagents=cfg.get("max_concurrent_subagents", 3),
         max_primary_per_turn=int(getattr(subagents_cfg, "max_primary_per_turn", 2)),
         model_name=model_name,
@@ -566,14 +556,9 @@ def _build_middleware_registry(
     specs = [
         MiddlewareSpec("thread_data", lambda: ThreadDataMiddleware()),
         MiddlewareSpec("steering", lambda: SteeringMiddleware(), after={"thread_data"}, before={"uploads"}),
-        MiddlewareSpec("dreamy_watchdog", lambda: DreamyWatchdogMiddleware(), after={"thread_data"}),
-        MiddlewareSpec("dreamy_intent", lambda: DreamyIntentMiddleware(), after={"thread_data", "dreamy_watchdog"}),
-        MiddlewareSpec("dreamy_bootstrap", lambda: DreamyBootstrapMiddleware(), after={"thread_data", "dreamy_intent", "dreamy_watchdog"}),
-        MiddlewareSpec("dreamy_poc", lambda: DreamyPocMiddleware(), after={"dreamy_bootstrap", "thread_data", "dreamy_watchdog"}),
-        MiddlewareSpec("dreamy_execution", lambda: DreamyExecutionMiddleware(), after={"dreamy_poc", "thread_data", "sandbox", "dreamy_watchdog"}),
         MiddlewareSpec("uploads", lambda: UploadsMiddleware(), after={"thread_data"}),
         MiddlewareSpec("mount_folder", lambda: MountFolderMiddleware(), after={"uploads", "thread_data"}),
-        MiddlewareSpec("sandbox", lambda: SandboxMiddleware(), after={"thread_data", "dreamy_intent", "dreamy_bootstrap"}),
+        MiddlewareSpec("sandbox", lambda: SandboxMiddleware(), after={"thread_data"}),
         MiddlewareSpec("autoresearch", lambda: AutoresearchMiddleware(), after={"sandbox"}),
         MiddlewareSpec("write_file_artifact", lambda: WriteFileArtifactMiddleware(), after={"sandbox"}),
         MiddlewareSpec("dangling_tool_call", lambda: DanglingToolCallMiddleware(), after={"sandbox"}),
@@ -585,7 +570,7 @@ def _build_middleware_registry(
         MiddlewareSpec("permissions", lambda: PermissionMiddleware(), after={"dangling_tool_call"}),
         MiddlewareSpec("tool_disclosure", bind(_create_tool_disclosure), after={"permissions"}),
         MiddlewareSpec("hooks", bind(_create_hooks), after={"tool_disclosure"}),
-        MiddlewareSpec("summarization", lambda: _create_summarization_middleware(mode=mode, dreamy_mode=dreamy_mode), after={"dangling_tool_call"}),
+        MiddlewareSpec("summarization", lambda: _create_summarization_middleware(mode=mode), after={"dangling_tool_call"}),
         MiddlewareSpec("skill_disclosure", lambda: SkillDisclosureMiddleware(), after={"summarization"}),
         MiddlewareSpec("planner", bind(_create_planner), after={"skill_disclosure"}),
         MiddlewareSpec("phase_tool_filter", bind(_create_phase_tool_filter), after={"planner"}),
@@ -707,7 +692,6 @@ def _extract_runtime_params(config: RunnableConfig) -> _RuntimeParams:
     agent_name = cfg.get("agent_name")
     agent_config = load_agent_config(agent_name) if not is_bootstrap else None
     mode = _normalize_runtime_mode(cfg.get("mode", ""))
-    dreamy_mode = bool(cfg.get("dreamy_mode", False))
     plan_behavior = str(cfg.get("plan_behavior", "") or "").strip().lower()
     subagents_cfg = get_subagents_app_config()
     return _RuntimeParams(
@@ -718,7 +702,7 @@ def _extract_runtime_params(config: RunnableConfig) -> _RuntimeParams:
         plan_behavior=plan_behavior or ("plan_foreground" if mode == "plan" else "work_interactive"),
         background_followup=bool(cfg.get("background_followup", False)),
         is_plan_mode=bool(cfg.get("is_plan_mode", False)) or (mode == "plan"),
-        subagent_enabled=False if dreamy_mode else cfg.get("subagent_enabled", False),
+        subagent_enabled=cfg.get("subagent_enabled", False),
         max_concurrent_subagents=cfg.get("max_concurrent_subagents", 3),
         max_primary_per_turn=int(getattr(subagents_cfg, "max_primary_per_turn", 2)),
         is_bootstrap=is_bootstrap,
@@ -785,7 +769,6 @@ def make_lead_agent(config: RunnableConfig):
     params = _extract_runtime_params(config)
     runtime_cfg = config.get("configurable") or {}
     current_turn_text = str(runtime_cfg.get("current_turn_text") or runtime_cfg.get("original_user_request") or runtime_cfg.get("user_prompt") or "")
-    dreamy_mode = bool((config.get("configurable") or {}).get("dreamy_mode", False))
 
     app_config = get_app_config()
     router = ModelRouter(app_config=app_config)
@@ -863,7 +846,6 @@ def make_lead_agent(config: RunnableConfig):
             subagent_enabled=params.subagent_enabled,
             max_concurrent_subagents=params.max_concurrent_subagents,
             agent_name=params.agent_name,
-            dreamy_mode=dreamy_mode,
             plan_mode=params.mode == "plan",
             background_followup=params.background_followup,
             current_turn_text=current_turn_text,

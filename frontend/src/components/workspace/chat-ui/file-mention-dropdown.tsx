@@ -14,7 +14,7 @@ import { getBackendBaseURL } from "@/core/config";
 import {
   type MountedFolderFile,
   useMountedFolderFiles,
-} from "@/core/dreamy/hooks/use-mounted-folder-files";
+} from "@/core/workspace-io/hooks/use-mounted-folder-files";
 import { useFileMention } from "@/hooks/use-file-mention";
 import { cn } from "@/lib/utils";
 

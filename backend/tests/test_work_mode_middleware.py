@@ -7,8 +7,6 @@ import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # ---------------------------------------------------------------------------
 # Stubs for heavy deps that must not be imported during unit testing
 # ---------------------------------------------------------------------------
@@ -21,10 +19,9 @@ sys.modules.setdefault("src.client", _stub_client_module)
 
 
 from src.agents.middlewares.work_mode_middleware import (  # noqa: E402
-    WorkModeMiddleware,
     _MAX_AUTO_ADAPTATION_ATTEMPTS,
+    WorkModeMiddleware,
     _create_work_mode,
-    _spawn_plan_rerun,
 )
 
 
@@ -69,15 +66,12 @@ def _node(
 def _state(
     *,
     nodes: list[dict] | None = None,
-    dreamy_mode: bool = False,
     complexity_tier: str | None = None,
     phase_execution: dict | None = None,
 ) -> dict:
     state: dict = {}
     if nodes is not None:
         state["todo_graph"] = {"nodes": nodes}
-    if dreamy_mode:
-        state["dreamy_mode"] = True
     if complexity_tier:
         state["complexity_tier"] = complexity_tier
     if phase_execution is not None:
@@ -102,25 +96,6 @@ class TestCreateWorkMode:
     def test_returns_none_when_attr_missing(self):
         ctx = SimpleNamespace()
         assert _create_work_mode(ctx) is None
-
-
-# ---------------------------------------------------------------------------
-# Dreamy mode guard
-# ---------------------------------------------------------------------------
-
-class TestDreamyModeGuard:
-    def test_returns_none_when_dreamy_mode(self):
-        mw = WorkModeMiddleware()
-        emitted = []
-
-        with patch(
-            "src.agents.middlewares.work_mode_middleware.get_stream_writer",
-            return_value=lambda e: emitted.append(e),
-        ):
-            result = mw.before_model(_state(dreamy_mode=True), _runtime())
-
-        assert result is None
-        assert emitted == []
 
 
 # ---------------------------------------------------------------------------

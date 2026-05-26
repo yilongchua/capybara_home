@@ -498,38 +498,6 @@ def _build_componentized_prompt(
     return "\n\n".join(section for section in sections if section)
 
 
-DREAMY_MODE_SECTION = """<dreamy_mode>
-You are running in **Dreamy mode** — a batch-workflow execution environment.
-
-**Immediate action required:** Load the dreamy-workflow skill now:
-```
-read_file /mnt/skills/dreamy-workflow/SKILL.md
-```
-
-**Hard constraints in this mode:**
-- NEVER call the `task()` tool — it is disabled and will be rejected.
-- All row processing must be sequential and inline.
-- When Dreamy mode has just been enabled and workflow.json does not yet exist, treat the
-  user's next substantive workflow request as workflow-design input even without a slash prefix.
-- If the user has not actually described the row-by-row job yet, ask what should happen per row
-  before creating workflow.json.
-- Once workflow.json v2 exists at /mnt/user-data/workspace/workflow.json, it is your
-  **executor contract**:
-  - Read execution_state.current_row_index and current_step_id at the start of each turn.
-  - Execute exactly the step at current_step_id for the row at current_row_index.
-  - After completing a step, update execution_state.current_step_id to the next step id
-    (null if the row is complete), and increment current_row_index when all steps for a row finish.
-  - Write execution_state back to workflow.json after every step.
-  - Do NOT invent steps not listed in `steps`. Do NOT skip steps.
-- When execution_state.phase is "awaiting_approval", you MUST call ask_clarification
-  (clarification_type="risk_confirmation") showing the POC results, remaining row count,
-  and estimated time. Do not process any more rows until the user explicitly confirms.
-- When execution_state.phase is "bulk", execute the current step for the current row,
-  update execution_state, call checkpoint.py --mark-done after each row completes,
-  and continue until phase is "done".
-</dreamy_mode>"""
-
-
 PLAN_MODE_SECTION = """<plan_mode>
 You are running in **Plan mode**.
 
@@ -614,7 +582,6 @@ def apply_prompt_template(
     *,
     agent_name: str | None = None,
     available_skills: set[str] | None = None,
-    dreamy_mode: bool = False,
     plan_mode: bool = False,
     background_followup: bool = False,
     current_turn_text: str = "",
@@ -633,8 +600,6 @@ def apply_prompt_template(
         progressive_skills=app_config.skills.progressive_disclosure,
     )
     prompt = _inject_memory_context(base_prompt, _get_memory_context(agent_name, current_turn_text=current_turn_text))
-    if dreamy_mode:
-        return prompt + "\n\n" + DREAMY_MODE_SECTION
     if plan_mode and background_followup:
         return prompt + "\n\n" + PLAN_MODE_SECTION + "\n\n" + PLAN_BACKGROUND_FOLLOWUP_SECTION
     if plan_mode:

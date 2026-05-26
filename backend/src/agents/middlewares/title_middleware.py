@@ -66,7 +66,6 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
     """
 
     state_schema = TitleMiddlewareState
-    _DREAMY_TITLE_PREFIX = "✨ "
 
     def __init__(self, model_name: str | None = None):
         super().__init__()
@@ -131,22 +130,6 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
             return user_msg[:fallback_chars].rstrip() + "..."
         return user_msg if user_msg else "New Conversation"
 
-    @staticmethod
-    def _is_dreamy_mode(runtime: Runtime) -> bool:
-        context = getattr(runtime, "context", None)
-        if not isinstance(context, dict):
-            return False
-        return bool(context.get("dreamy_mode", False))
-
-    def _format_title(self, title: str, is_dreamy: bool) -> str:
-        if not title:
-            return title
-        if not is_dreamy:
-            return title
-        if title.startswith(self._DREAMY_TITLE_PREFIX):
-            return title
-        return f"{self._DREAMY_TITLE_PREFIX}{title}"
-
     async def _generate_title(self, state: TitleMiddlewareState) -> str | None:
         """Call the LLM and return a normalized title.
 
@@ -176,7 +159,6 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
             return None
         _, user_msg, _, max_chars = self._prepare_generation(state)
         fallback = self._fallback_title(user_msg, max_chars)
-        fallback = self._format_title(fallback, self._is_dreamy_mode(runtime))
         return {"title": fallback}
 
     @override
@@ -190,9 +172,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         self._title_bg_task = None
 
         prompt, user_msg, _, max_chars = self._prepare_generation(state)
-        is_dreamy = self._is_dreamy_mode(runtime)
         fallback = self._fallback_title(user_msg, max_chars)
-        fallback = self._format_title(fallback, is_dreamy)
 
         # Capture context-bound objects before the task runs.
         writer = get_stream_writer()
@@ -203,7 +183,6 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
             thread_id = None
 
         model_name = self._model_name
-        dreamy_prefix = self._DREAMY_TITLE_PREFIX
 
         append_runtime_event(
             runtime,
@@ -221,8 +200,6 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
             title = await self._generate_title(state)
             if not title:
                 return
-            if is_dreamy and not title.startswith(dreamy_prefix):
-                title = f"{dreamy_prefix}{title}"
 
             # Store for aafter_agent to persist via normal state return.
             self._generated_title = title
@@ -249,7 +226,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
     @override
     async def aafter_agent(self, state: TitleMiddlewareState, runtime: Runtime) -> dict | None:
         """Async path: await the background LLM task (up to config timeout) so even short
-        dreamy design-phase runs capture the real title before checkpointing.
+        runs capture the real title before checkpointing.
         """
         config = get_title_config()
         if self._title_bg_task and not self._title_bg_task.done():

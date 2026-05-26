@@ -3,7 +3,7 @@
 import { useCallback } from "react";
 
 import { getBackendBaseURL } from "@/core/config";
-import { api } from "@/core/dreamy/api";
+import { api } from "@/core/workspace-io/api";
 
 export function isMacOS() {
   if (typeof navigator === "undefined") return false;

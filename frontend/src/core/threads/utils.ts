@@ -2,18 +2,8 @@ import type { Message } from "@langchain/langgraph-sdk";
 
 import type { AgentThread } from "./types";
 
-const DREAMY_TITLE_PREFIX = "✨ ";
-
 export function pathOfThread(threadId: string) {
   return `/workspace/chats/${threadId}`;
-}
-
-export function isDreamyThread(thread: AgentThread) {
-  if (thread.values?.dreamy_mode) {
-    return true;
-  }
-  const title = titleOfThread(thread);
-  return title.startsWith(DREAMY_TITLE_PREFIX);
 }
 
 export function pathOfThreadRecord(thread: AgentThread) {

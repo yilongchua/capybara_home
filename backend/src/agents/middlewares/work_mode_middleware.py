@@ -153,7 +153,6 @@ class WorkModeMiddlewareState(AgentState):
     plan_history: NotRequired[list[dict] | None]
     work_mode: NotRequired[dict | None]
     phase_execution: NotRequired[dict | None]
-    dreamy_mode: NotRequired[bool]
     complexity_tier: NotRequired[str | None]
     deferred_task_calls: NotRequired[list[dict] | None]
 
@@ -330,10 +329,6 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
 
     @override
     def before_model(self, state: WorkModeMiddlewareState, runtime: Runtime) -> dict[str, Any] | None:  # noqa: ARG002
-        # Dreamy Mode has its own phase loop (DreamyExecutor) — skip
-        if state.get("dreamy_mode"):
-            return None
-
         runtime_context: dict = getattr(runtime, "context", None) or {}
         auto_mode: bool = bool(runtime_context.get("auto_mode"))
         thread_id: str | None = runtime_context.get("thread_id")

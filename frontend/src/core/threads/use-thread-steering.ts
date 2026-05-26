@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 import { toast } from "sonner";
 
 import { getBackendBaseURL } from "@/core/config";
-import { api } from "@/core/dreamy/api";
+import { api } from "@/core/workspace-io/api";
 
 export interface UseThreadSteeringReturn {
   isSteering: boolean;

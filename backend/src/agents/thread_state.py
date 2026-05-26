@@ -154,15 +154,6 @@ class MemoryVersionRefState(TypedDict, total=False):
     storage_path: str
 
 
-class DreamyIntentState(TypedDict):
-    shape: str
-    intent_class: str
-    confidence: float
-    extracted_fields: list[str]
-    inferred_goal: str
-    workflow_requested: bool
-
-
 class BackgroundFollowupJob(TypedDict, total=False):
     id: str
     status: str
@@ -253,8 +244,6 @@ def merge_viewed_images(existing: dict[str, ViewedImageData] | None, new: dict[s
 
 
 class ThreadState(AgentState):
-    dreamy_mode: NotRequired[bool]
-    dreamy_intent: NotRequired[DreamyIntentState]
     execution_intent: NotRequired[ExecutionIntentState | None]
     sandbox: NotRequired[SandboxState | None]
     thread_data: NotRequired[ThreadDataState | None]

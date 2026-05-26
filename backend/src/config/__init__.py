@@ -1,6 +1,5 @@
 from .app_config import get_app_config
 from .benchmarks_config import BenchmarksConfig, get_benchmarks_config
-from .dreamy_timeout_config import DreamyTimeoutConfig, get_dreamy_timeout_config
 from .evaluator_config import EvaluatorConfig, get_evaluator_config
 from .execution_trace_config import ExecutionTraceConfig, get_execution_trace_config
 from .extensions_config import ExtensionsConfig, get_extensions_config
@@ -32,8 +31,6 @@ __all__ = [
     "get_app_config",
     "BenchmarksConfig",
     "get_benchmarks_config",
-    "DreamyTimeoutConfig",
-    "get_dreamy_timeout_config",
     "Paths",
     "get_paths",
     "SkillsConfig",

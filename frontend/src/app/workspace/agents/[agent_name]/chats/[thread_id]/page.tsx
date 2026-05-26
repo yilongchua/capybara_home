@@ -20,7 +20,7 @@ import { ThreadTitle } from "@/components/workspace/thread-title";
 import { Tooltip } from "@/components/workspace/tooltip";
 import { useAgent } from "@/core/agents";
 import { getBackendBaseURL } from "@/core/config";
-import { api } from "@/core/dreamy/api";
+import { api } from "@/core/workspace-io/api";
 import {
   type LiveGenerationNotice,
   useGenerationCompletions,

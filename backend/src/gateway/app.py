@@ -16,8 +16,8 @@ from src.gateway.routers import (
     artifacts,
     channels,
     community_tools,
-    dreamy,
     feedback,
+    workspace_io,
     generation,
     handoff,
     harness,
@@ -110,13 +110,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.exception("Control-plane scheduler failed to start")
         _mark_component_status(app, "control_plane_scheduler", status="failed", error=str(exc))
 
-    # Recover pending dreamy repo overview refresh jobs
+    # Recover pending repo overview refresh jobs (workspace_io router)
     try:
-        await dreamy.initialize_repo_overview_refresh_jobs()
-        _mark_component_status(app, "dreamy_repo_overview_recovery", status="running")
+        await workspace_io.initialize_repo_overview_refresh_jobs()
+        _mark_component_status(app, "repo_overview_recovery", status="running")
     except Exception as exc:
-        logger.exception("Dreamy repo overview refresh recovery failed")
-        _mark_component_status(app, "dreamy_repo_overview_recovery", status="failed", error=str(exc))
+        logger.exception("Repo overview refresh recovery failed")
+        _mark_component_status(app, "repo_overview_recovery", status="failed", error=str(exc))
 
     # Start generation poller if enabled
     try:
@@ -376,7 +376,7 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     app.include_router(steering.router)
     app.include_router(threads.router)
     app.include_router(vault.router)
-    app.include_router(dreamy.router)
+    app.include_router(workspace_io.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:
