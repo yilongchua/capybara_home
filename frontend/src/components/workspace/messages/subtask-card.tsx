@@ -18,7 +18,7 @@ import {
   ChainOfThoughtStep,
 } from "@/components/ai-elements/chain-of-thought";
 import { Button } from "@/components/ui/button";
-import { ShineBorder } from "@/components/ui/shine-border";
+// import { ShineBorder } from "@/components/ui/shine-border";
 import { useI18n } from "@/core/i18n/hooks";
 import {
   extractReasoningContentFromMessage,
@@ -129,14 +129,14 @@ export function SubtaskCard({
           task.status === "in_progress" ? "enabled" : "",
         )}
       ></div>
-      {task.status === "in_progress" && !isStaleRunning && (
+      {/* {task.status === "in_progress" && !isStaleRunning && (
         <>
           <ShineBorder
             borderWidth={1.5}
             shineColor={["#A07CFE", "#FE8FB5", "#FFBE7B"]}
           />
         </>
-      )}
+      )} */}
       <div className="bg-background/95 flex w-full flex-col rounded-lg">
         <div className="flex w-full items-center justify-between p-0.5">
           <Button
