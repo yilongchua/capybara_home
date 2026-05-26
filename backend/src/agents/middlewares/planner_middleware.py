@@ -130,7 +130,7 @@ def _normalize_clarification_options(options: list[ClarificationOption]) -> list
     return normalized[:4]
 
 
-def _ensure_research_clarifications(user_prompt: str, output: PlannerOutput) -> list[PlannerClarification]:
+def _ensure_research_clarifications(user_prompt: str, output: PlannerOutput, max_clarifications: int = 5) -> list[PlannerClarification]:
     clarifications: list[PlannerClarification] = list(output.clarifications)
     text = user_prompt.lower()
     if output.domain != "research":
@@ -193,7 +193,7 @@ def _ensure_research_clarifications(user_prompt: str, output: PlannerOutput) -> 
         if len(options) < 2:
             continue
         deduped.append(PlannerClarification(question=question, options=options))
-    return deduped[:2]
+    return deduped[:max_clarifications]
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +262,7 @@ DEPENDENCY RULES:
 
 CLARIFICATION RULES:
 - Only ask for clarification when a missing detail would fundamentally change the plan.
-- At most 2 clarification questions. Each question must have 3-4 options.
+- At most {max_clarifications} clarification questions. Each question must have 3-4 options.
 - Mark exactly one option per question as recommended: true.
 - Put the recommended option FIRST in the list.
 
@@ -272,6 +272,12 @@ TODO STYLE:
 - Include a rationale sentence per step.
 - Avoid jargon, nested clauses, or stacked subtasks in a single todo.
 - Maximum {max_steps} todos.
+
+ID RULE:
+- All todo IDs MUST use the format "todo-1", "todo-2", etc.
+- Do NOT use "plan-*", "research-*", or any other prefix.
+- Generate up to {max_steps} well-scoped todos that cover the full plan.
+- Do not pad with filler todos just to hit a count target.
 
 RICH EXECUTION FIELDS (per todo):
 Required:
@@ -655,6 +661,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         *,
         requested_model: str | None,
         max_plan_steps: int,
+        max_clarifications: int = 5,
         dag_enabled: bool,
         handoffs_config: HandoffsConfig,
         sprint_contracts_config: SprintContractsConfig,
@@ -670,6 +677,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         super().__init__()
         self._requested_model = requested_model
         self._max_plan_steps = max_plan_steps
+        self._max_clarifications = max_clarifications
         self._dag_enabled = dag_enabled
         self._handoffs_config = handoffs_config
         self._sprint_contracts_config = sprint_contracts_config
@@ -774,7 +782,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         # rather than consulting stage-based routing. See src/models/resolver.py.
         model_name = resolve_model_name(self._requested_model)
         model = create_chat_model(name=model_name, thinking_enabled=False)
-        prompt = PLANNER_SYSTEM_PROMPT.replace("{max_steps}", str(self._max_plan_steps))
+        prompt = PLANNER_SYSTEM_PROMPT.replace("{max_steps}", str(self._max_plan_steps)).replace("{max_clarifications}", str(self._max_clarifications))
         full_prompt = f"{prompt}\n\nUser request:\n{user_prompt}"
         response = model.invoke(full_prompt)
         output = _parse_plan_response(extract_text(response.content), max_steps=self._max_plan_steps)
@@ -886,7 +894,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         from src.agents.middlewares.todo_dag_middleware import _materialize_ready_ids
 
         ready_ids = _materialize_ready_ids(nodes)
-        clarifications = _ensure_research_clarifications(user_prompt, plan_output)
+        clarifications = _ensure_research_clarifications(user_prompt, plan_output, max_clarifications=self._max_clarifications)
         clarification_pending = len(clarifications) > 0
         primary_clarification = clarifications[0] if clarifications else None
 
@@ -919,6 +927,17 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         created_at_dt = datetime.now(UTC)
         created_at = created_at_dt.isoformat()
 
+        # Build inline clarifications payload for plan.md
+        inline_clarifications = [
+            {
+                "question": c.question,
+                "options": [
+                    {"label": o.label, "recommended": o.recommended, "description": o.description}
+                    for o in c.options
+                ],
+            }
+            for c in clarifications
+        ]
         plan_md_content = render_plan_md(
             plan_output.title,
             plan_output.summary,
@@ -932,6 +951,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
             constraints=plan_output.constraints,
             risks=plan_output.risks,
             acceptance_criteria=plan_output.acceptance_criteria,
+            clarifications=inline_clarifications or None,
         )
 
         # Write versioned plan file + latest alias.
@@ -1163,7 +1183,6 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
     @override
     async def abefore_model(self, state: PlannerState, runtime: Runtime) -> dict | None:
         return self.before_model(state, runtime)
-
 
 # End the planning turn before the lead model runs while the plan is still draft.
 PlannerMiddleware.before_model.__can_jump_to__ = ["end"]  # type: ignore[attr-defined]

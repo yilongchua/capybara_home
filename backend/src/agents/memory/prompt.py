@@ -240,6 +240,17 @@ def _is_relevant_injection_fact(fact: dict[str, Any], *, current_turn_text: str,
     lexical = _lexical_relevance(current_turn_text, content)
     query_lower = current_turn_text.lower()
     content_lower = content.lower()
+
+    # Category-gating: "context" facts are transient background details that
+    # are rarely reusable across independent turns. Require a higher bar.
+    category = str(fact.get("category") or "").strip().lower()
+    if category == "context":
+        effective_threshold = max(threshold, 0.6)
+        effective_lexical = 0.25
+    else:
+        effective_threshold = threshold
+        effective_lexical = 0.12
+
     location_sensitive_query = any(token in query_lower for token in ("my city", "where i live", "location", "rent", "housing", "relocat", "move from", "move to"))
     location_like_fact = any(token in content_lower for token in ("city", "location", "relocat", "singapore", "london", "dubai", "sydney", "tasmania", "hobart", "based in", "lives in"))
     # The vector-store score blends lexical match with confidence/recency. Require
@@ -247,7 +258,7 @@ def _is_relevant_injection_fact(fact: dict[str, Any], *, current_turn_text: str,
     # leak into generic direct-answer turns. Location-sensitive requests get a
     # narrow exception because the user may ask "my city" while the fact contains
     # only the actual place name.
-    return score >= threshold and (lexical >= 0.12 or (location_sensitive_query and location_like_fact))
+    return score >= effective_threshold and (lexical >= effective_lexical or (location_sensitive_query and location_like_fact))
 
 
 def format_memory_for_injection(

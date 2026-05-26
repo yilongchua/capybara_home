@@ -290,7 +290,8 @@ def render_plan_md(
     file_changes: list[str] | None = None,
     runtime_artifacts: list[str] | None = None,
     evaluator_findings: list[str] | None = None,
-    execution_notes: list[str] | None = None,
+    clarifications: list[dict[str, Any]] | None = None,
+    clarification_answers: list[dict[str, str]] | None = None,
     last_synced_at: str | None = None,
 ) -> str:
     completed = sum(1 for n in nodes if str(n.get("status") or "") == "completed")
@@ -390,7 +391,26 @@ def render_plan_md(
     file_changes_block = "\n".join(f"- `{item}`" for item in (file_changes or [])) or "- No tracked workspace file changes yet."
     runtime_artifacts_block = "\n".join(f"- `{item}`" for item in (runtime_artifacts or [])) or "- No runtime artifacts recorded."
     evaluator_block = "\n".join(f"- {item}" for item in (evaluator_findings or [])) or "- No evaluator findings recorded."
-    execution_notes_block = "\n".join(f"- {item}" for item in (execution_notes or [])) or "- No execution notes captured yet."
+    clarification_lines = []
+    for clarification in (clarifications or []):
+        if not isinstance(clarification, dict):
+            continue
+        q = str(clarification.get("question") or "").strip()
+        if not q:
+            continue
+        opts = clarification.get("options") or []
+        option_texts = [f"    - {o.get('label')}" + (" (recommended)" if o.get('recommended') else "") for o in opts if isinstance(o, dict) and o.get("label")]
+        matched_answer = ""
+        for ans in (clarification_answers or []):
+            if isinstance(ans, dict) and str(ans.get("question") or "").strip() == q:
+                matched_answer = str(ans.get("selected_label") or ans.get("answer") or "").strip()
+        answer_line = f"  - **User choice**: {matched_answer}" if matched_answer else "  - **User choice**: *(pending)*"
+        clarification_lines.append(f"- **{q}**")
+        clarification_lines.append(answer_line)
+        if option_texts:
+            clarification_lines.append("  - Options considered:")
+            clarification_lines.extend(option_texts)
+    clarifications_block = "\n".join(clarification_lines) if clarification_lines else "- No clarifications were raised during planning."
     current_status_text = current_status or "Plan status is not yet available."
     last_synced = last_synced_at or (created_at or "unknown").strip()
 
@@ -431,8 +451,8 @@ def render_plan_md(
         f"{runtime_artifacts_block}\n\n"
         "## Evaluator Findings\n"
         f"{evaluator_block}\n\n"
-        "## Execution Notes & Insights\n"
-        f"{execution_notes_block}\n\n"
+        "## Clarifications\n"
+        f"{clarifications_block}\n\n"
         "## Risks & Mitigations\n"
         f"{risks_block}\n\n"
         "## Acceptance Criteria\n"
@@ -484,6 +504,8 @@ def sync_handoff_files_from_state(state: dict[str, Any]) -> list[str]:
     elif str(plan.get("evaluation_status") or "").strip():
         evaluator_findings.append(f"Evaluation status: {plan['evaluation_status']}")
 
+    clarifications_raw = plan.get("clarifications") if isinstance(plan.get("clarifications"), list) else None
+    clarification_answers_raw = plan.get("clarification_answers") if isinstance(plan.get("clarification_answers"), list) else None
     plan_md = render_plan_md(
         title,
         summary,
@@ -501,7 +523,8 @@ def sync_handoff_files_from_state(state: dict[str, Any]) -> list[str]:
         file_changes=file_changes,
         runtime_artifacts=runtime_artifacts,
         evaluator_findings=evaluator_findings,
-        execution_notes=_collect_execution_notes(state),
+        clarifications=clarifications_raw,
+        clarification_answers=clarification_answers_raw,
         last_synced_at=str(plan.get("last_synced_at") or "").strip() or str(plan.get("created_at") or "").strip() or None,
     )
 

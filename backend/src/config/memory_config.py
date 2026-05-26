@@ -90,7 +90,7 @@ class MemoryConfig(BaseModel):
         description="Default top-k for recall tool retrieval.",
     )
     injection_relevance_threshold: float = Field(
-        default=0.25,
+        default=0.5,
         ge=0.0,
         le=1.0,
         description="Minimum vector/lexical relevance score for facts injected into the lead-agent prompt when current turn text is available.",

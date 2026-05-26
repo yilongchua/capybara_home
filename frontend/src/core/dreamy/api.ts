@@ -5,6 +5,7 @@ export const api = {
     hardStop: (threadId: string) => `/api/threads/${threadId}/hard-stop`,
     handoff: (threadId: string) => `/api/threads/${threadId}/handoff`,
     executePlan: (threadId: string) => `/api/threads/${threadId}/plan/execute`,
+    clarifyPlan: (threadId: string) => `/api/threads/${threadId}/plan/clarify`,
     suggestions: (threadId: string) => `/api/threads/${threadId}/suggestions`,
     checkpoint: (threadId: string) =>
       `/api/threads/${threadId}/artifacts/mnt/user-data/workspace/checkpoint.json`,

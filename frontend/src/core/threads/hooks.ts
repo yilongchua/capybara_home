@@ -62,6 +62,15 @@ export type PlanCreatedEvent = {
   status?: string;
   auto_approved?: boolean;
   clarification_pending?: boolean;
+  clarification_index?: number;
+  clarifications?: Array<{
+    question?: string;
+    options?: Array<{
+      label?: string;
+      recommended?: boolean;
+      description?: string | null;
+    }>;
+  }>;
   title: string;
   summary: string;
   domain: string;

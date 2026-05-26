@@ -18,7 +18,6 @@ from src.agents.middlewares.dangling_tool_call_middleware import DanglingToolCal
 from src.agents.middlewares.dreamy_bootstrap_middleware import DreamyBootstrapMiddleware
 from src.agents.middlewares.dreamy_execution_middleware import DreamyExecutionMiddleware
 from src.agents.middlewares.dreamy_intent_middleware import DreamyIntentMiddleware
-from src.agents.middlewares.mount_folder_middleware import MountFolderMiddleware
 from src.agents.middlewares.dreamy_poc_middleware import DreamyPocMiddleware
 from src.agents.middlewares.dreamy_watchdog_middleware import DreamyWatchdogMiddleware
 from src.agents.middlewares.evaluator_middleware import EvaluatorMiddleware
@@ -28,6 +27,7 @@ from src.agents.middlewares.loop_detection_middleware import LoopDetectionMiddle
 from src.agents.middlewares.memory_middleware import MemoryMiddleware
 from src.agents.middlewares.metrics_middleware import MetricsMiddleware
 from src.agents.middlewares.model_timeout_middleware import ModelTimeoutMiddleware
+from src.agents.middlewares.mount_folder_middleware import MountFolderMiddleware
 from src.agents.middlewares.permission_middleware import PermissionMiddleware
 from src.agents.middlewares.phase_tool_filter_middleware import PhaseToolFilterMiddleware
 from src.agents.middlewares.plan_evaluator_middleware import PlanEvaluatorMiddleware
@@ -386,6 +386,7 @@ def _create_planner(ctx: _RegistryContext) -> AgentMiddleware | None:
     return PlannerMiddleware(
         requested_model=ctx.model_name,
         max_plan_steps=planner_cfg.max_plan_steps,
+        max_clarifications=planner_cfg.max_clarifications,
         dag_enabled=get_todos_config().dag_enabled,
         handoffs_config=get_handoffs_config(),
         sprint_contracts_config=get_sprint_contracts_config(),

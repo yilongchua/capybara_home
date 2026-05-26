@@ -43,6 +43,8 @@ _DRAFT_HIDDEN_TOOLS: frozenset[str] = frozenset(
         "web_search",
         "query_knowledge_vault",
         "search_internal_documents",
+        # Knowledge vault writes — no content gathering during draft.
+        "save_to_knowledge_vault",
         # Subagent dispatch and write tools.
         "task",
         "write_file",

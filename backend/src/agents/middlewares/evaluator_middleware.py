@@ -256,7 +256,7 @@ class EvaluatorMiddleware(AgentMiddleware[EvaluatorState]):
         # Evaluator must not block todo DAG completion. Let todo recovery and
         # execution middlewares drive todos to terminal state first.
         if self._has_incomplete_todos(state):
-            append_runtime_event(runtime, {"source": "evaluator_middleware", "decision": "deferred_incomplete_todos"})
+            append_runtime_event(runtime, {"source": "evaluator_middleware", "decision": "evaluation_skipped_incomplete_todos"})
             return None
 
         attempts = int(state.get("eval_attempts", 0))

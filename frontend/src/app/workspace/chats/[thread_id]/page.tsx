@@ -231,6 +231,8 @@ function ChatPageContent({
   const [uiNotices, setUiNotices] = useState<LiveGenerationNotice[]>([]);
   const [pendingExecutePlan, setPendingExecutePlan] = useState(false);
   const [isExecutingPlan, setIsExecutingPlan] = useState(false);
+  const [isClarifyingPlan, setIsClarifyingPlan] = useState(false);
+  const [clarificationPendingOverride, setClarificationPendingOverride] = useState<boolean | null>(null);
   const [runPollBump, setRunPollBump] = useState(0);
   const [isMountBootstrapRunning, setIsMountBootstrapRunning] = useState(false);
   const [hiddenPlanEventKey, setHiddenPlanEventKey] = useState<string | null>(null);
@@ -279,7 +281,10 @@ function ChatPageContent({
       router.replace(`/workspace/chats/${threadId}`);
     },
     onFinish,
-    onPlanCreated: (event) => setPlanCreatedEvent(event),
+    onPlanCreated: (event) => {
+      setPlanCreatedEvent(event);
+      setClarificationPendingOverride(null);
+    },
     onPlanAdapted: (event) => setAdaptationEvent(event),
     onComplexityEscalation: (event) => {
       const eventKey = getComplexityEscalationKey(event);
@@ -314,14 +319,57 @@ function ChatPageContent({
     [setSettings],
   );
   const clarificationPending =
-    planCreatedEvent?.clarification_pending === true ||
-    thread.values.plan?.clarification_pending === true;
+    clarificationPendingOverride ?? (
+      planCreatedEvent?.clarification_pending === true ||
+      thread.values.plan?.clarification_pending === true
+    );
+
+  const activeClarificationIndex = useMemo(() => {
+    const indexFromEvent = planCreatedEvent?.clarification_index;
+    if (typeof indexFromEvent === "number" && Number.isFinite(indexFromEvent) && indexFromEvent >= 0) {
+      return indexFromEvent;
+    }
+    const indexFromPlan = thread.values.plan?.clarification_index;
+    if (typeof indexFromPlan === "number" && Number.isFinite(indexFromPlan) && indexFromPlan >= 0) {
+      return indexFromPlan;
+    }
+    return 0;
+  }, [planCreatedEvent?.clarification_index, thread.values.plan?.clarification_index]);
+
+  const activeClarification = useMemo(() => {
+    const clarificationsFromEvent = Array.isArray(planCreatedEvent?.clarifications)
+      ? planCreatedEvent?.clarifications
+      : null;
+    const clarificationsFromPlan = Array.isArray(thread.values.plan?.clarifications)
+      ? thread.values.plan?.clarifications
+      : null;
+    const clarifications = clarificationsFromEvent ?? clarificationsFromPlan ?? [];
+    const current = clarifications[activeClarificationIndex];
+    if (!current || typeof current !== "object") {
+      return null;
+    }
+    const question = typeof current.question === "string" ? current.question : "";
+    const options = Array.isArray(current.options)
+      ? current.options
+          .filter((option) => option && typeof option.label === "string" && option.label.trim().length > 0)
+          .map((option) => ({
+            label: String(option.label),
+            recommended: option.recommended === true,
+            description: option.description ?? null,
+          }))
+      : [];
+    return {
+      question,
+      options,
+    };
+  }, [activeClarificationIndex, planCreatedEvent?.clarifications, thread.values.plan?.clarifications]);
+
   const effectivePlanCreatedEvent = useMemo(() => {
     if (planCreatedEvent) {
       return planCreatedEvent;
     }
     const plan = thread.values.plan;
-    if (!plan || clarificationPending) {
+    if (!plan) {
       return null;
     }
     const planStatus = String(plan.status ?? "").toLowerCase();
@@ -343,7 +391,9 @@ function ChatPageContent({
       plan_id: plan.plan_id,
       status: plan.status,
       auto_approved: false,
-      clarification_pending: false,
+      clarification_pending: plan.clarification_pending === true,
+      clarification_index: typeof plan.clarification_index === "number" ? plan.clarification_index : 0,
+      clarifications: Array.isArray(plan.clarifications) ? plan.clarifications : [],
       title: String(plan.title ?? "Approved Plan"),
       summary: String(plan.summary ?? ""),
       domain: String(plan.domain ?? "generic"),
@@ -351,7 +401,7 @@ function ChatPageContent({
       first_todos: firstTodos,
       plan_path: plan.plan_path ?? null,
     };
-  }, [clarificationPending, planCreatedEvent, thread.values.plan, thread.values.todos, thread.values.work_mode?.active]);
+  }, [planCreatedEvent, thread.values.plan, thread.values.todos, thread.values.work_mode?.active]);
   const effectivePlanEventKey = useMemo(
     () => planEventKey(effectivePlanCreatedEvent),
     [effectivePlanCreatedEvent, planEventKey],
@@ -458,6 +508,54 @@ function ChatPageContent({
     threadId,
     thread.isLoading,
   ]);
+
+  const handleClarifyPlan = useCallback((selectedOptionLabel: string) => {
+    const run = async () => {
+      try {
+        if (!selectedOptionLabel.trim() || isClarifyingPlan) {
+          return;
+        }
+        setIsClarifyingPlan(true);
+        const response = await fetch(`${getBackendBaseURL()}${api.threads.clarifyPlan(threadId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clarification_index: activeClarificationIndex,
+            selected_option_label: selectedOptionLabel,
+          }),
+        });
+        if (!response.ok) {
+          const raw = await response.text();
+          throw new Error(parseErrorDetail(raw));
+        }
+        const result = await response.json() as {
+          clarification_pending?: boolean;
+          clarification_index?: number;
+          status?: string;
+        };
+        const pending = result.clarification_pending === true;
+        setClarificationPendingOverride(pending);
+        setPlanCreatedEvent((prev) => (
+          prev
+            ? {
+                ...prev,
+                clarification_pending: pending,
+                clarification_index: typeof result.clarification_index === "number" ? result.clarification_index : prev.clarification_index,
+              }
+            : prev
+        ));
+        publishWorkspaceRefresh(["threads", `thread:${threadId}`], {
+          source: "plan-clarify",
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "Unknown error";
+        toast.error(`Failed to save clarification. ${detail}`);
+      } finally {
+        setIsClarifyingPlan(false);
+      }
+    };
+    void run();
+  }, [activeClarificationIndex, isClarifyingPlan, threadId]);
 
   // Auto-trigger Execute Plan when a plan is created and auto_mode is on.
   useEffect(() => {
@@ -891,12 +989,17 @@ function ChatPageContent({
                   </div>
                 )}
                   <div className="relative">
-                  {effectivePlanCreatedEvent && !clarificationPending && !isNewThread && effectivePlanEventKey !== hiddenPlanEventKey && !(effectivePlanCreatedEvent.auto_approved && settings.context.auto_mode === true) && (
+                  {effectivePlanCreatedEvent && !isNewThread && effectivePlanEventKey !== hiddenPlanEventKey && !(effectivePlanCreatedEvent.auto_approved && settings.context.auto_mode === true) && (
                     <ExecutePlanPopup
                       event={effectivePlanCreatedEvent}
                       planPath={planReviewPath}
                       onExecute={handleExecutePlan}
                       onDismiss={handleKeepEditingPlan}
+                      clarificationPending={clarificationPending}
+                      clarificationQuestion={activeClarification?.question}
+                      clarificationOptions={activeClarification?.options ?? []}
+                      onClarify={handleClarifyPlan}
+                      isClarifying={isClarifyingPlan}
                       isExecuting={isExecutingPlan}
                     />
                   )}

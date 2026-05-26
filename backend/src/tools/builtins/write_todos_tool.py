@@ -36,6 +36,7 @@ class _TodoToolState(TypedDict, total=False):
 _REJECTED_DRAFT_COMPLETION = "draft_completion_blocked"
 _REJECTED_COMPLETED_PLAN_MUTATION = "completed_plan_frozen"
 _VALIDATION_FAILED = "validation_failed"
+_DRAFT_TODO_ID_RE = re.compile(r"^todo-\d+$")
 
 
 def _utc_now_iso() -> str:
@@ -216,6 +217,7 @@ def write_todos_tool(
     # is reviewing a frozen proposal before approval.
     if plan_status == "draft" and mode == "plan":
         blocked_completed = [str(item.get("id") or "").strip() for item in todos if str(item.get("status") or "").strip().lower() == "completed"]
+        blocked_prefix = [str(item.get("id") or "").strip() for item in todos if str(item.get("id") or "").strip() and not _DRAFT_TODO_ID_RE.fullmatch(str(item.get("id") or "").strip())]
         blocked_completed = [todo_id for todo_id in blocked_completed if todo_id]
         if blocked_completed:
             if runtime is not None:
@@ -230,6 +232,16 @@ def write_todos_tool(
                     "Draft plan cannot mark todos completed. "
                     f"Blocked ids: {', '.join(blocked_completed)}. "
                     "In plan mode, use pending/in_progress/blocked and update structure; complete todos after plan approval in work mode."
+                ),
+            )
+        if blocked_prefix:
+            return _build_reject_command(
+                tool_call_id=tool_call_id,
+                reason_code=_VALIDATION_FAILED,
+                message=(
+                    "Draft plan requires all todo IDs to use the 'todo-*' prefix. "
+                    f"Invalid ids: {', '.join(blocked_prefix)}. "
+                    "Use 'todo-1', 'todo-2', etc. for all todo identifiers."
                 ),
             )
 

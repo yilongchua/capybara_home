@@ -12,12 +12,26 @@ export function ExecutePlanPopup({
   planPath,
   onExecute,
   onDismiss,
+  clarificationPending = false,
+  clarificationQuestion,
+  clarificationOptions = [],
+  onClarify,
+  isClarifying = false,
   isExecuting = false,
 }: {
   event: PlanCreatedEvent;
   planPath: string;
   onExecute: () => void;
   onDismiss: () => void;
+  clarificationPending?: boolean;
+  clarificationQuestion?: string;
+  clarificationOptions?: Array<{
+    label: string;
+    recommended?: boolean;
+    description?: string | null;
+  }>;
+  onClarify?: (selectedOptionLabel: string) => void;
+  isClarifying?: boolean;
   isExecuting?: boolean;
 }) {
   const { select, setOpen } = useDirectory();
@@ -57,13 +71,39 @@ export function ExecutePlanPopup({
           </Button>
         </div>
         <div className="mt-3 flex gap-2">
-          <Button size="sm" className="gap-1.5" onClick={onExecute} disabled={isExecuting}>
-            <PlayIcon className="size-3.5" />
-            {isExecuting ? "Starting..." : "Execute Plan"}
-          </Button>
-          <Button size="sm" variant="outline" onClick={onDismiss} disabled={isExecuting}>
-            Keep editing
-          </Button>
+          {!clarificationPending ? (
+            <>
+              <Button size="sm" className="gap-1.5" onClick={onExecute} disabled={isExecuting}>
+                <PlayIcon className="size-3.5" />
+                {isExecuting ? "Starting..." : "Execute Plan"}
+              </Button>
+              <Button size="sm" variant="outline" onClick={onDismiss} disabled={isExecuting}>
+                Keep editing
+              </Button>
+            </>
+          ) : (
+            <div className="w-full space-y-2">
+              {clarificationQuestion ? (
+                <p className="text-muted-foreground text-xs">{clarificationQuestion}</p>
+              ) : null}
+              <div className="flex flex-wrap gap-2">
+                {clarificationOptions.map((option) => (
+                  <Button
+                    key={option.label}
+                    size="sm"
+                    variant={option.recommended ? "default" : "outline"}
+                    onClick={() => onClarify?.(option.label)}
+                    disabled={isClarifying}
+                  >
+                    {isClarifying ? "Saving..." : option.label}
+                  </Button>
+                ))}
+              </div>
+              <Button size="sm" variant="ghost" onClick={onDismiss} disabled={isClarifying}>
+                Keep editing
+              </Button>
+            </div>
+          )}
         </div>
       </div>
     </div>
