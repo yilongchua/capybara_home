@@ -20,7 +20,6 @@ import { ThreadTitle } from "@/components/workspace/thread-title";
 import { Tooltip } from "@/components/workspace/tooltip";
 import { useAgent } from "@/core/agents";
 import { getBackendBaseURL } from "@/core/config";
-import { api } from "@/core/workspace-io/api";
 import {
   type LiveGenerationNotice,
   useGenerationCompletions,
@@ -32,6 +31,7 @@ import type { ForkDraft } from "@/core/threads/fork";
 import { useThreadStream } from "@/core/threads/hooks";
 import { useRejoinRunningRun } from "@/core/threads/use-rejoin-running-run";
 import { textOfMessage } from "@/core/threads/utils";
+import { api } from "@/core/workspace-io/api";
 import { publishWorkspaceRefresh } from "@/core/workspace-refresh";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";

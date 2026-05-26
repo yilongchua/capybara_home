@@ -13,7 +13,7 @@ type ThemeMode = "light" | "dark" | "capyhome";
 
 function CapyHomeIcon({ className }: SVGProps<SVGSVGElement>) {
   return (
-    // eslint-disable-next-line @next/next/no-img-element
+     
     <img
       src="/icon.png"
       alt=""

@@ -17,7 +17,6 @@ from src.gateway.routers import (
     channels,
     community_tools,
     feedback,
-    workspace_io,
     generation,
     handoff,
     harness,
@@ -35,6 +34,7 @@ from src.gateway.routers import (
     triggers,
     uploads,
     vault,
+    workspace_io,
 )
 
 # Configure logging

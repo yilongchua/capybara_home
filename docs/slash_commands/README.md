@@ -11,15 +11,14 @@ The backend implementations behind most of these features are **still present** 
 | `/autoresearch` | [autoresearch.md](autoresearch.md) |
 | `/vault-save` | [vault-save.md](vault-save.md) |
 | `/vault-search` | [vault-search.md](vault-search.md) |
-| `/dreamy` | [dreamy.md](dreamy.md) |
-| `/dreamy-exit` | [dreamy-exit.md](dreamy-exit.md) |
+| `/dreamy` + `/dreamy-exit` (entire mode) | [dreamy/](dreamy/) — full removal archive with reimplementation guide |
 
 ## Where they used to live
 
 - **Registration** — `frontend/src/core/threads/slash-commands.ts` defined the `SlashCommandName` union and `SUPPORTED_COMMANDS` allowlist.
 - **Menu rendering & dispatch** — `frontend/src/components/workspace/input-box.tsx` declared the `SLASH_COMMANDS` array (titles/descriptions shown in the `/` dropdown) and a single `executeSlashCommand` switch that called the relevant API client method.
 - **Dialogs** — `frontend/src/components/workspace/input-box-dialogs.tsx` hosted any modal forms (e.g. `AutoresearchDialog`).
-- **API clients** — `frontend/src/core/control-plane/api.ts` (`startAutoresearchObjective`, `saveToVault`, `searchVault`) and `frontend/src/agents/middlewares/dreamy_intent_middleware.py` on the backend.
+- **API clients** — `frontend/src/core/control-plane/api.ts` (`startAutoresearchObjective`, `saveToVault`, `searchVault`). The Dreamy backend stack (middlewares, router, prompt section, ThreadState fields) has been fully removed — see [dreamy/REMOVAL_PLAN.md](dreamy/REMOVAL_PLAN.md) and [dreamy/REIMPLEMENTATION.md](dreamy/REIMPLEMENTATION.md).
 
 ## Why they were removed
 

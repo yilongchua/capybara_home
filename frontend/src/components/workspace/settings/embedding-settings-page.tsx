@@ -24,12 +24,12 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { useI18n } from "@/core/i18n/hooks";
-import { testEmbeddingEndpoint } from "@/core/onboarding/api";
 import {
   useEmbeddingEndpoints,
   useSaveEmbeddingEndpoints,
   useTestEmbeddingEndpoint,
 } from "@/core/onboarding";
+import { testEmbeddingEndpoint } from "@/core/onboarding/api";
 import type { UserLlmEndpoint } from "@/core/onboarding/types";
 import { cn } from "@/lib/utils";
 

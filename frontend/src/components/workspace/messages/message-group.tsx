@@ -29,6 +29,7 @@ import {
   findToolCallResult,
 } from "@/core/messages/utils";
 import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
+import { normalizeWebSearchPayload } from "@/core/tools/web-search";
 import { extractTitleFromMarkdown } from "@/core/utils/markdown";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
@@ -37,7 +38,6 @@ import { useDirectory } from "../artifacts";
 import { FlipDisplay } from "../flip-display";
 import { Tooltip } from "../tooltip";
 
-import { normalizeWebSearchPayload } from "@/core/tools/web-search";
 
 import { MarkdownContent } from "./markdown-content";
 import { WebSearchSources } from "./web-search-sources";
@@ -256,7 +256,7 @@ function ToolCall({
             executedQuery={webPayload.executedQuery}
           />
         )}
-        {webPayload && webPayload.results.length === 0 && webPayload.summary && (
+        {webPayload?.results.length === 0 && webPayload.summary && (
           <p className="text-muted-foreground mt-1 text-xs">{webPayload.summary}</p>
         )}
       </ChainOfThoughtStep>

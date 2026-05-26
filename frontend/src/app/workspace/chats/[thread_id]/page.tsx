@@ -26,9 +26,6 @@ import { ThreadTitle } from "@/components/workspace/thread-title";
 import { Welcome } from "@/components/workspace/welcome";
 import { urlOfArtifact } from "@/core/artifacts/utils";
 import { getBackendBaseURL } from "@/core/config";
-import { api } from "@/core/workspace-io/api";
-import { useMountedFolder } from "@/core/workspace-io/hooks/use-mounted-folder";
-import { useMountedFolderFiles } from "@/core/workspace-io/hooks/use-mounted-folder-files";
 import {
   type LiveGenerationNotice,
   useGenerationCompletions,
@@ -47,6 +44,9 @@ import { useRenameThread, useThreadStream } from "@/core/threads/hooks";
 import { useContextTokens } from "@/core/threads/use-context-tokens";
 import { useRejoinRunningRun } from "@/core/threads/use-rejoin-running-run";
 import { useThreadNotification } from "@/core/threads/use-thread-notification";
+import { api } from "@/core/workspace-io/api";
+import { useMountedFolder } from "@/core/workspace-io/hooks/use-mounted-folder";
+import { useMountedFolderFiles } from "@/core/workspace-io/hooks/use-mounted-folder-files";
 import { publishWorkspaceRefresh } from "@/core/workspace-refresh";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";

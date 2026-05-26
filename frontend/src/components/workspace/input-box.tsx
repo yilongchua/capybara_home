@@ -32,12 +32,6 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { clearThreadClientCache, getAPIClient } from "@/core/api/api-client";
 import { getBackendBaseURL } from "@/core/config";
-import { api } from "@/core/workspace-io/api";
-import { useFolderPicker } from "@/core/workspace-io/hooks/use-folder-picker";
-import {
-  useMountedFolder,
-  useSaveMountedFolder,
-} from "@/core/workspace-io/hooks/use-mounted-folder";
 import { useI18n } from "@/core/i18n/hooks";
 import { useModels } from "@/core/models/hooks";
 import type { AgentThreadContext } from "@/core/threads";
@@ -55,6 +49,12 @@ import {
 } from "@/core/threads/slash-commands";
 import { pathOfThread, textOfMessage } from "@/core/threads/utils";
 import { sanitizeThreadId } from "@/core/utils/strings";
+import { api } from "@/core/workspace-io/api";
+import { useFolderPicker } from "@/core/workspace-io/hooks/use-folder-picker";
+import {
+  useMountedFolder,
+  useSaveMountedFolder,
+} from "@/core/workspace-io/hooks/use-mounted-folder";
 import { publishWorkspaceRefresh } from "@/core/workspace-refresh";
 import { cn } from "@/lib/utils";
 

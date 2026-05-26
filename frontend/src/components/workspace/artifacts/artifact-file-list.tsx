@@ -12,6 +12,9 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { urlOfArtifact } from "@/core/artifacts/utils";
+import { useI18n } from "@/core/i18n/hooks";
+import { installSkill } from "@/core/skills/api";
+import { getFileName } from "@/core/utils/files";
 import { useFolderPicker } from "@/core/workspace-io/hooks/use-folder-picker";
 import {
   useClearMountedFolder,
@@ -19,9 +22,6 @@ import {
   useSaveMountedFolder,
 } from "@/core/workspace-io/hooks/use-mounted-folder";
 import { useMountedFolderFiles } from "@/core/workspace-io/hooks/use-mounted-folder-files";
-import { useI18n } from "@/core/i18n/hooks";
-import { installSkill } from "@/core/skills/api";
-import { getFileName } from "@/core/utils/files";
 import { cn } from "@/lib/utils";
 
 import { useDirectory } from "./context";

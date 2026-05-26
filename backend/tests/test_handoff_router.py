@@ -3,9 +3,6 @@
 import asyncio
 import json
 
-import pytest
-from fastapi import HTTPException
-
 from src.config.paths import Paths
 from src.gateway.routers.handoff import create_thread_handoff
 
