@@ -6,7 +6,7 @@ import logging
 import re
 import shutil
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -1787,22 +1787,18 @@ class VaultLearningManager:
         source: str,
         topic: str = "",
         queue_items: list[dict[str, Any]] | None = None,
+        progress_callback: Callable[[int, int, str, str, str, str | None], None] | None = None,
     ) -> dict[str, Any]:
-        # The entire ingest pipeline runs inside a manifest transaction. With
-        # parallel ingest runners, two `ingest()` invocations on different
-        # threads would otherwise race on `_save_manifest` and silently drop
-        # each other's per-source updates. The lock is re-entrant so nested
-        # helper calls (`_record_trust_decision`, `compile_incremental`, …)
-        # that call `_save_manifest` inside this block reuse the same
-        # transaction; the txn reloads the manifest from disk on entry so we
-        # pick up commits made by any sibling runner that ran first.
-        with self._manifest_txn():
-            return self._ingest_locked(
-                urls=urls,
-                source=source,
-                topic=topic,
-                queue_items=queue_items,
-            )
+        # Processing is handled in batches inside _ingest_locked, each with
+        # its own manifest transaction, so a crash mid-run only loses the
+        # current batch instead of all items.
+        return self._ingest_locked(
+            urls=urls,
+            source=source,
+            topic=topic,
+            queue_items=queue_items,
+            progress_callback=progress_callback,
+        )
 
     def _ingest_locked(
         self,
@@ -1811,6 +1807,7 @@ class VaultLearningManager:
         source: str,
         topic: str = "",
         queue_items: list[dict[str, Any]] | None = None,
+        progress_callback: Callable[[int, int, str, str, str, str | None], None] | None = None,
     ) -> dict[str, Any]:
         # Strict embedding gate: do not ingest any sources unless /embeddings is reachable.
         search_service = UnifiedVaultSearchService(self.vault_root)
@@ -1844,113 +1841,172 @@ class VaultLearningManager:
             self._save_manifest()
             return report
 
+        BATCH_SIZE = 10
+
         normalized = self._normalize_urls(urls)
         ingested: list[dict[str, Any]] = []
         skipped_unchanged: list[dict[str, Any]] = []
         rejected_for_trust: list[dict[str, Any]] = []
         rejected_for_policy: list[dict[str, Any]] = []
         fetch_failed: list[dict[str, Any]] = []
-        queue_item_ids: list[str] = []
-        tentative_hashes: dict[str, str] = {}
+        compile_report: dict[str, Any] = {"status": "skipped_no_items"}
 
-        for item in queue_items or []:
-            queue_item_ids.append(str(item.get("queue_id") or ""))
-            try:
-                result = self.reingest_if_changed(
-                    url=str(item.get("url") or ""),
-                    source=source,
-                    topic=topic or str(item.get("query") or ""),
-                    pre_extracted_content=str(item.get("extracted_content") or ""),
-                    queue_entry=item,
-                    tentative_hashes=tentative_hashes,
-                )
-            except Exception as exc:
-                # Treat any exception here as a transient fetch/parse failure
-                # eligible for retry. The queue lease + `attempt_count` cap
-                # in `requeue_claimed_items` ensures poison pills eventually
-                # get marked `rejected` with `max_attempts_exceeded`.
-                fetch_failed.append({"url": str(item.get("url") or ""), "reason": f"fetch_error:{exc}"})
-                continue
-            status = result.get("status")
-            if status == "ingested":
-                ingested.append(result)
-            elif status == "skipped_unchanged":
-                skipped_unchanged.append(result)
-            elif status == "rejected_for_trust":
-                rejected_for_trust.append(result)
+        queue_items_list = queue_items or []
 
-        for url in normalized:
-            if not self._is_web_url(url):
-                rejected_for_policy.append({"url": url, "reason": "invalid_scheme"})
-                continue
-            if not self._domain_allowed(url):
-                rejected_for_policy.append({"url": url, "reason": "domain_not_allowed"})
-                continue
-            try:
-                result = self.reingest_if_changed(
-                    url=url,
-                    source=source,
-                    topic=topic,
-                    tentative_hashes=tentative_hashes,
-                )
-            except Exception as exc:
-                fetch_failed.append({"url": url, "reason": f"fetch_error:{exc}"})
-                continue
-            status = result.get("status")
-            if status == "ingested":
-                ingested.append(result)
-            elif status == "skipped_unchanged":
-                skipped_unchanged.append(result)
-            elif status == "rejected_for_trust":
-                rejected_for_trust.append(result)
+        # Phase 1A — Process queue items in batches of BATCH_SIZE.
+        # Each batch runs inside its own manifest transaction so a crash
+        # mid-run only loses the current batch, not all items.
+        for batch_start in range(0, len(queue_items_list), BATCH_SIZE):
+            batch = queue_items_list[batch_start:batch_start + BATCH_SIZE]
+            batch_tentative_hashes: dict[str, str] = {}
+            batch_queue_item_ids: list[str] = []
+            batch_queue_outcomes: dict[str, str] = {}
+            batch_ingested: list[dict[str, Any]] = []
+            batch_skipped_unchanged: list[dict[str, Any]] = []
+            batch_rejected_for_trust: list[dict[str, Any]] = []
+            batch_fetch_failed: list[dict[str, Any]] = []
 
-        # Compile must commit or roll back together with the tentative hash
-        # updates collected above. On failure we requeue claimed items *and*
-        # drop the tentative hashes so the next attempt re-runs the pipeline
-        # instead of short-circuiting on the dedupe check.
-        try:
-            compile_report = self.compile_incremental()
-        except Exception:
-            tentative_hashes.clear()
-            if queue_item_ids:
-                self.requeue_claimed_items(queue_item_ids, reason="compile_failed_retry")
-            raise
+            with self._manifest_txn():
+                for idx, item in enumerate(batch):
+                    queue_id = str(item.get("queue_id") or "")
+                    batch_queue_item_ids.append(queue_id)
+                    try:
+                        result = self.reingest_if_changed(
+                            url=str(item.get("url") or ""),
+                            source=source,
+                            topic=topic or str(item.get("query") or ""),
+                            pre_extracted_content=str(item.get("extracted_content") or ""),
+                            queue_entry=item,
+                            tentative_hashes=batch_tentative_hashes,
+                        )
+                    except Exception as exc:
+                        batch_fetch_failed.append({"url": str(item.get("url") or ""), "reason": f"fetch_error:{exc}"})
+                        if queue_id:
+                            batch_queue_outcomes[queue_id] = "retry"
+                        if progress_callback is not None:
+                            progress_callback(
+                                batch_start + idx + 1,
+                                len(queue_items_list),
+                                "",
+                                str(item.get("title") or item.get("url", "") or ""),
+                                "fetch_failed",
+                                str(exc),
+                            )
+                        continue
+                    status = result.get("status")
+                    if progress_callback is not None:
+                        progress_callback(
+                            batch_start + idx + 1,
+                            len(queue_items_list),
+                            str(result.get("source_id", "")),
+                            str(item.get("title") or result.get("title") or item.get("url", "") or ""),
+                            status or "",
+                            None,
+                        )
+                    if status == "ingested":
+                        batch_ingested.append(result)
+                        if queue_id:
+                            batch_queue_outcomes[queue_id] = "ingested"
+                    elif status == "skipped_unchanged":
+                        batch_skipped_unchanged.append(result)
+                        if queue_id:
+                            batch_queue_outcomes[queue_id] = "skipped_unchanged"
+                    elif status == "rejected_for_trust":
+                        batch_rejected_for_trust.append(result)
+                        if queue_id:
+                            batch_queue_outcomes[queue_id] = "rejected_for_trust"
+                    elif queue_id:
+                        batch_queue_outcomes[queue_id] = "unhandled"
 
-        # Compile succeeded — promote tentative hashes into the manifest.
-        for source_id, new_hash in tentative_hashes.items():
-            record = self._manifest["sources"].get(source_id)
-            if not isinstance(record, dict):
-                continue
-            committed = list(record.get("hash_history", []))
-            if not committed or committed[-1] != new_hash:
-                committed.append(new_hash)
-                record["hash_history"] = committed[-10:]
-                self._manifest["sources"][source_id] = record
+                try:
+                    compile_report = self.compile_incremental()
+                except Exception:
+                    batch_tentative_hashes.clear()
+                    if batch_queue_item_ids:
+                        self.requeue_claimed_items(batch_queue_item_ids, reason="compile_failed_retry")
+                    raise
 
-        if queue_item_ids:
-            ingested_ids = {item["url"] for item in ingested if item.get("url")}
-            skipped_ids = {item["url"] for item in skipped_unchanged if item.get("url")}
-            rejected_ids = {item["url"] for item in rejected_for_trust if item.get("url")}
-            policy_rejected_ids = {item["url"] for item in rejected_for_policy if item.get("url")}
-            fetch_failed_ids = {item["url"] for item in fetch_failed if item.get("url")}
-            queue_to_ingested = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in ingested_ids]
-            queue_to_skipped = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in skipped_ids]
-            queue_to_rejected = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in rejected_ids]
-            queue_to_policy = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in policy_rejected_ids]
-            queue_to_retry = [str(item.get("queue_id")) for item in (queue_items or []) if str(item.get("url") or "") in fetch_failed_ids]
-            self._mark_queue_items(queue_to_ingested, status="ingested", reason="converted_to_vault_source")
-            self._mark_queue_items(queue_to_skipped, status="ingested", reason="content_hash_unchanged")
-            self._mark_queue_items(queue_to_rejected, status="rejected", reason="trust_score_below_threshold")
-            self._mark_queue_items(queue_to_policy, status="rejected", reason="policy_violation")
-            # Transient errors go back to `queued` (or `rejected` with
-            # `max_attempts_exceeded` if attempt_count has hit the ceiling).
-            self.requeue_claimed_items(queue_to_retry, reason="fetch_failed_retry")
-            # Final safety net: any queue_item with a known queue_id that didn't end up
-            # in any of the buckets above must not be left in "claimed" state.
-            handled = set(queue_to_ingested) | set(queue_to_skipped) | set(queue_to_rejected) | set(queue_to_policy) | set(queue_to_retry)
-            unhandled = [qid for qid in queue_item_ids if qid and qid not in handled]
-            if unhandled:
-                self.requeue_claimed_items(unhandled, reason="unhandled_status_retry")
+                # Promote tentative hashes for this batch
+                for source_id, new_hash in batch_tentative_hashes.items():
+                    record = self._manifest["sources"].get(source_id)
+                    if not isinstance(record, dict):
+                        continue
+                    committed = list(record.get("hash_history", []))
+                    if not committed or committed[-1] != new_hash:
+                        committed.append(new_hash)
+                        record["hash_history"] = committed[-10:]
+                        self._manifest["sources"][source_id] = record
+
+                # Mark this batch's queue items
+                if batch_queue_item_ids:
+                    queue_to_ingested = [qid for qid, outcome in batch_queue_outcomes.items() if qid and outcome == "ingested"]
+                    queue_to_skipped = [qid for qid, outcome in batch_queue_outcomes.items() if qid and outcome == "skipped_unchanged"]
+                    queue_to_rejected = [qid for qid, outcome in batch_queue_outcomes.items() if qid and outcome == "rejected_for_trust"]
+                    queue_to_retry = [qid for qid, outcome in batch_queue_outcomes.items() if qid and outcome == "retry"]
+                    self._mark_queue_items(queue_to_ingested, status="ingested", reason="converted_to_vault_source")
+                    self._mark_queue_items(queue_to_skipped, status="ingested", reason="content_hash_unchanged")
+                    self._mark_queue_items(queue_to_rejected, status="rejected", reason="trust_score_below_threshold")
+                    self.requeue_claimed_items(queue_to_retry, reason="fetch_failed_retry")
+                    handled = set(queue_to_ingested) | set(queue_to_skipped) | set(queue_to_rejected) | set(queue_to_retry)
+                    unhandled = [qid for qid in batch_queue_item_ids if qid and qid not in handled]
+                    if unhandled:
+                        self.requeue_claimed_items(unhandled, reason="unhandled_status_retry")
+
+            ingested.extend(batch_ingested)
+            skipped_unchanged.extend(batch_skipped_unchanged)
+            rejected_for_trust.extend(batch_rejected_for_trust)
+            fetch_failed.extend(batch_fetch_failed)
+
+        # Phase 1B — Process normalized URLs in a single transaction
+        # (typically zero or few items).
+        if normalized:
+            url_tentative_hashes: dict[str, str] = {}
+            with self._manifest_txn():
+                for url in normalized:
+                    if not self._is_web_url(url):
+                        rejected_for_policy.append({"url": url, "reason": "invalid_scheme"})
+                        continue
+                    if not self._domain_allowed(url):
+                        rejected_for_policy.append({"url": url, "reason": "domain_not_allowed"})
+                        continue
+                    try:
+                        result = self.reingest_if_changed(
+                            url=url,
+                            source=source,
+                            topic=topic,
+                            tentative_hashes=url_tentative_hashes,
+                        )
+                    except Exception as exc:
+                        fetch_failed.append({"url": url, "reason": f"fetch_error:{exc}"})
+                        continue
+                    status = result.get("status")
+                    if status == "ingested":
+                        ingested.append(result)
+                    elif status == "skipped_unchanged":
+                        skipped_unchanged.append(result)
+                    elif status == "rejected_for_trust":
+                        rejected_for_trust.append(result)
+
+                try:
+                    compile_report = self.compile_incremental()
+                except Exception:
+                    url_tentative_hashes.clear()
+                    raise
+
+                for source_id, new_hash in url_tentative_hashes.items():
+                    record = self._manifest["sources"].get(source_id)
+                    if not isinstance(record, dict):
+                        continue
+                    committed = list(record.get("hash_history", []))
+                    if not committed or committed[-1] != new_hash:
+                        committed.append(new_hash)
+                        record["hash_history"] = committed[-10:]
+                        self._manifest["sources"][source_id] = record
+
+        if not queue_items_list and not normalized:
+            with self._manifest_txn():
+                compile_report = self.compile_incremental()
+
         report = {
             "source": source,
             "topic": topic,
@@ -1972,12 +2028,12 @@ class VaultLearningManager:
         }
         report_path = self.ingest_reports_dir / f"{_utcnow().strftime('%Y%m%dT%H%M%SZ')}-ingest.json"
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-        self._manifest["last_run_summary"] = {
-            "step": "ingest",
-            "updated_at": _utcnow_iso(),
-            **{k: v for k, v in report.items() if k.endswith("_count") or k == "queue_items_claimed"},
-        }
-        self._save_manifest()
+        with self._manifest_txn():
+            self._manifest["last_run_summary"] = {
+                "step": "ingest",
+                "updated_at": _utcnow_iso(),
+                **{k: v for k, v in report.items() if k.endswith("_count") or k == "queue_items_claimed"},
+            }
         return report
 
     def enqueue_clip(

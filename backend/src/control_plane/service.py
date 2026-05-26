@@ -1600,6 +1600,7 @@ class ControlPlaneService:
                         self._vault_ingest_job.update(
                             {
                                 "total": queue_total,
+                                "current_index": 0,
                                 "current_title": f"Draining queue ({queue_total} item(s))",
                                 "last_status": "queue_started",
                                 "updated_at": self._utcnow_iso(),
@@ -1610,12 +1611,52 @@ class ControlPlaneService:
                         job_id,
                         queue_total,
                     )
+
+                    def _queue_progress(
+                        index: int,
+                        total: int,
+                        source_id: str,
+                        title: str,
+                        status: str,
+                        error: str | None,
+                    ) -> None:
+                        with self._vault_ingest_lock:
+                            self._vault_ingest_job.update(
+                                {
+                                    "total": total,
+                                    "current_index": index,
+                                    "current_source_id": source_id,
+                                    "current_title": title,
+                                    "last_status": status,
+                                    "last_error": error,
+                                    "updated_at": self._utcnow_iso(),
+                                }
+                            )
+                        if status == "fetch_failed":
+                            logger_obj.warning(
+                                "vault_ingest_queue_item index=%d/%d url=%r status=%s error=%s",
+                                index,
+                                total,
+                                title,
+                                status,
+                                error,
+                            )
+                        else:
+                            logger_obj.info(
+                                "vault_ingest_queue_item index=%d/%d url=%r status=%s",
+                                index,
+                                total,
+                                title,
+                                status,
+                            )
+
                     try:
                         queue_report = manager.ingest(
                             urls=[],
                             source="vault_ui_run_ingest",
                             topic="",
                             queue_items=claimed_items,
+                            progress_callback=_queue_progress,
                         )
                     except Exception:
                         queue_ids = [

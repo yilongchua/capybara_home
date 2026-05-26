@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import httpx
+import pytest
 
 from src.control_plane.vault_learning import VaultLearningManager
 
@@ -246,3 +247,106 @@ def test_reprocess_existing_sources_only_missing_skips_populated(tmp_path: Path,
     report = vault.reprocess_existing_sources(only_missing=True)
     assert report["total"] == 0
     assert report["processed"] == 0
+
+
+def test_queue_ingest_duplicate_urls_mixed_outcomes_are_mapped_by_queue_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = VaultLearningManager(vault_root=tmp_path, min_trust_score=0.2)
+
+    monkeypatch.setattr(
+        "src.control_plane.vault_learning.UnifiedVaultSearchService.ensure_vector_ready",
+        lambda self: {"status": "ok"},
+    )
+    monkeypatch.setattr(vault, "compile_incremental", lambda: {"status": "ok"})
+
+    with vault._queue_txn() as queue:
+        queue.extend(
+            [
+                {
+                    "queue_id": "q1",
+                    "query": "topic-a",
+                    "title": "First",
+                    "url": "https://example.com/shared",
+                    "status": "queued",
+                    "queued_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                    "attempt_count": 0,
+                },
+                {
+                    "queue_id": "q2",
+                    "query": "topic-a",
+                    "title": "Second",
+                    "url": "https://example.com/shared",
+                    "status": "queued",
+                    "queued_at": "2026-01-01T00:00:01+00:00",
+                    "updated_at": "2026-01-01T00:00:01+00:00",
+                    "attempt_count": 0,
+                },
+            ]
+        )
+
+    claimed = vault.claim_search_queue_items(topic="", max_items=10)
+    assert {item["queue_id"] for item in claimed} == {"q1", "q2"}
+
+    def _fake_reingest_if_changed(**kwargs):  # noqa: ANN003
+        queue_entry = kwargs.get("queue_entry") or {}
+        queue_id = str(queue_entry.get("queue_id") or "")
+        if queue_id == "q1":
+            return {"status": "ingested", "source_id": "s1", "url": "https://example.com/shared"}
+        if queue_id == "q2":
+            raise RuntimeError("forced transient failure")
+        raise AssertionError(f"unexpected queue_id: {queue_id}")
+
+    monkeypatch.setattr(vault, "reingest_if_changed", _fake_reingest_if_changed)
+
+    report = vault.ingest(urls=[], source="autoresearch", topic="", queue_items=claimed)
+    assert report["ingested_count"] == 1
+    assert report["fetch_failed_count"] == 1
+
+    queue_state = {str(item.get("queue_id")): item for item in vault._load_queue()}
+    assert queue_state["q1"]["status"] == "ingested"
+    assert queue_state["q2"]["status"] == "queued"
+    assert queue_state["q2"]["reason"] == "fetch_failed_retry"
+
+
+def test_queue_ingest_unknown_status_falls_back_to_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    vault = VaultLearningManager(vault_root=tmp_path, min_trust_score=0.2)
+
+    monkeypatch.setattr(
+        "src.control_plane.vault_learning.UnifiedVaultSearchService.ensure_vector_ready",
+        lambda self: {"status": "ok"},
+    )
+    monkeypatch.setattr(vault, "compile_incremental", lambda: {"status": "ok"})
+
+    enqueue = vault.enqueue_search_results(
+        query="topic-b",
+        results=[
+            {
+                "title": "Unknown Status Source",
+                "url": "https://example.com/unknown-status",
+                "snippet": "desc",
+                "extracted_content": "# Source\n\nBody",
+                "topic_tags": ["topic-b"],
+            }
+        ],
+    )
+    assert enqueue["appended_count"] == 1
+    claimed = vault.claim_search_queue_items(topic="", max_items=10)
+    assert len(claimed) == 1
+
+    monkeypatch.setattr(
+        vault,
+        "reingest_if_changed",
+        lambda **kwargs: {"status": "unexpected_status", "source_id": "s-unknown", "url": "https://example.com/unknown-status"},
+    )
+
+    report = vault.ingest(urls=[], source="autoresearch", topic="", queue_items=claimed)
+    assert report["processed_count"] == 1
+    assert report["ingested_count"] == 0
+    assert report["fetch_failed_count"] == 0
+
+    queue_state = vault._load_queue()
+    assert len(queue_state) == 1
+    assert queue_state[0]["status"] == "queued"
+    assert queue_state[0]["reason"] == "unhandled_status_retry"
