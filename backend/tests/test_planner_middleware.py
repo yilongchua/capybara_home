@@ -55,10 +55,6 @@ def _planner(monkeypatch) -> PlannerMiddleware:
 
     monkeypatch.setattr(middleware, "_invoke_planner", _fake_invoke)
     monkeypatch.setattr(
-        "src.agents.middlewares.planner_middleware._classify_complexity",
-        lambda _prompt: "complex",
-    )
-    monkeypatch.setattr(
         "src.agents.middlewares.planner_middleware._looks_like_direct_answer_request",
         lambda _prompt: False,
     )

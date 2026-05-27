@@ -41,7 +41,7 @@ def _make_middleware():
     return PlanEvaluatorMiddleware(router=_router(), requested_model="primary")
 
 
-def _base_state(*, plan_evaluated=False, complexity_tier="complex"):
+def _base_state(*, plan_evaluated=False):
     return {
         "messages": [HumanMessage(content="Build a thing")],
         "plan": {"title": "Test Plan", "summary": "Do stuff"},
@@ -53,7 +53,6 @@ def _base_state(*, plan_evaluated=False, complexity_tier="complex"):
             "ready_ids": ["todo-1"],
         },
         "plan_evaluated": plan_evaluated,
-        "complexity_tier": complexity_tier,
     }
 
 
@@ -64,19 +63,11 @@ def test_skips_when_already_evaluated():
     assert result is None
 
 
-def test_skips_when_trivial():
-    middleware = _make_middleware()
-    state = _base_state(complexity_tier="trivial")
-    result = middleware.before_model(state, _runtime())
-    assert result is None
-
-
 def test_skips_when_no_todo_graph():
     middleware = _make_middleware()
     state = {
         "plan": {"title": "Test"},
         "plan_evaluated": False,
-        "complexity_tier": "complex",
     }
     result = middleware.before_model(state, _runtime())
     assert result is None
@@ -87,7 +78,6 @@ def test_skips_when_no_plan():
     state = {
         "todo_graph": {"nodes": [], "ready_ids": []},
         "plan_evaluated": False,
-        "complexity_tier": "complex",
     }
     result = middleware.before_model(state, _runtime())
     assert result is None

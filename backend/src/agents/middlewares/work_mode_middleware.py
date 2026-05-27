@@ -21,16 +21,16 @@ Instruction rule: The work_mode_instruction HumanMessage must end with
 If the model outputs text the ReAct loop terminates before all phases complete.
 
 Auto-cycle (Phase 4): when auto_mode=True in the runtime context, plan_adapted
-and complexity_escalation events automatically spawn a daemon thread that
-re-invokes the agent with mode="plan" after the current run finishes (same
-pattern as ProFollowupMiddleware).  Adaptation attempts are capped at 2; on the
-third the user must intervene manually.
+events automatically spawn a daemon thread that re-invokes the agent with
+mode="plan" after the current run finishes (same pattern as
+ProFollowupMiddleware).  Adaptation attempts are capped at 2; on the third the
+user must intervene manually.  Complexity-based escalation has been removed —
+users opt into Plan Mode directly via the UI (Shift+Tab).
 """
 
 from __future__ import annotations
 
 import logging
-import re
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -52,30 +52,6 @@ logger = logging.getLogger(__name__)
 
 _MAX_AUTO_ADAPTATION_ATTEMPTS = 2
 _WORK_MODE_REPEAT_THRESHOLD = 5
-_WORD_RE = re.compile(r"\b\w+\b")
-_COMPLEX_KEYWORDS = (
-    "plan",
-    "analyze",
-    "analyse",
-    "compare",
-    "design",
-    "build",
-    "implement",
-    "refactor",
-    "migrate",
-    "audit",
-    "review",
-    "investigate",
-    "explore",
-    "research",
-    "end-to-end",
-    "comprehensive",
-    "all of",
-    "multi-step",
-    "roadmap",
-    "architecture",
-    "proposal",
-)
 
 
 def _utc_now_iso() -> str:
@@ -87,64 +63,6 @@ def _is_report_todo(todo_content: str) -> bool:
     return "report" in lowered or "comprehensive" in lowered
 
 
-def _extract_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict) and isinstance(block.get("text"), str):
-                parts.append(block["text"])
-        return "\n".join(parts)
-    return str(content)
-
-
-def _has_keyword(text: str, keyword: str) -> bool:
-    if " " in keyword or "-" in keyword:
-        return keyword in text
-    return keyword in set(_WORD_RE.findall(text))
-
-
-def _classify_complexity(user_prompt: str) -> str:
-    text = user_prompt.strip()
-    lowered = text.lower()
-    if not text or len(text) < 25:
-        return "trivial"
-    if any(_has_keyword(lowered, kw) for kw in _COMPLEX_KEYWORDS):
-        return "complex"
-    if len(text) > 300 or "\n" in text:
-        return "complex"
-    return "moderate"
-
-
-def _latest_human_prompt(messages: list[Any]) -> str:
-    for message in reversed(messages):
-        if getattr(message, "type", None) != "human":
-            continue
-        text = _extract_text(getattr(message, "content", ""))
-        if text.strip():
-            return text
-    return ""
-
-
-def _runtime_user_prompt(runtime_context: dict[str, Any], messages: list[Any]) -> str:
-    """Resolve the best prompt for complexity classification.
-
-    Prefer the raw user turn text from runtime context because middleware may
-    prepend operational guidance blocks (e.g. <mounted_folder>) to the last
-    HumanMessage before Work Mode runs.
-    """
-    current_turn = str(runtime_context.get("current_turn_text") or "").strip()
-    if current_turn:
-        return current_turn
-    original_request = str(runtime_context.get("original_user_request") or "").strip()
-    if original_request:
-        return original_request
-    return _latest_human_prompt(messages)
-
-
 class WorkModeMiddlewareState(AgentState):
     """Compatible with the ThreadState schema."""
 
@@ -153,7 +71,6 @@ class WorkModeMiddlewareState(AgentState):
     plan_history: NotRequired[list[dict] | None]
     work_mode: NotRequired[dict | None]
     phase_execution: NotRequired[dict | None]
-    complexity_tier: NotRequired[str | None]
     deferred_task_calls: NotRequired[list[dict] | None]
 
 
@@ -262,7 +179,7 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
     5. Returns None when all phases are done → model summarises and terminates
 
     Phase 4 (auto-cycle): when auto_mode=True in runtime context, blocked plans
-    and complex requests automatically trigger a Plan Mode re-run (capped at 2).
+    automatically trigger a Plan Mode re-run (capped at 2).
     """
 
     state_schema = WorkModeMiddlewareState
@@ -345,25 +262,6 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
 
         # ── No plan yet ────────────────────────────────────────────────────────
         if not nodes:
-            complexity_tier = state.get("complexity_tier")
-            if not complexity_tier:
-                prompt = _runtime_user_prompt(runtime_context, state.get("messages", []) or [])
-                if prompt:
-                    complexity_tier = _classify_complexity(prompt)
-                    if complexity_tier:
-                        if complexity_tier == "complex":
-                            self._handle_complexity_escalation(
-                                auto_mode=auto_mode,
-                                thread_id=thread_id,
-                                requested_model_name=requested_model_name,
-                            )
-                        return {"complexity_tier": complexity_tier}
-            if complexity_tier == "complex":
-                self._handle_complexity_escalation(
-                    auto_mode=auto_mode,
-                    thread_id=thread_id,
-                    requested_model_name=requested_model_name,
-                )
             return None
 
         if plan_state:
@@ -645,38 +543,6 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
         return self.before_model(state, runtime)
 
     # ── Private helpers ────────────────────────────────────────────────────────
-
-    def _handle_complexity_escalation(
-        self,
-        *,
-        auto_mode: bool,
-        thread_id: str | None,
-        requested_model_name: str | None,
-    ) -> None:
-        """Emit complexity_escalation SSE. If auto_mode, spawn a Plan Mode re-run."""
-        try:
-            writer = get_stream_writer()
-            writer({
-                "type": "complexity_escalation",
-                "source": "work_mode_middleware",
-                "complexity_tier": "complex",
-                "recommended_action": "plan_mode",
-                "message": "This request looks complex. Switching to Plan Mode is recommended.",
-            })
-        except Exception:
-            logger.exception("Failed to emit complexity_escalation SSE")
-
-        if auto_mode and isinstance(thread_id, str) and thread_id:
-            _spawn_plan_rerun(
-                thread_id=thread_id,
-                requested_model_name=requested_model_name,
-                system_message=(
-                    "Generate a detailed structured plan for the previous user request. "
-                    "Work Mode detected this request is too complex for direct execution."
-                ),
-                thread_name_suffix="-escalation",
-            )
-            logger.info("Auto-cycle: spawned Plan Mode re-run due to complexity_escalation for thread %s", thread_id)
 
     def _handle_plan_adapted(
         self,

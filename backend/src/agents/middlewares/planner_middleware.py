@@ -46,7 +46,6 @@ class PlannerState(AgentState):
     todos: NotRequired[list | None]
     handoff_artifacts: NotRequired[list[str] | None]
     artifacts: NotRequired[list[str] | None]
-    complexity_tier: NotRequired[str | None]
     plan_evaluated: NotRequired[bool]
     plan_history: NotRequired[list[dict[str, Any]] | None]
     planner_ephemeral_handoff: NotRequired[str | None]
@@ -334,40 +333,8 @@ EXAMPLE rich todo for "Search top 10 restaurants":
 
 
 # ---------------------------------------------------------------------------
-# Complexity classification
+# Direct-answer fast path
 # ---------------------------------------------------------------------------
-
-_TRIVIAL_KEYWORDS = ("hello", "hi", "what is", "who is", "define", "translate", "convert")
-_COMPLEX_KEYWORDS = (
-    "plan",
-    "analyze",
-    "analyse",
-    "compare",
-    "design",
-    "build",
-    "implement",
-    "refactor",
-    "migrate",
-    "audit",
-    "review",
-    "investigate",
-    "explore",
-    "research",
-    "end-to-end",
-    "comprehensive",
-    "all of",
-    "multi-step",
-    "trip plan",
-    "defence",
-    "legal",
-    "multiple documents",
-    "law",
-    "contract",
-    "strategy",
-    "roadmap",
-    "architecture",
-    "proposal",
-)
 
 _DIRECT_ANSWER_MARKERS = (
     "checklist",
@@ -431,31 +398,6 @@ _DIRECT_ANSWER_BLOCKERS = (
     "real-time",
 )
 
-_WORD_RE = re.compile(r"\b\w+\b")
-
-
-def _has_keyword(text: str, keyword: str) -> bool:
-    """Match single-word keywords by token, multi-word keywords by substring."""
-    if " " in keyword or "-" in keyword:
-        return keyword in text
-    return keyword in set(_WORD_RE.findall(text))
-
-
-def _classify_complexity(user_prompt: str) -> str:
-    """Returns 'trivial', 'moderate', or 'complex'."""
-    text = user_prompt.strip()
-    lowered = text.lower()
-    if not text or len(text) < 25:
-        return "trivial"
-    if any(_has_keyword(lowered, kw) for kw in _TRIVIAL_KEYWORDS) and len(text) < 80:
-        return "trivial"
-    if any(_has_keyword(lowered, kw) for kw in _COMPLEX_KEYWORDS):
-        return "complex"
-    if len(text) > 300 or "\n" in text:
-        return "complex"
-    return "moderate"
-
-
 def _looks_like_direct_answer_request(user_prompt: str) -> bool:
     text = " ".join(user_prompt.lower().split())
     if len(text) > 600:
@@ -471,11 +413,6 @@ def _looks_like_direct_answer_request(user_prompt: str) -> bool:
     if has_direct_marker and has_direct_domain:
         return True
     return False
-
-
-# Legacy alias used by agent.py harness check
-def _looks_trivial(user_prompt: str, *, plan_mode: bool = False) -> bool:  # noqa: ARG001
-    return _classify_complexity(user_prompt) == "trivial"
 
 
 # ---------------------------------------------------------------------------
@@ -851,15 +788,11 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         if not user_prompt.strip():
             return None
 
-        # Classify before emitting planning_started so skipped fast paths do not
-        # show a planning spinner or pay an LLM planner call.
-        tier = _classify_complexity(user_prompt)
-        if tier == "trivial":
-            append_runtime_event(runtime, {"source": "planner_middleware", "decision": "skipped_trivial", "prompt_chars": len(user_prompt)})
-            return {"complexity_tier": "trivial"}
+        # Direct-answer fast path: skip the planner LLM entirely for queries that
+        # are well-served by a single-shot response (comparisons, checklists, etc.).
         if _looks_like_direct_answer_request(user_prompt):
-            append_runtime_event(runtime, {"source": "planner_middleware", "decision": "skipped_direct_answer", "prompt_chars": len(user_prompt), "complexity_tier": tier})
-            return {"complexity_tier": "moderate"}
+            append_runtime_event(runtime, {"source": "planner_middleware", "decision": "skipped_direct_answer", "prompt_chars": len(user_prompt)})
+            return None
 
         # Emit planning_started immediately — fires within ~100ms of request arrival
         append_runtime_event(runtime, {"source": "planner_middleware", "event": "planning_started"})
@@ -878,7 +811,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
 
         if plan_output.trivial:
             append_runtime_event(runtime, {"source": "planner_middleware", "decision": "llm_classified_trivial"})
-            return {"complexity_tier": "trivial"}
+            return None
 
         if not plan_output.parse_ok:
             append_runtime_event(runtime, {"source": "planner_middleware", "decision": "parse_failed_fallback", "todo_count": len(plan_output.todos)})
@@ -1184,7 +1117,6 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
             "todos": _legacy_todos(nodes),
             "handoff_artifacts": [p for p in [plan_path, latest_alias_path] if p],
             "artifacts": artifact_paths,
-            "complexity_tier": tier,
             "plan_evaluated": False,
             "planner_ephemeral_handoff": planner_handoff.content,
             "planner_ephemeral_clarification": clarification_prompt_message.content if clarification_prompt_message is not None else None,

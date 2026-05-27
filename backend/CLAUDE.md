@@ -111,7 +111,7 @@ CI runs these regression tests for every pull request via [.github/workflows/bac
 - Entry point: `make_plan_agent(config: RunnableConfig)` registered in `langgraph.json` as graph `plan_agent`
 - Forces `current_mode="plan"` in configurable, then delegates to `make_work_agent(..., prompt_template_fn=plan_apply_prompt_template)` — the middleware registry conditionally activates plan-mode middlewares (`PlannerMiddleware`, `PlanEvaluatorMiddleware`, `PlanExecutionGateMiddleware`, `PlanFileSyncMiddleware`, `TodoDagMiddleware`) when `is_plan_mode=True`
 - Owns `PLAN_MODE_SECTION` and `PLAN_BACKGROUND_FOLLOWUP_SECTION`; work-mode prompt is now free of plan-mode content
-- Auto-escalation from work mode (`WorkModeMiddleware._spawn_plan_rerun`) and manual UI toggle both route here
+- Entry to Plan Mode is user-initiated via the UI (Shift+Tab) — the previous complexity-based auto-escalation from Work Mode has been removed. `WorkModeMiddleware._spawn_plan_rerun` still exists but is now triggered only by plan-adaptation in auto-mode runs.
 
 **Mode resolution** (`src/agents/common/mode.py`):
 - Canonical field is `current_mode: Literal["work", "plan"]` in `config.configurable`

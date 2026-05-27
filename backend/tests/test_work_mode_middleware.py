@@ -65,14 +65,11 @@ def _node(
 def _state(
     *,
     nodes: list[dict] | None = None,
-    complexity_tier: str | None = None,
     phase_execution: dict | None = None,
 ) -> dict:
     state: dict = {}
     if nodes is not None:
         state["todo_graph"] = {"nodes": nodes}
-    if complexity_tier:
-        state["complexity_tier"] = complexity_tier
     if phase_execution is not None:
         state["phase_execution"] = phase_execution
     return state
@@ -122,67 +119,6 @@ class TestNoPlan:
         ):
             result = mw.before_model(_state(nodes=[]), _runtime())
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# Complexity escalation (no plan + complexity_tier="complex")
-# ---------------------------------------------------------------------------
-
-class TestComplexityEscalation:
-    def test_emits_complexity_escalation_sse(self):
-        mw = WorkModeMiddleware()
-        emitted = []
-
-        with patch(
-            "src.agents.middlewares.work_mode_middleware.get_stream_writer",
-            return_value=lambda e: emitted.append(e),
-        ):
-            result = mw.before_model(
-                _state(complexity_tier="complex"), _runtime()
-            )
-
-        assert result is None
-        assert any(e.get("type") == "complexity_escalation" for e in emitted)
-
-    def test_spawns_plan_rerun_when_auto_mode(self):
-        mw = WorkModeMiddleware()
-        spawned: list[dict] = []
-
-        def fake_spawn(**kwargs):
-            spawned.append(kwargs)
-
-        with patch(
-            "src.agents.middlewares.work_mode_middleware.get_stream_writer",
-            return_value=lambda e: None,
-        ), patch(
-            "src.agents.middlewares.work_mode_middleware._spawn_plan_rerun",
-            side_effect=fake_spawn,
-        ):
-            mw.before_model(
-                _state(complexity_tier="complex"),
-                _runtime(auto_mode=True, thread_id="t-esc"),
-            )
-
-        assert len(spawned) == 1
-        assert spawned[0]["thread_id"] == "t-esc"
-
-    def test_no_spawn_when_auto_mode_false(self):
-        mw = WorkModeMiddleware()
-        spawned: list[dict] = []
-
-        with patch(
-            "src.agents.middlewares.work_mode_middleware.get_stream_writer",
-            return_value=lambda e: None,
-        ), patch(
-            "src.agents.middlewares.work_mode_middleware._spawn_plan_rerun",
-            side_effect=lambda **kw: spawned.append(kw),
-        ):
-            mw.before_model(
-                _state(complexity_tier="complex"),
-                _runtime(auto_mode=False),
-            )
-
-        assert spawned == []
 
 
 # ---------------------------------------------------------------------------

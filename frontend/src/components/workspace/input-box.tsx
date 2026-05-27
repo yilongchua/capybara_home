@@ -220,6 +220,7 @@ export function InputBox({
   status = "ready",
   context,
   extraHeader,
+  overlay,
   isNewThread,
   threadId,
   newChatHref,
@@ -242,6 +243,7 @@ export function InputBox({
     reasoning_effort?: "minimal" | "low" | "medium" | "high";
   };
   extraHeader?: React.ReactNode;
+  overlay?: React.ReactNode;
   isNewThread?: boolean;
   threadId: string;
   newChatHref?: string;
@@ -1265,6 +1267,15 @@ export function InputBox({
           textInput.setInput("");
         }}
       />
+      {!isPlanMode && !disabled && (
+        <div className="text-muted-foreground/70 mb-1.5 flex items-center justify-center gap-1 text-[11px] leading-none">
+          <span>Complex task? Try Plan Mode</span>
+          <span aria-hidden>→</span>
+          <kbd className="border-border/60 bg-muted/60 rounded-sm border px-1 py-px font-mono text-[10px]">
+            Shift + Tab
+          </kbd>
+        </div>
+      )}
       <PromptInput
         className={cn(
           "bg-background/85 rounded-2xl backdrop-blur-sm transition-all duration-300 ease-out *:data-[slot='input-group']:rounded-2xl",
@@ -1310,7 +1321,7 @@ export function InputBox({
         </PromptInputAttachments>
         <PromptInputBody className="absolute top-0 right-0 left-0 z-3">
           <PromptInputTextarea
-            className={cn("size-full")}
+            className={cn("size-full min-h-20 max-h-60")}
             disabled={disabled}
             placeholder={placeholderText}
             autoFocus={autoFocus}
@@ -1318,6 +1329,7 @@ export function InputBox({
             onSpecialKeyDown={handleInputSpecialKeyDown}
           />
         </PromptInputBody>
+        {overlay}
 
         <PromptInputFooter className="flex w-full min-w-0 flex-wrap items-center gap-2">
           <PromptInputTools className="min-w-0 flex-wrap">

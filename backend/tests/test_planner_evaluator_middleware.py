@@ -76,7 +76,6 @@ def test_planner_creates_plan_todos_and_handoffs(monkeypatch, tmp_path: Path):
     assert update is not None
     assert update["plan"]["title"] == "Build feature"
     assert len(update["todo_graph"]["nodes"]) == 2
-    assert update["complexity_tier"] in {"moderate", "complex"}
     assert update["plan_evaluated"] is False
     assert (tmp_path / "workspace" / "plan.md").exists()
     versioned = list((tmp_path / "workspace" / "plans").glob("plan-*.md"))
@@ -146,7 +145,7 @@ def test_planner_skips_direct_answer_comparison_without_llm(monkeypatch, tmp_pat
 
     update = middleware.before_model(state, _runtime())
 
-    assert update == {"complexity_tier": "moderate"}
+    assert update is None
 
 
 def test_planner_writes_versioned_plan_and_latest_alias(monkeypatch, tmp_path: Path):

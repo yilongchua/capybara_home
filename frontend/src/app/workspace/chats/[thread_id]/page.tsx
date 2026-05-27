@@ -8,19 +8,19 @@ import { toast } from "sonner";
 import { type PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { Badge } from "@/components/ui/badge";
 import { AdaptationNotice } from "@/components/workspace/adaptation-notice";
+import { useDirectory } from "@/components/workspace/artifacts/context";
 import { MountFolderBadge } from "@/components/workspace/chat-ui/mount-folder-badge";
 import {
   ChatBox,
   useThreadChat,
 } from "@/components/workspace/chats";
-import { ComplexityEscalationPopup } from "@/components/workspace/complexity-escalation-popup";
-import { ExecutePlanPopup } from "@/components/workspace/execute-plan-popup";
 import {
   InputBox,
   type InputBoxSubmitOptions,
 } from "@/components/workspace/input-box";
 import { MessageList } from "@/components/workspace/messages";
 import { ThreadContext } from "@/components/workspace/messages/context";
+import { PlanApprovalOverlay } from "@/components/workspace/plan-approval-overlay";
 import { QueuedMessageList } from "@/components/workspace/queued-message-list";
 import { ThreadTitle } from "@/components/workspace/thread-title";
 import { Welcome } from "@/components/workspace/welcome";
@@ -39,7 +39,7 @@ import {
   getPendingChatLaunchPayload,
 } from "@/core/threads/chat-launch-payload";
 import type { ForkDraft } from "@/core/threads/fork";
-import type { ComplexityEscalationEvent, PlanAdaptedEvent, PlanCreatedEvent } from "@/core/threads/hooks";
+import type { PlanAdaptedEvent, PlanCreatedEvent } from "@/core/threads/hooks";
 import { useRenameThread, useThreadStream } from "@/core/threads/hooks";
 import { useContextTokens } from "@/core/threads/use-context-tokens";
 import { useRejoinRunningRun } from "@/core/threads/use-rejoin-running-run";
@@ -85,19 +85,6 @@ function formatMountedThreadTitle(title: string): string {
 
 function isMountPlaceholderTitle(title: string): boolean {
   return title === "" || title === "mount-drive";
-}
-
-function getComplexityEscalationKey(
-  event: ComplexityEscalationEvent | null | undefined,
-): string | null {
-  if (!event) {
-    return null;
-  }
-  return [
-    event.complexity_tier ?? "",
-    event.recommended_action ?? "",
-    event.message ?? "",
-  ].join("|");
 }
 
 function upsertNotice(
@@ -226,7 +213,6 @@ function ChatPageContent({
 
   const [planCreatedEvent, setPlanCreatedEvent] = useState<PlanCreatedEvent | null>(null);
   const [adaptationEvent, setAdaptationEvent] = useState<PlanAdaptedEvent | null>(null);
-  const [escalationEvent, setEscalationEvent] = useState<ComplexityEscalationEvent | null>(null);
   const [forkDraft, setForkDraft] = useState<ForkDraft | null>(null);
   const [uiNotices, setUiNotices] = useState<LiveGenerationNotice[]>([]);
   const [pendingExecutePlan, setPendingExecutePlan] = useState(false);
@@ -238,7 +224,6 @@ function ChatPageContent({
   const [hiddenPlanEventKey, setHiddenPlanEventKey] = useState<string | null>(null);
   const [pendingMountPath, setPendingMountPath] = useState<string | null>(null);
   const suppressedAutoExecutePlanKeyRef = useRef<string | null>(null);
-  const suppressedComplexityEscalationKeyRef = useRef<string | null>(null);
   const executePlanRetryCountRef = useRef(0);
   const finalizedMountedTitleRef = useRef<string | null>(null);
   const finalizingMountedTitleRef = useRef<string | null>(null);
@@ -286,19 +271,6 @@ function ChatPageContent({
       setClarificationPendingOverride(null);
     },
     onPlanAdapted: (event) => setAdaptationEvent(event),
-    onComplexityEscalation: (event) => {
-      const eventKey = getComplexityEscalationKey(event);
-      if (!eventKey) {
-        return;
-      }
-      if (settings.context.mode === "plan") {
-        return;
-      }
-      if (suppressedComplexityEscalationKeyRef.current === eventKey) {
-        return;
-      }
-      setEscalationEvent(event);
-    },
   });
 
   const { runningRun } = useRejoinRunningRun(isNewThread ? null : threadId, thread, {
@@ -713,17 +685,6 @@ function ChatPageContent({
   }, [isMountBootstrapRunning, mountStatusNoticeId, mountedFolder, mountedFolderFiles, mountedNoticeId, pendingMountPath, renameThread, runningRun, thread.isLoading, thread.messages.length, thread.values.title, threadId]);
 
   useEffect(() => {
-    if (settings.context.mode !== "plan") {
-      return;
-    }
-    if (!escalationEvent) {
-      return;
-    }
-    suppressedComplexityEscalationKeyRef.current = getComplexityEscalationKey(escalationEvent);
-    setEscalationEvent(null);
-  }, [escalationEvent, settings.context.mode]);
-
-  useEffect(() => {
     if (!pendingExecutePlan || thread.isLoading) {
       return;
     }
@@ -747,6 +708,32 @@ function ChatPageContent({
     setPlanCreatedEvent(null);
   }, [effectivePlanCreatedEvent, planEventKey, setSettings, settings.context]);
 
+  const handleEditPlanSuggestion = useCallback(
+    async (suggestion: string) => {
+      const trimmed = suggestion.trim();
+      if (!trimmed) {
+        return;
+      }
+      setSettings("context", { ...settings.context, mode: "plan" });
+      await sendMessage(
+        threadId,
+        {
+          text: [
+            "Apply the following user edits to the current draft plan:",
+            "",
+            trimmed,
+            "",
+            "Keep the plan in draft status (do not execute yet) and rewrite plan.md to match.",
+          ].join("\n"),
+          files: [],
+        },
+        undefined,
+        { mode: "plan" },
+      );
+    },
+    [sendMessage, setSettings, settings.context, threadId],
+  );
+
   const handleRevisePlan = useCallback(() => {
     const blockedIds = adaptationEvent?.blocked_ids ?? [];
     const blockedContext = blockedIds.length > 0
@@ -761,17 +748,6 @@ function ChatPageContent({
       { mode: "plan" },
     );
   }, [adaptationEvent, sendMessage, setSettings, settings.context, threadId]);
-
-  const handleSwitchToPlan = useCallback(() => {
-    suppressedComplexityEscalationKeyRef.current = getComplexityEscalationKey(escalationEvent);
-    setEscalationEvent(null);
-    setSettings("context", { ...settings.context, mode: "plan" });
-  }, [escalationEvent, setEscalationEvent, setSettings, settings.context]);
-
-  const handleContinueWork = useCallback(() => {
-    suppressedComplexityEscalationKeyRef.current = getComplexityEscalationKey(escalationEvent);
-    setEscalationEvent(null);
-  }, [escalationEvent]);
 
   const handleSubmitPlanRevision = useCallback(async (markdown: string) => {
     const currentPlanTitle = String(thread.values.plan?.title ?? "Draft Plan");
@@ -799,7 +775,6 @@ function ChatPageContent({
 
   const handleSubmit = useCallback(
     (message: PromptInputMessage, options?: InputBoxSubmitOptions) => {
-      suppressedComplexityEscalationKeyRef.current = null;
       const maybeIntent = normalizeIntent(message.text ?? "");
       const planStatus = String(thread.values.plan?.status ?? "").toLowerCase();
       const hasPlanReadyForExecution = planStatus === "draft" || planStatus === "approved";
@@ -989,20 +964,6 @@ function ChatPageContent({
                   </div>
                 )}
                   <div className="relative">
-                  {effectivePlanCreatedEvent && !isNewThread && effectivePlanEventKey !== hiddenPlanEventKey && !(effectivePlanCreatedEvent.auto_approved && settings.context.auto_mode === true) && (
-                    <ExecutePlanPopup
-                      event={effectivePlanCreatedEvent}
-                      planPath={planReviewPath}
-                      onExecute={handleExecutePlan}
-                      onDismiss={handleKeepEditingPlan}
-                      clarificationPending={clarificationPending}
-                      clarificationQuestion={activeClarification?.question}
-                      clarificationOptions={activeClarification?.options ?? []}
-                      onClarify={handleClarifyPlan}
-                      isClarifying={isClarifyingPlan}
-                      isExecuting={isExecutingPlan}
-                    />
-                  )}
                   {adaptationEvent && !isNewThread && (
                     <AdaptationNotice
                       event={adaptationEvent}
@@ -1010,16 +971,42 @@ function ChatPageContent({
                       onDismiss={() => setAdaptationEvent(null)}
                     />
                   )}
-                  {escalationEvent && !isNewThread && (
-                    <ComplexityEscalationPopup
-                      event={escalationEvent}
-                      onSwitchToPlan={handleSwitchToPlan}
-                      onContinueWork={handleContinueWork}
-                      onDismiss={() => {
-                        suppressedComplexityEscalationKeyRef.current = getComplexityEscalationKey(escalationEvent);
-                        setEscalationEvent(null);
-                      }}
-                    />
+                  <PlanReviewBinding
+                    planPath={planReviewPath}
+                    planEventKey={effectivePlanEventKey}
+                    active={Boolean(
+                      effectivePlanCreatedEvent && !isNewThread && effectivePlanEventKey !== hiddenPlanEventKey,
+                    )}
+                  />
+                  {effectivePlanCreatedEvent && !isNewThread && clarificationPending && activeClarification && (
+                    <div className="mb-2 rounded-lg border bg-amber-50/70 px-3 py-2 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-900/30 dark:text-amber-100">
+                      {activeClarification.question ? (
+                        <p className="font-medium">{activeClarification.question}</p>
+                      ) : (
+                        <p className="font-medium">The planner needs a clarification before this plan can be executed.</p>
+                      )}
+                      {activeClarification.options.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {activeClarification.options.map((option) => (
+                            <button
+                              key={option.label}
+                              type="button"
+                              onClick={() => handleClarifyPlan(option.label)}
+                              disabled={isClarifyingPlan}
+                              className={cn(
+                                "rounded-md border px-2 py-1 text-xs",
+                                option.recommended
+                                  ? "border-amber-500 bg-amber-200/70 dark:bg-amber-700/40"
+                                  : "border-amber-300 bg-amber-100/60 dark:border-amber-700/60 dark:bg-amber-900/40",
+                                isClarifyingPlan && "opacity-60",
+                              )}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                   )}
                   <InputBox
                     className={cn("bg-background/5 w-full")}
@@ -1035,6 +1022,21 @@ function ChatPageContent({
                           mode={settings.context.mode}
                         />
                       )
+                    }
+                    overlay={
+                      effectivePlanCreatedEvent &&
+                      !isNewThread &&
+                      effectivePlanEventKey !== hiddenPlanEventKey &&
+                      !clarificationPending &&
+                      !(effectivePlanCreatedEvent.auto_approved && settings.context.auto_mode === true) ? (
+                        <PlanApprovalOverlay
+                          planTitle={effectivePlanCreatedEvent.title}
+                          onExecute={handleExecutePlan}
+                          onCancel={handleKeepEditingPlan}
+                          onSubmitEdit={handleEditPlanSuggestion}
+                          isExecuting={isExecutingPlan}
+                        />
+                      ) : null
                     }
                     disabled={env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true"}
                     contextTokenState={contextTokenState}
@@ -1056,4 +1058,31 @@ function ChatPageContent({
       </ChatBox>
     </ThreadContext.Provider>
   );
+}
+
+function PlanReviewBinding({
+  planPath,
+  planEventKey,
+  active,
+}: {
+  planPath: string;
+  planEventKey: string | null;
+  active: boolean;
+}) {
+  const { select, setOpen } = useDirectory();
+  const lastOpenedKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!active || !planEventKey) {
+      return;
+    }
+    if (lastOpenedKeyRef.current === planEventKey) {
+      return;
+    }
+    lastOpenedKeyRef.current = planEventKey;
+    select(planPath);
+    setOpen(true);
+  }, [active, planEventKey, planPath, select, setOpen]);
+
+  return null;
 }

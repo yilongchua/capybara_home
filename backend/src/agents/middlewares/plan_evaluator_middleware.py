@@ -67,7 +67,6 @@ class PlanEvaluatorState(AgentState):
     plan: NotRequired[dict | None]
     todo_graph: NotRequired[dict | None]
     plan_evaluated: NotRequired[bool]
-    complexity_tier: NotRequired[str | None]
 
 
 def _utc_now_iso() -> str:
@@ -127,8 +126,6 @@ class PlanEvaluatorMiddleware(AgentMiddleware[PlanEvaluatorState]):
         todo_graph = state.get("todo_graph")
         if not todo_graph:
             return False
-        if state.get("complexity_tier") == "trivial":
-            return False
         plan = state.get("plan")
         return bool(plan)
 
@@ -142,7 +139,7 @@ class PlanEvaluatorMiddleware(AgentMiddleware[PlanEvaluatorState]):
 
         title = plan.get("title", "Execution Plan")
         summary = plan.get("summary", "")
-        domain = str(state.get("complexity_tier") or "generic")
+        domain = "generic"
         todos_formatted = _format_todos_for_eval(nodes)
 
         prompt = _PLAN_EVAL_PROMPT.replace("{title}", title).replace("{domain}", domain).replace("{summary}", summary).replace("{todos_formatted}", todos_formatted)

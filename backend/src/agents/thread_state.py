@@ -275,7 +275,6 @@ class ThreadState(AgentState):
     background_followups: NotRequired[list[BackgroundFollowupJob] | None]
     # Auto Mode / Planner phase fields (Phase A + B revamp)
     auto_mode: NotRequired[bool]
-    complexity_tier: NotRequired[str | None]
     plan_evaluated: NotRequired[bool]
     steering_context: NotRequired[str | None]
     pending_steering_intents: NotRequired[list[SteeringIntentState] | None]

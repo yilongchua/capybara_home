@@ -104,13 +104,6 @@ export type PlanAdaptedEvent = {
   max_attempts?: number;
 };
 
-export type ComplexityEscalationEvent = {
-  type: "complexity_escalation";
-  complexity_tier: string;
-  recommended_action: string;
-  message: string;
-};
-
 export type ThreadStreamOptions = {
   threadId?: string | null | undefined;
   context: LocalSettings["context"];
@@ -125,7 +118,6 @@ export type ThreadStreamOptions = {
   onPhaseStarted?: (event: PhaseStartedEvent) => void;
   onPhaseCompleted?: (event: PhaseCompletedEvent) => void;
   onPlanAdapted?: (event: PlanAdaptedEvent) => void;
-  onComplexityEscalation?: (event: ComplexityEscalationEvent) => void;
 };
 
 export type SendMessageOptions = {
@@ -424,7 +416,6 @@ export function useThreadStream({
   onPhaseStarted,
   onPhaseCompleted,
   onPlanAdapted,
-  onComplexityEscalation,
 }: ThreadStreamOptions) {
   const { t } = useI18n();
   // Track the thread ID that is currently streaming to handle thread changes during streaming
@@ -457,7 +448,6 @@ export function useThreadStream({
     onPhaseStarted,
     onPhaseCompleted,
     onPlanAdapted,
-    onComplexityEscalation,
   });
 
   // Keep listeners ref updated with latest callbacks
@@ -473,9 +463,8 @@ export function useThreadStream({
       onPhaseStarted,
       onPhaseCompleted,
       onPlanAdapted,
-      onComplexityEscalation,
     };
-  }, [onStart, onFinish, onToolEnd, onContextTokens, onCompaction, onPlanningStarted, onPlanCreated, onPhaseStarted, onPhaseCompleted, onPlanAdapted, onComplexityEscalation]);
+  }, [onStart, onFinish, onToolEnd, onContextTokens, onCompaction, onPlanningStarted, onPlanCreated, onPhaseStarted, onPhaseCompleted, onPlanAdapted]);
 
   useEffect(() => {
     queueRef.current = messageQueue;
@@ -1060,9 +1049,6 @@ export function useThreadStream({
           break;
         case "plan_adapted":
           listeners.current.onPlanAdapted?.(event as Parameters<typeof listeners.current.onPlanAdapted>[0]);
-          break;
-        case "complexity_escalation":
-          listeners.current.onComplexityEscalation?.(event as Parameters<typeof listeners.current.onComplexityEscalation>[0]);
           break;
       }
     },
