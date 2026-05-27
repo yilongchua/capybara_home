@@ -115,7 +115,7 @@ class PermissionMiddleware(AgentMiddleware[AgentState]):
         tool_name = request.tool_call.get("name", "")
         args_text = _serialize_tool_args(request.tool_call.get("args", {}))
 
-        if tool_name == "ask_clarification":
+        if tool_name == "ask_user_for_clarification":
             return "allow"
 
         for rule in _candidate_rules(self._deny_index, tool_name):
@@ -153,7 +153,7 @@ class PermissionMiddleware(AgentMiddleware[AgentState]):
             "Reply with your preferred action and I will continue."
         )
         # Use a distinct tool name so frontends and ClarificationMiddleware do not
-        # conflate a permission prompt with a model-initiated ask_clarification call.
+        # conflate a permission prompt with a model-initiated ask_user_for_clarification call.
         tool_message = ToolMessage(
             content=message,
             tool_call_id=request.tool_call.get("id", ""),

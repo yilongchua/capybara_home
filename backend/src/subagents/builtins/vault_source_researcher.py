@@ -71,7 +71,7 @@ You operate purely through web_search and save_to_knowledge_vault. You have no s
     tools=["web_search", "save_to_knowledge_vault"],
     disallowed_tools=[
         "task",
-        "ask_clarification",
+        "ask_user_for_clarification",
         "present_files",
         "write_file",
         "str_replace",

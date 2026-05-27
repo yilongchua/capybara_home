@@ -96,7 +96,7 @@ backend/src/
 ├── tools/                   # Agent tools
 │   └── builtins/           # Built-in tools
 │       ├── present_file_tool.py
-│       ├── ask_clarification_tool.py
+│       ├── ask_user_for_clarification_tool.py
 │       └── view_image_tool.py
 │
 ├── mcp/                     # MCP integration

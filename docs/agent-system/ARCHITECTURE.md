@@ -194,7 +194,7 @@ class ThreadState(AgentState):
 │  (src/tools/)       │  │  (config.yaml)      │  │  (extensions.json)  │
 ├─────────────────────┤  ├─────────────────────┤  ├─────────────────────┤
 │ - present_file      │  │ - web_search        │  │ - github            │
-│ - ask_clarification │  │ - bash              │  │ - filesystem        │
+│ - ask_user_for_clarification │  │ - bash              │  │ - filesystem        │
 │ - view_image        │  │ - read_file         │  │ - postgres          │
 │                     │  │ - read_file         │  │ - brave-search      │
 │                     │  │ - write_file        │  │ - puppeteer         │

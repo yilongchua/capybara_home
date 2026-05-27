@@ -8,7 +8,7 @@ from src.community.scope_search import scope_search_tool
 from src.community.web_search import web_search_tool
 from src.config import get_app_config
 from src.reflection import resolve_variable
-from src.tools.builtins import ask_clarification_tool, present_file_tool, recall_tool, task_tool, view_image_tool, write_todos_tool
+from src.tools.builtins import ask_user_for_clarification_tool, present_file_tool, recall_tool, task_tool, view_image_tool, write_todos_tool
 from src.tools.loader import build_structured_tool, filter_mcp_tools_by_policy, load_external_policy, load_tool_definitions
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ EXTERNAL_TOOLS_JSON = Path(__file__).resolve().parent / "external_tools.json"
 
 BUILTIN_TOOLS = [
     present_file_tool,
-    ask_clarification_tool,
+    ask_user_for_clarification_tool,
     recall_tool,
     write_todos_tool,
     web_search_tool,

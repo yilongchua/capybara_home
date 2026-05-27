@@ -74,7 +74,7 @@ You are {agent_name}, an open-source super agent.
 - Multiple valid approaches exist and any would satisfy the request
 - The task is reversible and a best-effort attempt is faster than a round-trip
 
-**Stop and call `ask_clarification` only when:**
+**Stop and call `ask_user_for_clarification` only when:**
 - A **destructive or irreversible** operation needs explicit confirmation (deleting files, dropping tables, overwriting production config)
 - **Critical information is absent with no reasonable default** — the work literally cannot proceed without it (e.g. target file not specified for deletion, deploy environment unknown)
 
@@ -85,14 +85,14 @@ You are {agent_name}, an open-source super agent.
 
 **Usage:**
 ```python
-ask_clarification(
+ask_user_for_clarification(
     question="Which environment should I deploy to?",
     clarification_type="missing_info",
     options=["staging", "production"]
 )
 ```
 
-After `ask_clarification` is called, execution stops and waits for the user's response.
+After `ask_user_for_clarification` is called, execution stops and waits for the user's response.
 </clarification_system>
 
 {skills_section}
@@ -153,7 +153,7 @@ Recent breakthroughs in language models have also accelerated progress
 </citations>
 
 <critical_reminders>
-- **Clarification**: Use `ask_clarification` only for genuinely missing critical info or irreversible operations. For ambiguity, state your assumption and proceed.
+- **Clarification**: Use `ask_user_for_clarification` only for genuinely missing critical info or irreversible operations. For ambiguity, state your assumption and proceed.
 {subagent_reminder}- Skill First: Always load the relevant skill before starting **complex** tasks.
 - Progressive Loading: Load resources incrementally as referenced in skills
 - Output Files: Final deliverables must be in `/mnt/user-data/workspace`
@@ -188,7 +188,7 @@ CLARIFICATION_SECTION = """<clarification_system>
 - Multiple valid approaches exist and any would satisfy the request
 - The task is reversible and a best-effort attempt is faster than a round-trip
 
-**Stop and call `ask_clarification` only when:**
+**Stop and call `ask_user_for_clarification` only when:**
 - A **destructive or irreversible** operation needs explicit confirmation (deleting files, dropping tables, overwriting production config)
 - **Critical information is absent with no reasonable default** — the work literally cannot proceed without it (e.g. target file not specified for deletion, deploy environment unknown)
 
@@ -199,14 +199,14 @@ CLARIFICATION_SECTION = """<clarification_system>
 
 **Usage:**
 ```python
-ask_clarification(
+ask_user_for_clarification(
     question="Which environment should I deploy to?",
     clarification_type="missing_info",
     options=["staging", "production"]
 )
 ```
 
-After `ask_clarification` is called, execution stops and waits for the user's response.
+After `ask_user_for_clarification` is called, execution stops and waits for the user's response.
 </clarification_system>"""
 
 WORKING_DIRECTORY_SECTION = """<working_directory existed="true">
@@ -265,7 +265,7 @@ Recent breakthroughs in language models have also accelerated progress
 </citations>"""
 
 CRITICAL_REMINDERS_SECTION_TEMPLATE = """<critical_reminders>
-- **Clarification**: Use `ask_clarification` only for genuinely missing critical info or irreversible operations. For ambiguity, state your assumption and proceed.
+- **Clarification**: Use `ask_user_for_clarification` only for genuinely missing critical info or irreversible operations. For ambiguity, state your assumption and proceed.
 {subagent_reminder}- Skill First: Always load the relevant skill before starting **complex** tasks.
 - Progressive Loading: Load resources incrementally as referenced in skills
 - Output Files: Final deliverables must be in `/mnt/user-data/workspace`

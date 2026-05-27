@@ -104,7 +104,7 @@ def _timeout_message(stage: str | None, timeout_s: int, request: ModelRequest | 
             "tool calls."
         )
     elif stage == "generator":
-        hint = "The first reasoning pass did not complete in time. Reply with a single concrete tool call (smallest viable next step) or `ask_clarification` if the request is ambiguous. Do not retry the same prompt."
+        hint = "The first reasoning pass did not complete in time. Reply with a single concrete tool call (smallest viable next step) or `ask_user_for_clarification` if the request is ambiguous. Do not retry the same prompt."
     elif stage == "planner":
         hint = "Planner timed out. Skip planning and proceed with a minimal single-tool first action (e.g. one web_search), or stop."
     else:

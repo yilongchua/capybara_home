@@ -45,7 +45,7 @@ def _extract_response_text(result: dict | list) -> str:
 
     Handles special cases:
     - Regular AI text responses
-    - Clarification interrupts (``ask_clarification`` tool messages)
+    - Clarification interrupts (``ask_user_for_clarification`` tool messages)
     - AI messages with tool_calls but no text content
     """
     if isinstance(result, list):
@@ -67,8 +67,8 @@ def _extract_response_text(result: dict | list) -> str:
         if msg_type == "human":
             break
 
-        # Check for tool messages from ask_clarification (interrupt case)
-        if msg_type == "tool" and msg.get("name") == "ask_clarification":
+        # Check for tool messages from ask_user_for_clarification (interrupt case)
+        if msg_type == "tool" and msg.get("name") == "ask_user_for_clarification":
             content = msg.get("content", "")
             if isinstance(content, str) and content:
                 return content

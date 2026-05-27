@@ -82,7 +82,7 @@ def test_apply_clarification_progress_finishes_all_questions():
     }
     messages = [
         HumanMessage(name="planner_clarification_required", content="Question: scope"),
-        ToolMessage(content="[Auto Mode] Selected: Cross-industry global trends", tool_call_id="tc-1", name="ask_clarification"),
+        ToolMessage(content="[Auto Mode] Selected: Cross-industry global trends", tool_call_id="tc-1", name="ask_user_for_clarification"),
     ]
     progress = apply_clarification_progress(plan, messages)
     assert progress is not None

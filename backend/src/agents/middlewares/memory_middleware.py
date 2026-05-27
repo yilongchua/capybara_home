@@ -181,10 +181,10 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
         assistant_messages = [m for m in filtered_messages if getattr(m, "type", None) == "ai"]
 
         # Also capture when a clarification interrupt ended the turn — there will be
-        # user messages but no final AI response (the agent called ask_clarification
+        # user messages but no final AI response (the agent called ask_user_for_clarification
         # which fires Command(goto=END) before producing a plain AI reply).
         has_clarification = any(
-            getattr(m, "name", "") == "ask_clarification"
+            getattr(m, "name", "") == "ask_user_for_clarification"
             for m in state.get("messages", [])
             if getattr(m, "type", "") == "tool"
         )

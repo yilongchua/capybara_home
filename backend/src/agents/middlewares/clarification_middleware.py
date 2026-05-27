@@ -26,7 +26,7 @@ class ClarificationMiddlewareState(AgentState):
 class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
     """Intercepts clarification tool calls and interrupts execution to present questions to the user.
 
-    When the model calls the `ask_clarification` tool, this middleware:
+    When the model calls the `ask_user_for_clarification` tool, this middleware:
     1. Intercepts the tool call before execution
     2. Extracts the clarification question and metadata
     3. Formats a user-friendly message
@@ -153,7 +153,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
                             ToolMessage(
                                 content=f"[Auto Mode] Selected: {recommended}",
                                 tool_call_id=tool_call_id,
-                                name="ask_clarification",
+                                name="ask_user_for_clarification",
                             )
                         ]
                     }
@@ -166,11 +166,11 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         tool_message = ToolMessage(
             content=formatted_message,
             tool_call_id=tool_call_id,
-            name="ask_clarification",
+            name="ask_user_for_clarification",
         )
 
         # Note: We don't add an extra AIMessage here - the frontend will detect
-        # and display ask_clarification tool messages directly
+        # and display ask_user_for_clarification tool messages directly
         return Command(
             update={"messages": [tool_message]},
             goto=END,
@@ -182,7 +182,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
     ) -> ToolMessage | Command:
-        """Intercept ask_clarification tool calls and interrupt execution (sync version).
+        """Intercept ask_user_for_clarification tool calls and interrupt execution (sync version).
 
         Args:
             request: Tool call request
@@ -191,8 +191,8 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         Returns:
             Command that interrupts execution with the formatted clarification message
         """
-        # Check if this is an ask_clarification tool call
-        if request.tool_call.get("name") != "ask_clarification":
+        # Check if this is an ask_user_for_clarification tool call
+        if request.tool_call.get("name") != "ask_user_for_clarification":
             # Not a clarification call, execute normally
             return handler(request)
 
@@ -204,7 +204,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
     ) -> ToolMessage | Command:
-        """Intercept ask_clarification tool calls and interrupt execution (async version).
+        """Intercept ask_user_for_clarification tool calls and interrupt execution (async version).
 
         Args:
             request: Tool call request
@@ -213,8 +213,8 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         Returns:
             Command that interrupts execution with the formatted clarification message
         """
-        # Check if this is an ask_clarification tool call
-        if request.tool_call.get("name") != "ask_clarification":
+        # Check if this is an ask_user_for_clarification tool call
+        if request.tool_call.get("name") != "ask_user_for_clarification":
             # Not a clarification call, execute normally
             return await handler(request)
 

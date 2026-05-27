@@ -31,7 +31,7 @@ from src.models import create_chat_model, resolve_model_name
 logger = logging.getLogger(__name__)
 
 _ALLOWED_WHEN_DRAFT = {
-    "ask_clarification",
+    "ask_user_for_clarification",
     "write_todos",
     "recall",
     # scope_search is the Plan-Mode wrapper around web_search. It exists so the
@@ -286,13 +286,13 @@ class PlanExecutionGateMiddleware(AgentMiddleware[PlanExecutionGateState]):
 
         clarification_pending = bool(plan.get("clarification_pending"))
 
-        if clarification_pending and tool_name not in {"ask_clarification", "scope_search"}:
+        if clarification_pending and tool_name not in {"ask_user_for_clarification", "scope_search"}:
             question = str(plan.get("clarification_question") or "Please answer the pending clarification before execution.")
             return self._build_block_command(
                 request,
                 (
                     "[plan_gate] Clarification is required before plan execution. "
-                    "Call `ask_clarification` first.\n"
+                    "Call `ask_user_for_clarification` first.\n"
                     f"Pending question: {question}"
                 ),
             )

@@ -143,9 +143,9 @@ Along with the plan, the planner creates a Todo Directed Acyclic Graph (DAG) und
 
 ### PlanExecutionGateMiddleware
 This middleware safeguards execution while the plan is in `draft` state or awaiting clarification:
-* **Allowed in Plan Mode**: Read-only tools (`ls`, `read_file`, `web_search`) and planning tools (`write_todos`, `ask_clarification`) are permitted.
+* **Allowed in Plan Mode**: Read-only tools (`ls`, `read_file`, `web_search`) and planning tools (`write_todos`, `ask_user_for_clarification`) are permitted.
 * **Mutations Blocked**: Bash commands containing modification tokens (`rm`, `mv`, `tee`, `git commit`, `mkdir`, etc.) or custom write tools are intercepted and blocked.
-* **Clarification Intercepts**: If `clarification_pending` is true, all tool calls except `ask_clarification` are blocked with an error instructing the agent to resolve the clarification first.
+* **Clarification Intercepts**: If `clarification_pending` is true, all tool calls except `ask_user_for_clarification` are blocked with an error instructing the agent to resolve the clarification first.
 
 ---
 

@@ -13,6 +13,6 @@
     }
   },
   "assertions": {
-    "must_emit_tool_message_name": "ask_clarification"
+    "must_emit_tool_message_name": "ask_user_for_clarification"
   }
 }

@@ -39,7 +39,7 @@ def _normalize_answer_text(text: str) -> str:
 def _is_clarification_marker(message: Any) -> bool:
     msg_type = message_type(message)
     name = message_name(message)
-    return (msg_type == "tool" and name == "ask_clarification") or (
+    return (msg_type == "tool" and name == "ask_user_for_clarification") or (
         msg_type == "human" and name == "planner_clarification_required"
     )
 
@@ -281,7 +281,7 @@ def build_clarification_prompt_message(clarification: dict[str, Any]) -> HumanMe
         name="planner_clarification_required",
         content=(
             "<planner_clarification>\n"
-            "Before any execution, ask the user this clarification via `ask_clarification`.\n"
+            "Before any execution, ask the user this clarification via `ask_user_for_clarification`.\n"
             f"Question: {clarification.get('question')}\n"
             "IMPORTANT: pass options as structured dicts; do NOT flatten to plain strings.\n"
             f"Options JSON: {json.dumps(structured_options, ensure_ascii=False)}\n"

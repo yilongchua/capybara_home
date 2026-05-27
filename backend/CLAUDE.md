@@ -40,7 +40,7 @@ CapyHome/
 │   │   │   ├── builtins/      # general-purpose, bash agents
 │   │   │   ├── executor.py    # Background execution engine
 │   │   │   └── registry.py    # Agent registry
-│   │   ├── tools/builtins/    # Built-in tools (present_files, ask_clarification, view_image)
+│   │   ├── tools/builtins/    # Built-in tools (present_files, ask_user_for_clarification, view_image)
 │   │   ├── mcp/               # MCP integration (tools, cache, client)
 │   │   ├── models/            # Model factory with thinking/vision support
 │   │   ├── skills/            # Skills discovery, loading, parsing
@@ -132,7 +132,7 @@ Middlewares execute in strict order in `src/agents/lead_agent/agent.py`:
 12. **EvaluatorMiddleware** / **TodoFailureRetryMiddleware** / **ScratchpadTaskMemoryMiddleware** / **PlanFileSyncMiddleware** - Final verification, todo repair, handoff scratchpad, and plan-file sync
 13. **ResumeStateMiddleware** / **ProgressGuardMiddleware** / **PlanFollowupMiddleware** / **LoopDetectionMiddleware** / **RecursionBudgetPivotMiddleware** - Resume continuity, stall detection, follow-up planning, repetitive-call detection, and evaluator-driven mid-run steering at recursion-budget thresholds (lead agent only, off by default; see `recursion_pivot` config)
 14. **TrajectoryMiddleware** / **ExecutionTraceMiddleware** / **ActivityTimelineMiddleware** / **MetricsMiddleware** - Runtime trace, activity, and metrics capture
-15. **ClarificationMiddleware** - Intercepts `ask_clarification` tool calls, interrupts via `Command(goto=END)` (must be last)
+15. **ClarificationMiddleware** - Intercepts `ask_user_for_clarification` tool calls, interrupts via `Command(goto=END)` (must be last)
 
 ### Configuration System
 
@@ -216,7 +216,7 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 2. **MCP tools** - From enabled MCP servers (lazy initialized, cached with mtime invalidation)
 3. **Built-in tools**:
    - `present_files` - Make output files visible to user (only `/mnt/user-data/workspace`)
-   - `ask_clarification` - Request clarification (intercepted by ClarificationMiddleware → interrupts)
+   - `ask_user_for_clarification` - Request clarification (intercepted by ClarificationMiddleware → interrupts)
    - `view_image` - Read image as base64 (added only if model supports vision)
 4. **Subagent tool** (if enabled):
    - `task` - Delegate to subagent (description, prompt, subagent_type, max_turns)

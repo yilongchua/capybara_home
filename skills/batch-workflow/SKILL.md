@@ -84,7 +84,7 @@ Present POC results as a formatted table:
 
 ### Phase 3 — Approval Gate
 
-Call `ask_clarification` with `clarification_type: "risk_confirmation"` showing:
+Call `ask_user_for_clarification` with `clarification_type: "risk_confirmation"` showing:
 - The POC results table
 - Total remaining tasks
 - Estimated total time (task count × avg seconds per task)

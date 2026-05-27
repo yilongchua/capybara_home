@@ -18,7 +18,7 @@ Anything that ends up in front of a model is in scope:
 |---|------|----------|
 | 1 | [01-lead-agent-prompts.md](01-lead-agent-prompts.md) | Lead agent system prompt sections, memory prompt, todo prompts, plan/dreamy mode sections |
 | 2 | [02-subagent-prompts.md](02-subagent-prompts.md) | 7 built-in subagent configs + shared executor/registry |
-| 3 | [03-tool-descriptions.md](03-tool-descriptions.md) | Built-in tools: `ask_clarification`, `present_files`, `recall`, `setup_agent`, `task`, `view_image`, `write_todos` |
+| 3 | [03-tool-descriptions.md](03-tool-descriptions.md) | Built-in tools: `ask_user_for_clarification`, `present_files`, `recall`, `setup_agent`, `task`, `view_image`, `write_todos` |
 | 4 | [04-middleware-prompts.md](04-middleware-prompts.md) | Planner, recursion pivot, plan evaluator, evaluator, summarization, web search summary, dreamy bootstrap |
 | 5 | [05-skill-metadata.md](05-skill-metadata.md) | All 20 `SKILL.md` descriptions + parser/loader/curation |
 | 6 | [06-summary-and-priorities.md](06-summary-and-priorities.md) | Cross-cutting findings, ranked priorities, suggested rollout order |

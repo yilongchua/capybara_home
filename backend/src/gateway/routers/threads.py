@@ -129,7 +129,7 @@ class HardStopThreadResponse(BaseModel):
     state_patched: bool
 
 
-_NON_BLOCKING_TOOL_CALL_NAMES = {"ask_clarification", "present_files"}
+_NON_BLOCKING_TOOL_CALL_NAMES = {"ask_user_for_clarification", "present_files"}
 
 
 def _extract_state_values(state: object) -> dict:

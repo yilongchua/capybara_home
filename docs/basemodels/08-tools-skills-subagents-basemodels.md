@@ -26,7 +26,7 @@ Scope: the long tail of subsystems that today rely on `@dataclass`, `TypedDict`,
 
 | New `BaseModel` | Target file | Tool | Fields |
 |-----------------|-------------|------|--------|
-| `ClarificationToolInput` | [src/tools/builtins/clarification_tool.py](../../backend/src/tools/builtins/clarification_tool.py) | `ask_clarification` | `question: str` (min_length=1), `options: list[ClarificationOption] = []` |
+| `ClarificationToolInput` | [src/tools/builtins/clarification_tool.py](../../backend/src/tools/builtins/clarification_tool.py) | `ask_user_for_clarification` | `question: str` (min_length=1), `options: list[ClarificationOption] = []` |
 | `PresentFilesToolInput` | [src/tools/builtins/present_file_tool.py](../../backend/src/tools/builtins/present_file_tool.py) | `present_files` | `paths: list[str]` (min_items=1), `note: str = ""` — paths validated to be under `/mnt/user-data/workspace`. |
 | `PresentFilesToolOutput` | same | same | `accepted: list[str]`, `rejected: list[PresentFileRejection]` |
 | `PresentFileRejection` | same | — | `path: str`, `reason: Literal["outside_workspace","not_found","not_file"]` |

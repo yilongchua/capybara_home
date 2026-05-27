@@ -414,7 +414,7 @@ function ToolCall({
         )}
       </ChainOfThoughtStep>
     );
-  } else if (name === "ask_clarification") {
+  } else if (name === "ask_user_for_clarification") {
     return (
       <ChainOfThoughtStep
         key={id}

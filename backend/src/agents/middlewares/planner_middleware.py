@@ -235,7 +235,7 @@ Return ONLY valid JSON matching this exact schema (no prose, no markdown fences)
       "owner": "lead",
       "subagent_type": null,
       "objective": "Phase-level outcome this todo achieves (1-2 sentences).",
-      "failure_fallback": "What to do if a step fails (e.g., return best-effort with label, ask_clarification).",
+      "failure_fallback": "What to do if a step fails (e.g., return best-effort with label, ask_user_for_clarification).",
       "steps": [
         {
           "description": "What this step does (action sentence)",
@@ -283,7 +283,7 @@ RICH EXECUTION FIELDS (per todo):
 Required:
 - objective: 1-2 sentence phase-level goal — what the todo achieves overall.
 - failure_fallback: what to do if a step fails — e.g., "return best-effort
-  from prior knowledge, clearly labelled" or "call ask_clarification".
+  from prior knowledge, clearly labelled" or "call ask_user_for_clarification".
 - steps: ordered execution steps. Each step MUST include:
     - description: short action sentence.
     - completion_requirement: concrete check that proves the step is done
@@ -315,7 +315,7 @@ EXAMPLE rich todo for "Search top 10 restaurants":
   "owner": "lead",
   "subagent_type": "source-researcher",
   "objective": "Produce a candidate list of restaurants with enough headroom to filter to top 10.",
-  "failure_fallback": "If web_search returns < 10 results, fall back to model's prior knowledge and label results as 'best-effort from training data'. If criteria are ambiguous, call ask_clarification.",
+  "failure_fallback": "If web_search returns < 10 results, fall back to model's prior knowledge and label results as 'best-effort from training data'. If criteria are ambiguous, call ask_user_for_clarification.",
   "steps": [
     {
       "description": "Web search for candidate restaurants",
@@ -1089,7 +1089,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                 "clarification_pending": clarification_pending,
                 # Inline clarification panel: the frontend Execute Plan popup
                 # renders options directly so the user can answer without an
-                # `ask_clarification` round-trip. POST to /plan/clarify advances.
+                # `ask_user_for_clarification` round-trip. POST to /plan/clarify advances.
                 "clarifications": clarifications_payload,
                 "clarification_index": 0,
                 # Revision counter for in-place plan edits; 0 = brand new.

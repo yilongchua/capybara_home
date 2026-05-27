@@ -4,15 +4,15 @@ from langchain.tools import tool
 
 
 class ClarificationOption(TypedDict, total=False):
-    """Structured clarification option passed to ask_clarification."""
+    """Structured clarification option passed to ask_user_for_clarification."""
 
     label: str
     recommended: bool
     description: str | None
 
 
-@tool("ask_clarification", parse_docstring=True, return_direct=True)
-def ask_clarification_tool(
+@tool("ask_user_for_clarification", parse_docstring=True, return_direct=True)
+def ask_user_for_clarification_tool(
     question: str,
     clarification_type: Literal[
         "missing_info",
@@ -37,7 +37,7 @@ def ask_clarification_tool(
     The execution will be interrupted and the question will be presented to the user.
     Wait for the user's response before continuing.
 
-    When to use ask_clarification:
+    When to use ask_user_for_clarification:
     - You need information that wasn't provided in the user's request
     - The requirement can be interpreted in multiple ways
     - Multiple valid implementation approaches exist

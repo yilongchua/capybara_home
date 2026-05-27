@@ -23,7 +23,7 @@ def _runtime(*, auto_mode_in_context: bool = False, auto_mode_in_config: bool | 
 def _request(*, context: dict | None = None, options: list[dict] | None = None):
     return SimpleNamespace(
         tool_call={
-            "name": "ask_clarification",
+            "name": "ask_user_for_clarification",
             "id": "tc-1",
             "args": {
                 "question": "Which option?",
@@ -53,7 +53,7 @@ def test_wrap_tool_call_auto_selects_recommended_option_from_context_auto_mode()
     middleware = ClarificationMiddleware()
     request = _request(context={"_clarification_auto_mode": True})
 
-    result = middleware.wrap_tool_call(request, lambda _req: ToolMessage(content="unused", tool_call_id="tc-1", name="ask_clarification"))
+    result = middleware.wrap_tool_call(request, lambda _req: ToolMessage(content="unused", tool_call_id="tc-1", name="ask_user_for_clarification"))
 
     assert isinstance(result, Command)
     message = result.update["messages"][0]

@@ -332,20 +332,20 @@ class TestExtractResponseText:
         result = {
             "messages": [
                 {"type": "human", "content": "健身"},
-                {"type": "ai", "content": "", "tool_calls": [{"name": "ask_clarification", "args": {"question": "您想了解哪方面？"}}]},
-                {"type": "tool", "name": "ask_clarification", "content": "您想了解哪方面？"},
+                {"type": "ai", "content": "", "tool_calls": [{"name": "ask_user_for_clarification", "args": {"question": "您想了解哪方面？"}}]},
+                {"type": "tool", "name": "ask_user_for_clarification", "content": "您想了解哪方面？"},
             ]
         }
         assert _extract_response_text(result) == "您想了解哪方面？"
 
     def test_clarification_over_empty_ai(self):
-        """When AI content is empty but ask_clarification tool message exists, use the tool message."""
+        """When AI content is empty but ask_user_for_clarification tool message exists, use the tool message."""
         from src.channels.manager import _extract_response_text
 
         result = {
             "messages": [
                 {"type": "ai", "content": ""},
-                {"type": "tool", "name": "ask_clarification", "content": "Could you clarify?"},
+                {"type": "tool", "name": "ask_user_for_clarification", "content": "Could you clarify?"},
             ]
         }
         assert _extract_response_text(result) == "Could you clarify?"

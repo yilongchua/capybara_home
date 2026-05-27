@@ -51,7 +51,7 @@ def test_draft_plan_blocks_execution_tools():
 
 def test_draft_plan_allows_clarification_and_todo_updates():
     middleware = PlanExecutionGateMiddleware()
-    for tool_name in ("ask_clarification", "write_todos", "recall"):
+    for tool_name in ("ask_user_for_clarification", "write_todos", "recall"):
         result = middleware.wrap_tool_call(_request(tool_name, plan={"status": "draft"}), _handler)
         assert isinstance(result, ToolMessage)
         assert result.content == "ok"

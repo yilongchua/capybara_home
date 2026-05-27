@@ -6,7 +6,7 @@ Audit of every built-in tool's LLM-facing description and parameter schema.
 
 | # | Tool name | File | Lines | Primary use | Severity |
 |---|-----------|------|-------|-------------|----------|
-| 1 | `ask_clarification` | [backend/src/tools/builtins/clarification_tool.py](../../backend/src/tools/builtins/clarification_tool.py#L14-L64) | 14–64 | Ask the user a question before proceeding | Medium |
+| 1 | `ask_user_for_clarification` | [backend/src/tools/builtins/clarification_tool.py](../../backend/src/tools/builtins/clarification_tool.py#L14-L64) | 14–64 | Ask the user a question before proceeding | Medium |
 | 2 | `present_files` | [backend/src/tools/builtins/present_file_tool.py](../../backend/src/tools/builtins/present_file_tool.py#L62-L100) | 62–100 | Surface files to the user in the client | Medium |
 | 3 | `recall` | [backend/src/tools/builtins/recall_tool.py](../../backend/src/tools/builtins/recall_tool.py#L15-L62) | 15–62 | Search long-term memory | High |
 | 4 | `setup_agent` | [backend/src/tools/builtins/setup_agent_tool.py](../../backend/src/tools/builtins/setup_agent_tool.py#L14-L62) | 14–62 | Configure a custom CapyHome agent | High |
@@ -16,7 +16,7 @@ Audit of every built-in tool's LLM-facing description and parameter schema.
 
 ## Detailed findings
 
-### 1. `ask_clarification` — lines 14–64
+### 1. `ask_user_for_clarification` — lines 14–64
 
 **Issues**
 - "Wait for the user's response before continuing" implies sync behaviour; the tool actually returns immediately and execution is interrupted via middleware.

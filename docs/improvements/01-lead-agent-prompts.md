@@ -39,7 +39,7 @@ Audit of every LLM-facing prompt in the lead agent and its directly attached pro
 - Decide on one source of truth (componentized) and delete the legacy template, or keep legacy as a thin wrapper that imports the sections.
 - Define `{subagent_thinking}` or remove the placeholder.
 - Replace "sensible attempt" with explicit criteria: *Has a reasonable default? → proceed. Missing info that blocks any sensible attempt? → ask.*
-- Add 2–3 worked examples of when `ask_clarification` fires (destructive ops, ambiguous spec, hard-to-reverse defaults).
+- Add 2–3 worked examples of when `ask_user_for_clarification` fires (destructive ops, ambiguous spec, hard-to-reverse defaults).
 - Soften the formatting rule: "Use formatting only when it clarifies — prose by default."
 
 ### 2. `ROLE_SECTION_TEMPLATE` — lines 170–172
@@ -68,13 +68,13 @@ Audit of every LLM-facing prompt in the lead agent and its directly attached pro
 
 **Issues**
 - The JWT example is too trivial to illustrate the ambiguity threshold.
-- The `ask_clarification(...)` example may drift from the real tool schema.
+- The `ask_user_for_clarification(...)` example may drift from the real tool schema.
 - "Never ask about stylistic or preference choices" is too broad — choice of *language* is technically a preference but materially changes the deliverable.
 - Destructive-op list is short ("deleting files, dropping tables") and missing force-push, config overwrite, key revocation, service restart.
 
 **Improvements**
 - Replace JWT example with a richer one that shows defaulting + flagging: *"I'll default to session cookies (simpler, stateful). Tell me if you want JWT/OAuth instead."*
-- Keep the example in sync with the actual `ask_clarification` schema; consider generating it from the tool definition.
+- Keep the example in sync with the actual `ask_user_for_clarification` schema; consider generating it from the tool definition.
 - Distinguish *shape-affecting* choices (language/framework/structure) from *internal* choices (variable names, file layout).
 - Expand the destructive-op checklist explicitly.
 
@@ -182,22 +182,46 @@ Audit of every LLM-facing prompt in the lead agent and its directly attached pro
 - Add a 5-line glossary at the top of the section.
 - Justify the `task()` prohibition (rows must remain observable / checkpointable).
 - Define inline: tool calls + explanation within the same response, with checkpoint after each row.
-- Specify `awaiting_approval` flow: emit `ask_clarification` of type `risk_confirmation` and freeze until user replies.
+- Specify `awaiting_approval` flow: emit `ask_user_for_clarification` of type `risk_confirmation` and freeze until user replies.
 
 ### 12. `PLAN_MODE_SECTION` — lines 533–596
+
+**Architecture context (discovered during audit)**
+
+Plan Mode has **two distinct entry paths** that the current prompt does not distinguish:
+
+1. **Manual trigger** — user toggles Plan Mode in the chat UI before sending the message. The model starts the turn already in Plan Mode; no execution context to abandon. This is the path `PLAN_MODE_SECTION` implicitly assumes today.
+2. **Auto-trigger** — `WorkModeMiddleware` detects high complexity mid-turn and spawns a background plan re-run with `is_plan_mode=True`. The model was in Work Mode and must stop executing and re-frame as planning, possibly carrying forward partial execution context.
+
+**How plan composition actually works at runtime:**
+
+`apply_prompt_template(plan_mode=True)` appends `PLAN_MODE_SECTION` to the full base prompt — it does **not** replace it. Both sets of instructions are always present. The base prompt says "state assumptions and proceed / write deliverables to /workspace"; `PLAN_MODE_SECTION` says "suppress the answer / write only plan.md." These are in direct conflict on paper.
+
+**Why it holds in practice (but is fragile):**
+
+- `PLAN_MODE_SECTION` is more specific and appears later; the model weights it higher.
+- `PhaseToolFilterMiddleware` is the real enforcement layer: it physically removes execution tools (`web_search`, `write_file`, `str_replace`, `task`) from the tool list while the plan is in draft phase. The model cannot call what is not offered.
+- `PlanExecutionGateMiddleware` provides a second check.
+
+**Additional nuance:** `PlannerMiddleware` does **not** use the lead agent for plan generation — it fires a separate LLM call with its own `PLANNER_SYSTEM_PROMPT`, then injects a `planner_handoff` HumanMessage into the conversation. The lead agent's `PLAN_MODE_SECTION` governs the lead agent's *own behavior during the planning turn*, not the actual plan creation.
 
 **Issues**
 - "Suppress" your knowledge instruction is unclear — better to say "do not output the answer body."
 - Same rule stated twice (lines 552 and 559).
 - `scope_search` usage line contradicts the surrounding "no content gathering" rule.
-- `<planner_handoff>` is a tag, not a runtime signal — explain how the model detects mode change.
+- `<planner_handoff>` is described as the mode-detection signal but is actually a `HumanMessage` injected by `PlannerMiddleware` after its separate LLM call — the prompt should explain this more accurately.
 - Two artifact paths (`plan.md` + timestamped `plans/plan-*.md`) with no rationale.
+- No distinction between manual-trigger and auto-trigger entry paths; the mid-turn escalation case (what to do with partial execution context) is entirely unhandled.
+- Prompt conflicts with base prompt are "resolved" by tool gating, not by prompt clarity — if a gap appears in tool gating the base prompt gives implicit permission to execute.
 
 **Improvements**
-- Single rule: *Plan Mode produces HOW (steps, scope, sources to check), not WHAT (the answer).*  Give a good vs. bad example.
+- Single rule: *Plan Mode produces HOW (steps, scope, sources to check), not WHAT (the answer).* Give a good vs. bad example.
+- Add two entry-path blocks (or a conditional branch): *manual entry* (clean slate) vs *auto-escalation* (mid-turn; instruct the model to freeze current execution, summarise any partial progress as context, then plan from there).
+- Define the complexity signal the model uses to self-recognise auto-escalation: e.g., multi-step + irreversible action detected, unknown scope, projected tool-call count >N.
 - Define `scope_search` strictly as scope discovery (unknown vocabulary, unfamiliar domains).
-- Replace `<planner_handoff>` reference with the actual runtime trigger ("Execute Plan" / mode-switch event).
+- Replace `<planner_handoff>` description with an accurate one: "a HumanMessage injected after the planner's separate LLM call; your cue to begin planning behavior."
 - Document the artifact split: `plan.md` = live; `plans/plan-*.md` = audit trail; never edit timestamped copies.
+- Long-term: when `plan_mode=True`, suppress or narrow the execution-oriented base-prompt sections (WORKING_DIRECTORY write rules, FETCH_POLICY content-gathering rules) so `PLAN_MODE_SECTION` is additive rather than corrective. Reduces reliance on tool gating as the sole contradiction resolver.
 
 ### 13. `PLAN_BACKGROUND_FOLLOWUP_SECTION` — lines 599–608
 
@@ -272,6 +296,7 @@ Audit of every LLM-facing prompt in the lead agent and its directly attached pro
 
 - **Placeholders without definitions**: `{subagent_thinking}`, `{subagent_reminder}`, `{n}` (in subagent batching example). Audit-trail these across the codebase.
 - **Redundancy with componentized sections**: Most legacy/component duplication can be removed.
-- **Contradictions**: "avoid over-formatting" vs. Mermaid encouragement; "suppress your knowledge" in Plan Mode vs. extended thinking semantics.
-- **Missing failure modes**: web search failure, subagent timeout, ask_clarification rejection — none have specified fallbacks.
+- **Contradictions**: "avoid over-formatting" vs. Mermaid encouragement; "suppress your knowledge" in Plan Mode vs. extended thinking semantics; base prompt execution permissions vs. `PLAN_MODE_SECTION` restrictions — currently resolved by tool gating (fragile) rather than prompt narrowing.
+- **Plan Mode entry paths**: two triggers (manual toggle vs. auto-escalation from Work Mode) are architecturally distinct but the prompt treats them identically. Auto-escalation case (mid-turn, partial execution context) is entirely unhandled in the prompt.
+- **Missing failure modes**: web search failure, subagent timeout, ask_user_for_clarification rejection — none have specified fallbacks.
 - **Vague thresholds**: "complex," "natural split," "durable," "stale," "low-value," "meaningful improvement" — each should get an explicit signal.

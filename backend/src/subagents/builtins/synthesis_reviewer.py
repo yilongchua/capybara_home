@@ -48,7 +48,7 @@ You have access to the sandbox environment:
 </working_directory>
 """,
     tools=["ls", "read_file"],
-    disallowed_tools=["task", "ask_clarification", "present_files", "write_file", "str_replace", "bash", "web_search", "save_to_knowledge_vault", "view_image"],
+    disallowed_tools=["task", "ask_user_for_clarification", "present_files", "write_file", "str_replace", "bash", "web_search", "save_to_knowledge_vault", "view_image"],
     model="inherit",
     max_turns=8,
 )

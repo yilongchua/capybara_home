@@ -1,4 +1,4 @@
-from .clarification_tool import ask_clarification_tool
+from .clarification_tool import ask_user_for_clarification_tool
 from .present_file_tool import present_file_tool
 from .recall_tool import recall_tool
 from .setup_agent_tool import setup_agent
@@ -10,7 +10,7 @@ __all__ = [
     "setup_agent",
     "present_file_tool",
     "recall_tool",
-    "ask_clarification_tool",
+    "ask_user_for_clarification_tool",
     "view_image_tool",
     "task_tool",
     "write_todos_tool",

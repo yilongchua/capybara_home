@@ -250,7 +250,7 @@ def test_planner_clears_clarification_pending_after_user_answer(tmp_path: Path):
         },
         "messages": [
             HumanMessage(content="Create AI trends report"),
-            ToolMessage(content="What years should this cover?", tool_call_id="tc-1", name="ask_clarification"),
+            ToolMessage(content="What years should this cover?", tool_call_id="tc-1", name="ask_user_for_clarification"),
             HumanMessage(content="Use 2024 to 2026."),
         ],
         "thread_data": {"workspace_path": str(tmp_path)},
@@ -296,7 +296,7 @@ def test_planner_auto_mode_clarification_resolution_spawns_work_handoff(tmp_path
         },
         "messages": [
             HumanMessage(content="Plan Greece trip"),
-            ToolMessage(content="[Auto Mode] Selected: Santorini & Crete", tool_call_id="tc-1", name="ask_clarification"),
+            ToolMessage(content="[Auto Mode] Selected: Santorini & Crete", tool_call_id="tc-1", name="ask_user_for_clarification"),
         ],
         "thread_data": {"workspace_path": str(tmp_path)},
     }
@@ -341,7 +341,7 @@ def test_planner_clears_clarification_pending_after_auto_mode_selection(tmp_path
         },
         "messages": [
             HumanMessage(content="Plan Greece trip"),
-            ToolMessage(content="[Auto Mode] Selected: Santorini & Crete", tool_call_id="tc-1", name="ask_clarification"),
+            ToolMessage(content="[Auto Mode] Selected: Santorini & Crete", tool_call_id="tc-1", name="ask_user_for_clarification"),
         ],
         "thread_data": {"workspace_path": str(tmp_path)},
     }

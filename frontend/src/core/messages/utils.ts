@@ -290,7 +290,7 @@ export function hasToolCalls(message: Message) {
 }
 
 const NON_BLOCKING_TOOL_CALL_NAMES = new Set([
-  "ask_clarification",
+  "ask_user_for_clarification",
   "present_files",
 ]);
 
@@ -339,7 +339,7 @@ export function hasPresentFiles(message: Message) {
 }
 
 export function isClarificationToolMessage(message: Message) {
-  return message.type === "tool" && message.name === "ask_clarification";
+  return message.type === "tool" && message.name === "ask_user_for_clarification";
 }
 
 export function extractPresentFilesFromMessage(message: Message) {
