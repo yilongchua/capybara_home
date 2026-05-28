@@ -31,7 +31,7 @@ LangGraph invokes `make_plan_agent(config)`
 ([plan_agent/agent.py:29](../../backend/src/agents/plan_agent/agent.py#L29)).
 It forces the canonical mode flags and delegates to
 `_build_work_agent(config, prompt_template_fn=plan_apply_prompt_template)`
-([work_agent/agent.py:712](../../backend/src/agents/work_agent/agent.py#L712)).
+([work_agent/agent.py:705](../../backend/src/agents/work_agent/agent.py#L705)).
 
 `_build_work_agent` then:
 
@@ -50,8 +50,11 @@ It forces the canonical mode flags and delegates to
    `TodoDagMiddleware`/`TodoMiddleware`. `WorkModeMiddleware` is NOT built
    (its factory returns `None` when `is_work_mode=False`).
 6. Calls `create_agent(model, tools, middleware, system_prompt, state_schema)`.
-   `get_available_tools` is called once and returns the **full** tool list
-   — the per-call filtering happens later inside `PhaseToolFilterMiddleware`.
+   `get_available_tools(mode="plan", ...)` is called once and returns the
+   **plan-mode catalog** directly (sourced from `internal_tools_plan.json`
+   + community-tool mode scoping). No runtime mode/phase filter is needed
+   because the LangGraph entry-point split (`plan_agent` vs `work_agent`)
+   makes mode resolution up-front.
 
 ## Phase 2 — First model cycle: planning
 
@@ -76,21 +79,23 @@ for the full spec list).
 
 ### 2b. PlannerMiddleware fires
 
-[planner_middleware.py:793](../../backend/src/agents/middlewares/planner_middleware.py#L793).
+[planner_middleware.py:848](../../backend/src/agents/middlewares/planner_middleware.py#L848).
 
-1. Check `_should_plan(state, runtime)`:
-   - If a draft plan exists with a fresh user message → re-plan (capped at 5).
+1. Check `_should_plan(state, runtime)`
+   ([planner_middleware.py:733](../../backend/src/agents/middlewares/planner_middleware.py#L733)):
+   - If a draft plan exists with a fresh user message → re-plan (capped at
+     `_MAX_DRAFT_REVISIONS = 5`).
    - If no plan yet and there is at least 1 HumanMessage → plan.
    - In plan mode, allow planning even when prior AI turns exist.
 2. Extract `user_prompt = original_user_prompt(messages)`.
-3. **Complexity classification** (cheap, local):
-   - `_classify_complexity(prompt)` → `"trivial" | "moderate" | "complex"`.
-   - `"trivial"` short-circuits, no LLM call.
-   - `_looks_like_direct_answer_request` short-circuits checklists, comparisons,
-     etc.
+3. **Direct-answer fast path** ([planner_middleware.py:863](../../backend/src/agents/middlewares/planner_middleware.py#L863)):
+   - `_looks_like_direct_answer_request(user_prompt)` short-circuits
+     checklists, comparisons, etc. — skips the planner LLM entirely for
+     queries well-served by a single-shot response. (The legacy
+     `_classify_complexity` tier system has been removed.)
 4. Emit `planning_started` SSE.
 5. **Call the planner LLM** with `PLANNER_SYSTEM_PROMPT`
-   ([planner_middleware.py:204](../../backend/src/agents/middlewares/planner_middleware.py#L204)).
+   ([planner_middleware.py:202](../../backend/src/agents/middlewares/planner_middleware.py#L202)).
    The planner uses the same chat-selected model
    (`resolve_model_name(requested_model)` — single-model invariant).
 6. Parse JSON output via `_parse_plan_response` into `PlannerOutput`.
@@ -117,7 +122,7 @@ for the full spec list).
     handoff. If `plan_behavior == "plan_foreground"`, set `jump_to="end"`
     so the planner turn ends here.
 14. Return the state update with `plan`, `todo_graph`, `todos`,
-    `complexity_tier`, `planner_ephemeral_handoff`, etc.
+    `planner_ephemeral_handoff`, etc.
 
 ### 2c. PlanEvaluatorMiddleware
 
@@ -131,20 +136,22 @@ runs after the planner. It:
    the `todo_graph`. Otherwise keeps the original.
 4. Sets `plan_evaluated=True` to short-circuit on subsequent cycles.
 
-### 2d. `PhaseToolFilterMiddleware.wrap_model_call`
+### 2d. Tool catalog (resolved up-front, not at runtime)
 
-[phase_tool_filter_middleware.py:201](../../backend/src/agents/middlewares/phase_tool_filter_middleware.py#L201).
+In the current architecture there is **no `PhaseToolFilterMiddleware` step
+in Plan Mode**. The plan-mode tool catalog was already locked in at agent
+build time by `get_available_tools(mode="plan", ...)` reading
+`internal_tools_plan.json` (which excludes execution tools) and applying
+community-tool mode scoping (`web_search` allowed, knowledge-vault tools
+hidden). The LLM call goes out with the plan-mode catalog as bound; the
+model cannot emit a tool call for `bash`/`write_file`/`task` etc. because
+those tools were never registered on this graph.
 
-When the LangChain agent is about to call the LLM, this middleware:
-
-1. Reads `state.plan` → `plan.status == "draft"` → `_should_filter=True`.
-2. Drops `_DRAFT_HIDDEN_TOOLS` from the LLM's bound tool catalog
-   ([phase_tool_filter_middleware.py:41](../../backend/src/agents/middlewares/phase_tool_filter_middleware.py#L41)).
-3. Also drops any JSON-policy tool whose `mode`/`phase` excludes `plan`/`draft`.
-4. Emits a `tools_hidden` runtime event.
-
-The LLM call now goes out with the **restricted** catalog — the model
-literally cannot emit a tool call for `web_search` etc.
+`PlanExecutionGateMiddleware` ([plan_execution_gate_middleware.py:119](../../backend/src/agents/middlewares/plan_execution_gate_middleware.py#L119))
+acts as a runtime backstop: if a custom agent re-exposes an execution
+tool, the gate blocks the call at `wrap_tool_call` time, and a
+scope-vs-content classifier ([plan_execution_gate_middleware.py:107](../../backend/src/agents/middlewares/plan_execution_gate_middleware.py#L107))
+runs on `web_search` invocations to block content-gathering use.
 
 ### 2e. The LLM responds
 
@@ -221,8 +228,14 @@ The new run lands in `make_work_agent`. Mode resolution gives `"work"`, so
 Notable handoff steps:
 
 - The checkpointer-restored `plan` already has `status="approved"`.
-- `PhaseToolFilterMiddleware` now drops `scope_search` (work phase) and
-  keeps the full execution catalog.
+- Tool catalog is now the Work catalog (`internal_tools_work.json` +
+  full community tools), resolved up-front by
+  `get_available_tools(mode="work", ...)`. `PhaseToolFilterMiddleware`
+  applies a first-turn execution-tool gate only: if no plan exists and
+  there is no prior AI message, execution tools are hidden so the LLM has
+  to reason before acting. From turn 2 onward the full Work catalog is
+  exposed. (After a Plan-Mode handoff, the plan exists, so the gate is a
+  no-op.)
 - `WorkModeMiddleware.before_model` finds the first ready todo via
   `_materialize_ready_ids`, emits `phase_started` SSE, and injects a
   `<work_mode_instruction>` HumanMessage instructing the model to execute
@@ -246,27 +259,37 @@ After every Work Mode turn, `PlanFileSyncMiddleware.after_model`:
 This ensures the user-visible `plan.md` always matches reality even if a
 run is interrupted.
 
-## Alternate entry — Auto-escalation from Work Mode
+## Plan stalls — Work Mode signals, user decides
 
-When the user submits a complex request in Work Mode without Plan Mode
-selected, the sequence is:
+Work Mode **does not** auto-escalate into Plan Mode anymore. Both the
+legacy complexity-based escalation (`_classify_complexity` /
+`_handle_complexity_escalation` / `_spawn_plan_rerun`) and the auto-mode
+plan-adaptation respawn (`_MAX_AUTO_ADAPTATION_ATTEMPTS`) have been
+removed from `work_mode_middleware.py`. The only entry to Plan Mode is
+the manual toggle in the input box (Phase 0 above).
 
-1. `make_work_agent` builds the work-mode middleware chain.
-2. `WorkModeMiddleware.before_model` runs and, finding no plan, classifies
-   the prompt via `_classify_complexity`
-   ([work_mode_middleware.py:110](../../backend/src/agents/middlewares/work_mode_middleware.py#L110)).
-3. On `"complex"` it calls `_handle_complexity_escalation`
-   ([work_mode_middleware.py:649](../../backend/src/agents/middlewares/work_mode_middleware.py#L649))
-   which:
-   - Emits `complexity_escalation` SSE (frontend can show "switch to Plan
-     Mode?" prompt).
-   - If `auto_mode=True`, calls `_spawn_plan_rerun` to schedule a
-     `plan_agent` run on the same thread once the current cycle reaches its
-     checkpoint.
-4. The daemon re-enters at Phase 1 with `current_mode="plan"` and the same
-   user prompt, this time landing in `make_plan_agent` flow.
+When Work Mode encounters a stalled plan — pending todos remain but none
+are ready (typically because every remaining todo is `blocked`) —
+[`WorkModeMiddleware._handle_plan_adapted`](../../backend/src/agents/middlewares/work_mode_middleware.py#L463-L503)
+runs:
 
-A related path — `_handle_plan_adapted` — fires when Work Mode finds
-**blocked todos** (dependencies unsatisfied). It spawns a similar Plan
-Mode re-run, capped at `_MAX_AUTO_ADAPTATION_ATTEMPTS = 2`
-([work_mode_middleware.py:53](../../backend/src/agents/middlewares/work_mode_middleware.py#L53)).
+1. Inspect `todo_graph.nodes`; collect IDs of `blocked` todos.
+2. Increment `phase_execution.adaptation_attempts` (kept as a diagnostic
+   so repeated stalls are visible in state).
+3. Emit a `plan_adapted` SSE event with shape:
+
+   ```json
+   {
+     "type": "plan_adapted",
+     "source": "work_mode_middleware",
+     "blocked_ids": ["todo-3", "todo-5"],
+     "message": "2 pending todo(s) have unmet dependencies. Switch to Plan Mode to revise the plan.",
+     "adaptation_attempt": 1
+   }
+   ```
+
+4. Return `phase_execution.plan_adapted = True` and stop the work loop.
+
+The frontend renders this SSE as a "plan is stuck — revise?" prompt. The
+**user** then decides whether to flip the input box back to Plan Mode and
+re-submit; no daemon re-spawns Plan Mode automatically.

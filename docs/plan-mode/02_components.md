@@ -8,7 +8,7 @@ by category.
 | Graph id | Factory | File |
 |---|---|---|
 | `plan_agent` | `make_plan_agent` | [backend/src/agents/plan_agent/agent.py:29](../../backend/src/agents/plan_agent/agent.py#L29) |
-| `work_agent` | `make_work_agent` | [backend/src/agents/work_agent/agent.py:699](../../backend/src/agents/work_agent/agent.py#L699) |
+| `work_agent` | `make_work_agent` | [backend/src/agents/work_agent/agent.py:705](../../backend/src/agents/work_agent/agent.py#L705) |
 
 Registered in [backend/langgraph.json](../../backend/langgraph.json). Both
 delegate to the shared `_build_work_agent(config, prompt_template_fn=…)`
@@ -44,8 +44,8 @@ each checking `ctx.is_plan_mode`.
 
 | Middleware | File | Activation | Responsibility |
 |---|---|---|---|
-| `PlannerMiddleware` | [planner_middleware.py:655](../../backend/src/agents/middlewares/planner_middleware.py#L655) | `is_plan_mode AND planner.enabled` | Calls the planner LLM once per eligible turn; produces structured plan + `plan.md`; emits `plan_created` SSE; supports in-place re-planning capped at 5 revisions. |
-| `PlanEvaluatorMiddleware` | [plan_evaluator_middleware.py:106](../../backend/src/agents/middlewares/plan_evaluator_middleware.py#L106) | `is_plan_mode AND planner.enabled` | Fast LLM quality check on planner output (timeout-bounded); may revise the todo graph. |
+| `PlannerMiddleware` | [planner_middleware.py:660](../../backend/src/agents/middlewares/planner_middleware.py#L660) | `is_plan_mode AND planner.enabled` | Calls the planner LLM once per eligible turn; produces structured plan + `plan.md`; emits `plan_created` SSE; supports in-place re-planning capped at `_MAX_DRAFT_REVISIONS = 5` ([planner_middleware.py:731](../../backend/src/agents/middlewares/planner_middleware.py#L731)). |
+| `PlanEvaluatorMiddleware` | [plan_evaluator_middleware.py:330](../../backend/src/agents/middlewares/plan_evaluator_middleware.py#L330) | `is_plan_mode AND planner.enabled` | Fast LLM quality check on planner output (timeout-bounded); may revise the todo graph. |
 | `TodoDagMiddleware` | [todo_dag_middleware.py](../../backend/src/agents/middlewares/todo_dag_middleware.py) | `is_plan_mode AND todos.dag_enabled` | Normalises todo nodes into a DAG; surfaces `ready_ids` for the work loop. |
 | `TodoMiddleware` (fallback) | [todo_middleware.py](../../backend/src/agents/middlewares/todo_middleware.py) | `is_plan_mode AND not dag_enabled` | Legacy flat-list todo tracking. |
 | `EvaluatorMiddleware` | [evaluator_middleware.py](../../backend/src/agents/middlewares/evaluator_middleware.py) | `is_plan_mode AND evaluator.enabled` | Final-attempt verifier (mainly relevant to plan-mode loops). |
@@ -54,9 +54,9 @@ each checking `ctx.is_plan_mode`.
 
 | Middleware | File | Plan-mode behaviour |
 |---|---|---|
-| `PhaseToolFilterMiddleware` | [phase_tool_filter_middleware.py:158](../../backend/src/agents/middlewares/phase_tool_filter_middleware.py#L158) | In draft / plan mode, drops `web_search`, `task`, `write_file`, `str_replace`, `query_knowledge_vault`, `search_internal_documents`, `save_to_knowledge_vault` from the LLM's bound tool list. In approved/work, drops `scope_search`. |
-| `PlanExecutionGateMiddleware` | [plan_execution_gate_middleware.py:119](../../backend/src/agents/middlewares/plan_execution_gate_middleware.py#L119) | Runtime backstop: blocks the same execution tools at `wrap_tool_call` time if a custom agent re-exposes them; runs an LLM scope-vs-content classifier on `web_search` etc. and blocks "content" verdicts. |
-| `WorkModeMiddleware` | [work_mode_middleware.py:254](../../backend/src/agents/middlewares/work_mode_middleware.py#L254) | Only constructed when `is_work_mode`. In Work Mode, it can spawn a Plan Mode re-run (auto-escalation path B above). |
+| `PhaseToolFilterMiddleware` | [phase_tool_filter_middleware.py:102](../../backend/src/agents/middlewares/phase_tool_filter_middleware.py#L102) | **Not built in Plan Mode** (deprecated as a plan-mode filter — see Section 6). In Work Mode its only remaining job is a first-turn execution-tool gate: when no plan exists and no prior AI message, execution tools are hidden so the LLM has to reason before acting. From turn 2 onward the full Work catalog is exposed. |
+| `PlanExecutionGateMiddleware` | [plan_execution_gate_middleware.py:119](../../backend/src/agents/middlewares/plan_execution_gate_middleware.py#L119) | Runtime backstop: blocks execution tools at `wrap_tool_call` time if a custom agent re-exposes them; runs an LLM scope-vs-content classifier on `web_search` etc. and blocks "content" verdicts before plan approval. |
+| `WorkModeMiddleware` | [work_mode_middleware.py:93](../../backend/src/agents/middlewares/work_mode_middleware.py#L93) | Only constructed when `is_work_mode`. Does **not** spawn Plan Mode re-runs anymore — auto-escalation (`_spawn_plan_rerun` / `_MAX_AUTO_ADAPTATION_ATTEMPTS`) was removed. When a plan stalls (no ready todos but pending ones remain), [`_handle_plan_adapted`](../../backend/src/agents/middlewares/work_mode_middleware.py#L463) emits a `plan_adapted` SSE event so the UI can prompt the user to switch back to Plan Mode; the user decides. |
 | `PlanFileSyncMiddleware` | [plan_file_sync_middleware.py:52](../../backend/src/agents/middlewares/plan_file_sync_middleware.py#L52) | After model in any mode, refreshes `plan.md` and its versioned alias in a background daemon thread. |
 | `SummarizationMiddleware` | [summarization_middleware.py](../../backend/src/agents/middlewares/summarization_middleware.py) | Uses the `"plan"` mode override for trigger/keep thresholds via `_create_summarization_middleware(mode=mode)` ([work_agent/agent.py:207](../../backend/src/agents/work_agent/agent.py#L207)). |
 | `SkillDisclosureMiddleware` | [skill_disclosure_middleware.py](../../backend/src/agents/middlewares/skill_disclosure_middleware.py) | Injects active skill bodies regardless of mode; ordering ensures the planner sees the skill catalog. |
@@ -64,32 +64,53 @@ each checking `ctx.is_plan_mode`.
 
 ## 6. Plan-mode tool catalog (what the LLM sees)
 
-When `plan.status == "draft"` (or no plan yet but `current_mode="plan"`), the
-LLM is presented with this **restricted** catalog after
-`PhaseToolFilterMiddleware` runs:
+The tool catalog is now **resolved up-front at agent build time**, not at
+runtime via middleware. `make_plan_agent` and `make_work_agent` are
+different LangGraph graphs; `get_available_tools(mode=...)` in
+[tools/tools.py](../../backend/src/tools/tools.py) picks the appropriate
+per-mode catalog JSON. Plan-status transitions (`draft` → `approved`) are
+inter-graph (`plan_agent` terminates, `work_agent` spawns), so no runtime
+mode/phase filter is needed.
+
+| Catalog file | Served when | Excludes |
+|---|---|---|
+| [`internal_tools_plan.json`](../../backend/src/tools/internal_tools_plan.json) | `mode=plan` | Execution tools: `bash`, `write_file`, `str_replace`, `task`. Descriptions framed for drafting / information gathering. |
+| [`internal_tools_work.json`](../../backend/src/tools/internal_tools_work.json) | `mode=work` (and default when unset) | Nothing — full execution surface. |
+| [`external_tools.json`](../../backend/src/tools/external_tools.json) | both | Policy-only entries for MCP / CLI bridges. |
+
+Community tools (no JSON catalog entry) are mode-scoped at load time by
+`_COMMUNITY_TOOL_MODES` in [tools/tools.py](../../backend/src/tools/tools.py):
+
+- `web_search` — available in **all** modes (exposed directly in Plan
+  Mode; the legacy `scope_search` wrapper is deprecated).
+- `query_knowledge_vault`, `save_to_knowledge_vault` — **work-only**.
+
+Typical Plan-Mode tool surface (resolved from `internal_tools_plan.json` +
+community scoping):
 
 | Tool | Source | Why it's allowed in plan mode |
 |---|---|---|
-| `write_todos` | [tools/builtins/write_todos_tool.py:186](../../backend/src/tools/builtins/write_todos_tool.py#L186) | Plan authoring — agent manipulates the todo list directly. |
+| `write_todos` | [tools/builtins/write_todos_tool.py](../../backend/src/tools/builtins/write_todos_tool.py) | Plan authoring — agent manipulates the todo list directly. |
 | `ask_user_for_clarification` | `src/tools/builtins/ask_user_for_clarification.py` | Plan-time scope-narrowing. Intercepted to suspend the run. |
-| `scope_search` | [community/scope_search/tools.py:24](../../backend/src/community/scope_search/tools.py#L24) | Plan-mode wrapper around `web_search`, intended for scope discovery only. |
+| `web_search` | `src/community/web_search/` | Scope-discovery research. The plan-mode prompt still names `scope_search` conceptually, but the registered handler is `web_search` (the wrapper is deprecated). |
 | `recall` | [tools/builtins/recall_tool.py](../../backend/src/tools/builtins/recall_tool.py) | Read-only memory lookup. |
-| `bash` | [sandbox/tools.py](../../backend/src/sandbox/tools.py) | Allowed in plan-mode **only for read-only commands** (gate scans for mutation tokens via `_is_plan_safe_bash`). |
-| `ls`, `read_file`, `view_image` | sandbox + builtins | Read-only investigation only. |
+| `ls`, `read_file`, `view_image` | sandbox + builtins | Read-only investigation. |
 | `present_files` | [tools/builtins/present_files_tool.py](../../backend/src/tools/builtins/present_files_tool.py) | Surface `plan.md` to the user. |
 
-Tools **explicitly hidden** in draft (set
-`_DRAFT_HIDDEN_TOOLS` at [phase_tool_filter_middleware.py:41](../../backend/src/agents/middlewares/phase_tool_filter_middleware.py#L41)):
+`PlanExecutionGateMiddleware` ([plan_execution_gate_middleware.py:119](../../backend/src/agents/middlewares/plan_execution_gate_middleware.py#L119))
+remains as a **runtime backstop**: if a custom agent re-exposes an
+execution tool (or `web_search` is used for content gathering rather than
+scope discovery), the gate blocks the call at `wrap_tool_call` time and
+runs a scope-vs-content LLM classifier on `web_search` invocations.
 
-```
-web_search, query_knowledge_vault, search_internal_documents,
-save_to_knowledge_vault, task, write_file, str_replace
-```
+**Drift validator** — [`tests/test_tool_schema_sync.py`](../../backend/tests/test_tool_schema_sync.py)
+walks every entry across both catalog files, instantiates the handler,
+and asserts JSON parameters match the handler signature. It also asserts
+that the plan catalog excludes execution tools and that the work catalog
+includes them.
 
-In addition, JSON-declared tools whose `policy.phase` does not include
-`"draft"` (or whose `policy.mode` excludes `"plan"`) are filtered by
-`_filter_tools_by_policy` ([phase_tool_filter_middleware.py:136](../../backend/src/agents/middlewares/phase_tool_filter_middleware.py#L136))
-based on `src/tools/internal_tools.json`.
+**Audit tool** — `make tools-audit` (or `python -m src.tools.audit --mode
+plan`) prints the resolved catalog for a given mode/phase triple.
 
 ## 7. Skills
 
@@ -143,7 +164,7 @@ In [backend/src/gateway/routers/steering.py](../../backend/src/gateway/routers/s
 | File | Role |
 |---|---|
 | [components/workspace/input-box-left-toolbar.tsx](../../frontend/src/components/workspace/input-box-left-toolbar.tsx) | Plan-Mode chip; toggles `settings.context.mode`. |
-| [components/workspace/input-box.tsx:505-549](../../frontend/src/components/workspace/input-box.tsx#L505-L549) | Toggle handler; dual-writes `mode` and `is_plan_mode`. |
+| [components/workspace/input-box.tsx:505-554](../../frontend/src/components/workspace/input-box.tsx#L505-L554) | Toggle handler; dual-writes `mode` and `is_plan_mode`. |
 | [core/threads/hooks.ts:1362](../../frontend/src/core/threads/hooks.ts#L1362) | Maps `selectedMode === "plan"` to the LangGraph configurable payload. |
 | [app/workspace/chats/[thread_id]/page.tsx](../../frontend/src/app/workspace/chats/[thread_id]/page.tsx) | Renders the Execute Plan popup, calls `/plan/execute` and `/plan/clarify`. |
 | [components/workspace/workspace-header.tsx:49](../../frontend/src/components/workspace/workspace-header.tsx#L49) | Header pill that reflects the active mode. |
@@ -173,7 +194,7 @@ In [config.yaml](../../config.example.yaml):
 | `mode` | legacy alias | dual-write | back-compat readers |
 | `is_plan_mode` | legacy bool | dual-write | back-compat readers |
 | `plan_behavior` | `"plan_foreground" \| "work_interactive"` | frontend / handoff | `_plan_behavior(runtime)` in planner + plan-execution helpers |
-| `auto_mode` | bool | frontend toggle | planner auto-approval, work-mode escalation |
+| `auto_mode` | bool | frontend toggle | planner auto-approval (work-mode auto-escalation has been removed) |
 | `background_followup` | bool | follow-up daemons | `apply_prompt_template`, `PlanFileSyncMiddleware` |
 | `current_turn_text`, `original_user_request` | str | frontend / handoff | planner, summarization, memory injection |
 | `thread_id`, `model_name` | str | frontend / handoff | every middleware that spawns subruns |

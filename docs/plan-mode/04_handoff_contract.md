@@ -131,19 +131,27 @@ Concurrency guard: `_IN_FLIGHT_HANDOFFS` set + `_HANDOFF_GUARD` lock
 prevent duplicate handoffs for the same thread
 ([work_run_handoff.py:18-19](../../backend/src/agents/middlewares/work_run_handoff.py#L18-L19)).
 
-## Plan re-runs from Work Mode
+## Work → Plan re-runs (removed)
 
-The third handoff vector goes **the other way** — Work Mode → Plan Mode —
-via `_spawn_plan_rerun`
-([work_mode_middleware.py:233](../../backend/src/agents/middlewares/work_mode_middleware.py#L233)).
-This is triggered by:
+Work Mode **no longer spawns Plan Mode re-runs automatically**. The
+historical `_spawn_plan_rerun` daemon, the `complexity_escalation`
+classification, and the `_MAX_AUTO_ADAPTATION_ATTEMPTS` cap have all been
+removed from `work_mode_middleware.py`. The graph never auto-flips
+direction.
 
-- `complexity_escalation` (Work Mode classifies the request as too complex)
-- `plan_adapted` (Work Mode finds blocked todos)
+What remains is a one-way SSE signal:
 
-It uses the same embedded-client mechanism but with
-`current_mode="plan"`, `plan_mode=True`, and a synthetic system message
-explaining why the rerun was requested.
+- When Work Mode encounters a stalled plan (pending todos but none
+  ready),
+  [`WorkModeMiddleware._handle_plan_adapted`](../../backend/src/agents/middlewares/work_mode_middleware.py#L463-L503)
+  emits a `plan_adapted` event carrying the blocked todo IDs and an
+  `adaptation_attempts` counter, and writes
+  `phase_execution.plan_adapted = True` to state.
+- The frontend surfaces this as a "plan is stuck — switch back to Plan
+  Mode?" prompt.
+- The **user** decides whether to flip the input box to Plan Mode and
+  re-submit. There is no daemon, no embedded-client re-entry, no auto
+  synthesis of a Plan-Mode prompt from the backend.
 
 ## Clarification round-trips
 

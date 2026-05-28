@@ -8,7 +8,7 @@ differs is:
 
 - Which prompt overlay is applied
 - Which middlewares activate
-- Which tools the LLM is allowed to see and call
+- Which tool catalog is served to the LLM
 - What the agent is *supposed to produce*
 
 In Plan Mode, the agent's **single deliverable is a `plan.md` file** — a
@@ -22,24 +22,32 @@ clarifications when scope is ambiguous, and stops.
 The original architecture had a single `lead_agent` with conditional plan
 behavior. The refactor split it into two LangGraph entry points so that:
 
-1. The frontend and auto-escalation paths can address `plan_agent` **by
-   name** (`graph_id="plan_agent"`).
+1. The frontend can address `plan_agent` **by name**
+   (`graph_id="plan_agent"`) in `langgraph.json`.
 2. Plan-mode discipline (prompt + middleware + tool catalog) is reified —
-   you cannot accidentally run plan logic against the work_agent graph or
+   you cannot accidentally run plan logic against the `work_agent` graph or
    vice-versa.
-3. A future divergence (separate prompt body, narrower tool surface) can
-   happen without touching work_agent.
+3. Mode-based tool filtering is **resolved up-front at agent build time**
+   (different graphs read different JSON catalogs) rather than at runtime
+   via middleware. Plan-status transitions (`draft` → `approved`) are
+   inter-graph: `plan_agent` terminates and `work_agent` spawns.
+4. A future divergence (fully separate prompt body, narrower tool surface)
+   can happen without touching `work_agent`.
 
 Today `plan_agent` is a **thin wrapper** around `_build_work_agent` that
 forces `current_mode="plan"` and injects the plan-mode prompt template
 ([plan_agent/agent.py:29-41](../../backend/src/agents/plan_agent/agent.py#L29-L41)).
+The middleware registry inside `_build_work_agent` conditionally activates
+plan-mode middlewares (`PlannerMiddleware`, `PlanEvaluatorMiddleware`,
+`PlanExecutionGateMiddleware`, `PlanFileSyncMiddleware`, `TodoDagMiddleware`)
+when `is_plan_mode=True`.
 
 ## High-level lifecycle
 
 ```
 ┌────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│ User input │ →  │ Trigger      │ →  │ plan_agent   │ →  │ plan.md      │
-│ (chat)     │    │ resolution   │    │ run          │    │ (canonical)  │
+│ User input │ →  │ User toggles │ →  │ plan_agent   │ →  │ plan.md      │
+│ (chat)     │    │ Plan Mode    │    │ run          │    │ (canonical)  │
 └────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
                                                                  │
                                                                  ▼
@@ -60,11 +68,13 @@ forces `current_mode="plan"` and injects the plan-mode prompt template
 
 ## Three states a plan can be in
 
-`plan.status` ∈ `{"draft", "approved", "executing", "completed"}`.
+`plan.status` ∈ `{"draft", "approved", "executing", "completed"}`
+([work_mode_middleware.py:74](../../backend/src/agents/middlewares/work_mode_middleware.py#L74)).
 
 - **`draft`** — Planner has written `plan.md`. LLM is gated from execution
   tools. Clarifications may be pending. Re-planning is allowed (capped at
-  5 revisions).
+  `_MAX_DRAFT_REVISIONS = 5`,
+  [planner_middleware.py:731](../../backend/src/agents/middlewares/planner_middleware.py#L731)).
 - **`approved`** — Either (a) the user clicked **Execute Plan** in the UI
   and `/api/threads/{id}/plan/execute` flipped the status, or (b)
   `auto_mode=True` + no pending clarifications caused the planner to
@@ -73,14 +83,19 @@ forces `current_mode="plan"` and injects the plan-mode prompt template
   todo loop.
 - **`completed`** — All todos closed; final summary emitted.
 
-## Two trigger paths in detail
+## Entry to Plan Mode is user-initiated only
 
-### Path A — Manual toggle (user picks Plan Mode)
+Plan Mode is entered **manually via the UI** (Shift+Tab or the toolbar
+chip). Work Mode **never auto-escalates** into Plan Mode — both the legacy
+complexity-based escalation and the auto-mode plan-adaptation respawn
+(`_spawn_plan_rerun` / `_MAX_AUTO_ADAPTATION_ATTEMPTS`) have been removed.
 
-The input-box toolbar exposes a Plan-Mode chip
-([input-box-left-toolbar.tsx:146](../../frontend/src/components/workspace/input-box-left-toolbar.tsx#L146)).
+### Manual toggle (the only path)
+
+The input-box toolbar exposes a Plan-Mode chip inside a dropdown
+([input-box-left-toolbar.tsx:146-170](../../frontend/src/components/workspace/input-box-left-toolbar.tsx#L146-L170)).
 Clicking it flips `settings.context.mode` to `"plan"`
-([input-box.tsx:505-549](../../frontend/src/components/workspace/input-box.tsx#L505-L549)).
+([input-box.tsx:505-554](../../frontend/src/components/workspace/input-box.tsx#L505-L554)).
 
 On send, the thread hook posts to LangGraph with:
 
@@ -89,44 +104,51 @@ On send, the thread hook posts to LangGraph with:
   "configurable": {
     "current_mode": "plan",
     "mode": "plan",             // legacy dual-write
-    "is_plan_mode": true,        // legacy dual-write
+    "is_plan_mode": true,       // legacy dual-write
     "plan_behavior": "plan_foreground"
   }
 }
 ```
 
-LangGraph routes to whichever graph the frontend named; both
-`work_agent` and `plan_agent` factories read `current_mode` and behave
-identically when it equals `"plan"`. In practice, modern clients target
-`plan_agent` directly.
+Modern clients address the `plan_agent` graph directly by name.
+`make_plan_agent` re-writes these keys defensively so a caller that
+addresses the graph by name without setting `mode` still gets plan-mode
+behavior ([plan_agent/agent.py:30-37](../../backend/src/agents/plan_agent/agent.py#L30-L37)).
 
-### Path B — Auto-escalation (Work Mode escalates)
+### Plan stalls emit `plan_adapted` (UI surfaces, user decides)
 
-While running in Work Mode, [`WorkModeMiddleware.before_model`](../../backend/src/agents/middlewares/work_mode_middleware.py#L333)
-classifies the latest user prompt with `_classify_complexity`
-([work_mode_middleware.py:110](../../backend/src/agents/middlewares/work_mode_middleware.py#L110)).
-If it lands as `"complex"` AND no plan exists yet, the middleware calls
-[`_handle_complexity_escalation`](../../backend/src/agents/middlewares/work_mode_middleware.py#L649):
-
-1. Emit a `complexity_escalation` SSE event so the UI can prompt the user.
-2. If `auto_mode=True` is in the runtime context, spawn a daemon
-   ([`_spawn_plan_rerun`](../../backend/src/agents/middlewares/work_mode_middleware.py#L233))
-   that re-invokes the same thread with `current_mode="plan"` after the
-   current Work Mode run reaches its checkpoint.
-
-The same machinery also fires on **`plan_adapted`** events (Work Mode finds
-blocked todos and asks Plan Mode to revise), capped at
-`_MAX_AUTO_ADAPTATION_ATTEMPTS = 2`
-([work_mode_middleware.py:53](../../backend/src/agents/middlewares/work_mode_middleware.py#L53)).
+When Work Mode encounters a plan with no ready todos but pending ones
+remain (typically because every remaining todo is `blocked`),
+[`WorkModeMiddleware._handle_plan_adapted`](../../backend/src/agents/middlewares/work_mode_middleware.py#L463-L503)
+emits a `plan_adapted` SSE event with the blocked todo IDs and an
+`adaptation_attempts` counter. The UI surfaces this stall and **the user
+decides** whether to switch back to Plan Mode and revise. No daemon
+re-spawns Plan Mode automatically.
 
 ## What Plan Mode is NOT
 
 - **Not** an alternative chat mode for "structured answers". It produces a
   plan, not the answer. The plan-mode prompt explicitly tells the LLM to
-  suppress training-data answers ([plan_agent/prompt.py:37-48](../../backend/src/agents/plan_agent/prompt.py#L37-L48)).
-- **Not** a place to call `web_search`, `task`, or content-gathering tools.
-  Those are stripped from the catalog by `PhaseToolFilterMiddleware`. The
-  only research tool exposed is `scope_search` (narrow scope discovery).
+  suppress training-data answers
+  ([plan_agent/prompt.py:37-48](../../backend/src/agents/plan_agent/prompt.py#L37-L48)).
+- **Not** an unrestricted research surface. The tool catalog served to
+  Plan Mode is [`internal_tools_plan.json`](../../backend/src/tools/internal_tools_plan.json),
+  which excludes execution tools (`bash`, `write_file`, `str_replace`,
+  `task`). Community tools are mode-scoped at load time by
+  `_COMMUNITY_TOOL_MODES` in [`tools/tools.py`](../../backend/src/tools/tools.py)
+  — `web_search` is available in all modes, knowledge-vault tools are
+  work-only. The legacy `scope_search` wrapper is deprecated;
+  `web_search` is exposed directly in Plan Mode. The plan-mode prompt
+  still names `scope_search` as the conceptual "scope discovery" tool
+  ([prompt.py:65](../../backend/src/agents/plan_agent/prompt.py#L65)), but
+  the underlying handler is `web_search`.
+- **Not** filtered at runtime by `PhaseToolFilterMiddleware`. That
+  middleware was previously responsible for hiding execution tools in
+  Plan Mode; today its only remaining job is a Work-Mode first-turn
+  execution-tool gate (no plan, no prior AI message → execution tools
+  hidden so the LLM has to reason before acting). Mode/plan-status
+  filtering is resolved up-front by per-mode catalog selection in
+  [`get_available_tools`](../../backend/src/tools/tools.py).
 - **Not** the trivial fast path. Trivial requests skip the planner LLM via
-  `_classify_complexity` ([planner_middleware.py:444](../../backend/src/agents/middlewares/planner_middleware.py#L444))
-  and `_looks_like_direct_answer_request` ([planner_middleware.py:459](../../backend/src/agents/middlewares/planner_middleware.py#L459)).
+  [`_looks_like_direct_answer_request`](../../backend/src/agents/middlewares/planner_middleware.py#L473)
+  in `planner_middleware.py`.
