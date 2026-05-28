@@ -66,7 +66,7 @@ class AppConfig(BaseModel):
     tool_groups: list[ToolGroupConfig] = Field(default_factory=list, description="Available tool groups")
     json_driven_tools: bool = Field(
         default=True,
-        description="When true (default), built-in/sandbox tool descriptions and per-arg docs are sourced from src/tools/internal_tools_plan.json (in plan mode) or src/tools/internal_tools_work.json (in work/auto mode), falling back to the legacy combined src/tools/internal_tools.json if a per-mode file is missing; the loader applies declarative mode/phase/endpoint policy. Set to false in config.yaml to fall back to the legacy hard-coded BUILTIN_TOOLS path while debugging.",
+        description="When true (default), built-in/sandbox tool descriptions are sourced from per-mode catalogs (internal_tools_plan.json / internal_tools_work.json). Set false to fall back to hard-coded BUILTIN_TOOLS.",
     )
     skills: SkillsConfig = Field(default_factory=SkillsConfig, description="Skills configuration")
     prompt: PromptConfig = Field(default_factory=PromptConfig, description="Prompt assembly configuration")

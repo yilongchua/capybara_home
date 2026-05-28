@@ -1,13 +1,15 @@
-"""Loader that hydrates BaseTool instances from internal_tools.json.
+"""Loader that hydrates BaseTool instances from the per-mode tool catalogs.
 
-Each JSON entry resolves to an existing langchain BaseTool (the `@tool`-
-decorated function exported from src.tools.builtins or src.sandbox.tools).
-The loader rewrites the tool's `description` (and per-argument descriptions
-where the field names match) so the LLM-facing contract is sourced from JSON.
+Each JSON entry in `internal_tools_plan.json` / `internal_tools_work.json`
+resolves to an existing langchain BaseTool (the `@tool`-decorated function
+exported from src.tools.builtins or src.sandbox.tools). The loader rewrites
+the tool's `description` (and per-argument descriptions where the field names
+match) so the LLM-facing contract is sourced from JSON.
 
-Filter fields (`mode`, `phase`, `endpoint`, `requires_vision`,
-`requires_subagent_enabled`, `groups`) are kept on the wrapped tool via an
-attached `_capyhome_policy` attribute that downstream middlewares can read.
+The `mode` and `phase` axes are resolved up-front at catalog-file selection
+time (see `src/tools/tools.py`), so the policy fields on each entry are kept
+on the wrapped tool via `_capyhome_policy` for diagnostics and the audit tool
+only — runtime middleware no longer re-checks them.
 """
 
 from __future__ import annotations
@@ -15,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any
 
 from langchain.tools import BaseTool
 
@@ -32,7 +33,7 @@ class ToolDefinitionError(ValueError):
 
 
 def load_tool_definitions(path: Path | str) -> list[ToolDefinition]:
-    """Parse internal_tools.json into ToolDefinition objects.
+    """Parse a tool catalog JSON file into ToolDefinition objects.
 
     Returns an empty list when the file is missing — callers fall back to the
     legacy in-code BUILTIN_TOOLS list. Raises ToolDefinitionError on a malformed
@@ -158,19 +159,6 @@ def schema_drift_report(defn: ToolDefinition, tool: BaseTool) -> list[str]:
     return errors
 
 
-def _accepts_runtime_context(tool: BaseTool, key: str, value: Any) -> bool:
-    """Predicate helpers used by filter_tools (see below)."""
-    policy = get_tool_policy(tool)
-    if policy is None:
-        return True
-    allowed = getattr(policy, key, None)
-    if not allowed:
-        return True
-    if isinstance(allowed, list):
-        return value in allowed
-    return allowed == value
-
-
 def filter_mcp_tools_by_policy(
     tools: list[BaseTool],
     policy: ExternalPolicy,
@@ -225,42 +213,3 @@ def filter_mcp_tools_by_policy(
     return kept
 
 
-def filter_tools(
-    tools: list[BaseTool],
-    *,
-    mode: str | None = None,
-    phase: str | None = None,
-    endpoint: str | None = None,
-    groups: list[str] | None = None,
-    supports_vision: bool = False,
-    subagent_enabled: bool = False,
-) -> list[BaseTool]:
-    """Apply declarative policy filters to a tool list.
-
-    Tools without an attached policy (the legacy path, or tools loaded from
-    config.yaml without a JSON entry) pass through unfiltered — only JSON-
-    annotated tools see policy enforcement.
-    """
-    kept: list[BaseTool] = []
-    for tool in tools:
-        policy = get_tool_policy(tool)
-        if policy is None:
-            kept.append(tool)
-            continue
-        if policy.deprecated:
-            continue
-        if policy.requires_vision and not supports_vision:
-            continue
-        if policy.requires_subagent_enabled and not subagent_enabled:
-            continue
-        if mode and mode not in policy.mode:
-            continue
-        if phase and phase not in policy.phase:
-            continue
-        if endpoint and endpoint != "any" and policy.endpoint not in {"any", endpoint}:
-            continue
-        if groups:
-            if policy.groups and not (set(policy.groups) & set(groups)):
-                continue
-        kept.append(tool)
-    return kept

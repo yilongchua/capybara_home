@@ -25,7 +25,6 @@ CATALOG_PATHS = [
     for p in (
         TOOLS_DIR / "internal_tools_plan.json",
         TOOLS_DIR / "internal_tools_work.json",
-        TOOLS_DIR / "internal_tools.json",
     )
     if p.exists()
 ]

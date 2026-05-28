@@ -12,7 +12,6 @@ from src.tools.loader import (
     POLICY_ATTR,
     ToolDefinitionError,
     build_structured_tool,
-    filter_tools,
     get_tool_policy,
     load_external_policy,
     load_tool_definitions,
@@ -148,34 +147,6 @@ def test_schema_drift_report_flags_missing_json_arg() -> None:
     built = build_structured_tool(defn)
     drift = schema_drift_report(defn, built)
     assert any("count" in line for line in drift)
-
-
-def test_filter_tools_passes_through_unannotated_tools() -> None:
-    plain = echo_fixture_tool
-    assert filter_tools([plain], mode="plan", phase="draft") == [plain]
-
-
-def test_filter_tools_respects_mode_phase_vision_subagent() -> None:
-    defn_plan_only = _make_defn(name="echo_fixture", mode=["plan"])
-    plan_only = build_structured_tool(defn_plan_only)
-    assert filter_tools([plan_only], mode="plan") == [plan_only]
-    assert filter_tools([plan_only], mode="work") == []
-
-    defn_vision = _make_defn(requires_vision=True)
-    vision_tool = build_structured_tool(defn_vision)
-    assert filter_tools([vision_tool], supports_vision=False) == []
-    assert filter_tools([vision_tool], supports_vision=True) == [vision_tool]
-
-    defn_subagent_gate = _make_defn(requires_subagent_enabled=True)
-    gated = build_structured_tool(defn_subagent_gate)
-    assert filter_tools([gated], subagent_enabled=False) == []
-    assert filter_tools([gated], subagent_enabled=True) == [gated]
-
-
-def test_filter_tools_drops_deprecated() -> None:
-    defn = _make_defn(deprecated=True)
-    built = build_structured_tool(defn)
-    assert filter_tools([built]) == []
 
 
 def test_load_external_policy_defaults_when_missing(tmp_path: Path) -> None:

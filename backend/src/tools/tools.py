@@ -4,40 +4,38 @@ from pathlib import Path
 from langchain.tools import BaseTool
 
 from src.community.knowledge_vault_search import query_knowledge_vault_tool, save_to_knowledge_vault_tool
-from src.community.scope_search import scope_search_tool
+
+# DEPRECATED: scope_search tool is no longer used. web_search is now available
+# directly in Plan Mode (see _COMMUNITY_TOOL_MODES below and the deprecated
+# PhaseToolFilter / PlanExecutionGate middlewares). Kept as a commented import
+# so the wrapper module is preserved for reference.
+# from src.community.scope_search import scope_search_tool
 from src.community.web_search import web_search_tool
 from src.config import get_app_config
 from src.reflection import resolve_variable
 from src.tools.builtins import ask_user_for_clarification_tool, present_file_tool, recall_tool, task_tool, view_image_tool, write_todos_tool
-from src.tools.loader import POLICY_ATTR, build_structured_tool, filter_mcp_tools_by_policy, get_tool_policy, load_external_policy, load_tool_definitions
+from src.tools.loader import build_structured_tool, filter_mcp_tools_by_policy, load_external_policy, load_tool_definitions
 
 logger = logging.getLogger(__name__)
 
-INTERNAL_TOOLS_JSON = Path(__file__).resolve().parent / "internal_tools.json"
 INTERNAL_TOOLS_PLAN_JSON = Path(__file__).resolve().parent / "internal_tools_plan.json"
 INTERNAL_TOOLS_WORK_JSON = Path(__file__).resolve().parent / "internal_tools_work.json"
 EXTERNAL_TOOLS_JSON = Path(__file__).resolve().parent / "external_tools.json"
 
 
 def _resolve_internal_tools_path(mode: str | None) -> Path:
-    """Pick the per-mode tool catalog file, falling back to the combined legacy file.
+    """Pick the per-mode tool catalog file.
 
     `internal_tools_plan.json` and `internal_tools_work.json` carry mode-tailored
     descriptions so the LLM-facing contract for a tool can differ between plan
-    and work without coupling the two surfaces. If the per-mode file is missing
-    we fall back to `internal_tools.json`, which is the legacy single-file path
-    that still works for callers that haven't started passing mode through.
+    and work without coupling the two surfaces. Mode unset defaults to the work
+    file (matches the default runtime).
     """
     mode_lower = (mode or "").strip().lower()
-    if mode_lower == "plan" and INTERNAL_TOOLS_PLAN_JSON.exists():
+    if mode_lower == "plan":
         return INTERNAL_TOOLS_PLAN_JSON
-    if mode_lower in {"work", "auto"} and INTERNAL_TOOLS_WORK_JSON.exists():
-        return INTERNAL_TOOLS_WORK_JSON
-    # Unset or unknown mode → prefer the work file (matches default runtime),
-    # then the legacy combined file.
-    if INTERNAL_TOOLS_WORK_JSON.exists() and not mode_lower:
-        return INTERNAL_TOOLS_WORK_JSON
-    return INTERNAL_TOOLS_JSON
+    return INTERNAL_TOOLS_WORK_JSON
+
 
 BUILTIN_TOOLS = [
     present_file_tool,
@@ -45,18 +43,52 @@ BUILTIN_TOOLS = [
     recall_tool,
     write_todos_tool,
     web_search_tool,
-    # scope_search is the Plan-Mode-friendly wrapper around web_search. Both
-    # are registered; PhaseToolFilterMiddleware hides web_search while a plan
-    # is in draft so the LLM only ever sees scope_search until approval.
-    scope_search_tool,
+    # DEPRECATED: scope_search wrapper is no longer registered. web_search is
+    # now exposed directly in Plan Mode via _COMMUNITY_TOOL_MODES below.
+    # scope_search_tool,
     query_knowledge_vault_tool,
     save_to_knowledge_vault_tool,
 ]
+
+# Tools that arrive via config.yaml `tools:` or BUILTIN_TOOLS don't carry a
+# mode field, so we mode-scope them here. The JSON catalog files already
+# encode mode for JSON-driven entries via the file split (plan vs work).
+# Membership semantics: a tool is exposed in a mode iff that mode is in its set.
+# Tools absent from this map are exposed in every mode.
+_COMMUNITY_TOOL_MODES: dict[str, frozenset[str]] = {
+    # web_search is now available in plan mode as well (scope_search deprecated).
+    "web_search": frozenset({"plan", "work", "auto"}),
+    "query_knowledge_vault": frozenset({"work", "auto"}),
+    "save_to_knowledge_vault": frozenset({"work", "auto"}),
+    # Execution tools defined in config.yaml. The JSON work catalog already
+    # excludes these from plan mode, but the config.yaml `loaded_tools` path
+    # would otherwise re-introduce them under plan_agent without a policy.
+    "bash": frozenset({"work", "auto"}),
+    "write_file": frozenset({"work", "auto"}),
+    "str_replace": frozenset({"work", "auto"}),
+    "comfyui_generate": frozenset({"work", "auto"}),
+    # DEPRECATED: scope_search wrapper no longer registered.
+    # "scope_search": frozenset({"plan"}),
+}
 
 SUBAGENT_TOOLS = [
     task_tool,
     # task_status_tool is no longer exposed to LLM (backend handles polling internally)
 ]
+
+
+def _community_tool_allowed_in_mode(tool_name: str, mode: str | None) -> bool:
+    """True when `tool_name` is in-scope for `mode` per _COMMUNITY_TOOL_MODES.
+
+    Unmapped tools are unrestricted. Unset/unknown mode falls back to work.
+    """
+    allowed_modes = _COMMUNITY_TOOL_MODES.get(tool_name)
+    if allowed_modes is None:
+        return True
+    mode_lower = (mode or "work").strip().lower()
+    if mode_lower not in {"plan", "work", "auto"}:
+        mode_lower = "work"
+    return mode_lower in allowed_modes
 
 
 def _get_community_tool_enabled(tool_name: str) -> bool:
@@ -94,19 +126,22 @@ def get_available_tools(
         subagent_enabled: Whether to include subagent tools (task, task_status).
         mode: Optional runtime mode (`plan`, `work`, or `auto`). Selects between
             `internal_tools_plan.json` and `internal_tools_work.json` so the
-            LLM-facing tool descriptions can be tailored per mode. Defaults to
-            the work file when unset.
+            LLM-facing tool descriptions can be tailored per mode and so
+            mode-scoped community tools (web_search, scope_search, etc.) are
+            included only in the appropriate mode. Defaults to work when unset.
 
     Returns:
         List of available tools.
     """
     config = get_app_config()
 
-    # Config-defined tools (config.yaml `tools:` section), filtered by group and community override.
+    # Config-defined tools (config.yaml `tools:` section), filtered by group, community override, and mode.
     loaded_tools = [
         resolve_variable(tool.use, BaseTool)
         for tool in config.tools
-        if (groups is None or tool.group in groups) and _get_community_tool_enabled(tool.name)
+        if (groups is None or tool.group in groups)
+        and _get_community_tool_enabled(tool.name)
+        and _community_tool_allowed_in_mode(tool.name, mode)
     ]
 
     # Get cached MCP tools if enabled
@@ -167,7 +202,11 @@ def get_available_tools(
         )
     else:
         # Legacy path — keep the hard-coded BUILTIN_TOOLS until Phase 6 cutover.
-        builtin_tools = [t for t in BUILTIN_TOOLS if _get_community_tool_enabled(t.name)]
+        builtin_tools = [
+            t
+            for t in BUILTIN_TOOLS
+            if _get_community_tool_enabled(t.name) and _community_tool_allowed_in_mode(t.name, mode)
+        ]
         disabled_builtins = [t.name for t in BUILTIN_TOOLS if t.name not in {b.name for b in builtin_tools}]
         if disabled_builtins:
             logger.info("Community tool overrides disabled: %s", disabled_builtins)
@@ -193,66 +232,21 @@ def get_available_tools(
             continue
         seen.add(name)
         deduped.append(tool)
-
-    # Backfill JSON policy onto config.yaml-loaded tools when their counterpart
-    # is declared in the *other* mode's catalog. Without this, a tool that only
-    # appears in `internal_tools_work.json` (e.g. `bash`) would arrive in plan
-    # mode via `loaded_tools` without any policy attached, and the runtime
-    # `PhaseToolFilterMiddleware._filter_tools_by_policy` would pass it through
-    # — silently exposing execution tools that the split was designed to hide.
-    if getattr(config, "json_driven_tools", False):
-        _backfill_policy_from_other_catalogs(deduped, current_mode=mode)
     return deduped
-
-
-def _backfill_policy_from_other_catalogs(tools: list[BaseTool], *, current_mode: str | None) -> None:
-    """Attach JSON policy from the inactive catalog onto unannotated tools.
-
-    Runtime middleware filters by the policy attached via `_capyhome_policy`.
-    Tools loaded from config.yaml never carry one, and tools whose declaration
-    lives in the inactive catalog (e.g. `bash` in work-only mode) won't either
-    when the active catalog is the plan file. We mutate those tools in place
-    so the middleware can do its job.
-    """
-    # Snapshot every JSON catalog except the active one (already applied by
-    # `_build_builtin_tools_from_json`). Active catalog is fine to include too
-    # — re-attaching the same policy is a no-op.
-    name_to_policy: dict[str, object] = {}
-    for path in (INTERNAL_TOOLS_PLAN_JSON, INTERNAL_TOOLS_WORK_JSON, INTERNAL_TOOLS_JSON):
-        if not path.exists():
-            continue
-        try:
-            for defn in load_tool_definitions(path):
-                # Prefer the first occurrence (plan > work > legacy ordering),
-                # since we mainly want a policy that mentions the active mode
-                # if any catalog declares one.
-                name_to_policy.setdefault(defn.name, defn)
-        except Exception:
-            logger.exception("Skipping malformed catalog while backfilling policy: %s", path.name)
-
-    for tool in tools:
-        if get_tool_policy(tool) is not None:
-            continue
-        name = getattr(tool, "name", "")
-        defn = name_to_policy.get(name)
-        if defn is None:
-            continue
-        setattr(tool, POLICY_ATTR, defn)
 
 
 def _build_builtin_tools_from_json(*, subagent_enabled: bool, supports_vision: bool, mode: str | None = None) -> list[BaseTool]:
     """Materialize built-in/sandbox tools from the mode-specific JSON catalog.
 
     Picks `internal_tools_plan.json` or `internal_tools_work.json` based on
-    `mode` (falls back to the combined `internal_tools.json` when the split
-    files are missing). Applies the same declarative filters the legacy path
-    enforces imperatively: community on/off overrides, subagent gating
+    `mode`. Applies the same declarative filters the legacy path enforces
+    imperatively: community on/off overrides, subagent gating
     (`requires_subagent_enabled`), and vision gating (`requires_vision`).
     Tools whose handlers fail to resolve are logged and skipped so a single
     bad entry never breaks the agent.
 
-    Community tools listed in BUILTIN_TOOLS that have no JSON entry yet are
-    appended at the end so flipping the flag doesn't shrink the catalog.
+    Community tools listed in BUILTIN_TOOLS that have no JSON entry are
+    appended at the end, scoped to the active mode via _COMMUNITY_TOOL_MODES.
     """
     catalog_path = _resolve_internal_tools_path(mode)
     try:
@@ -279,11 +273,14 @@ def _build_builtin_tools_from_json(*, subagent_enabled: bool, supports_vision: b
             logger.exception("Skipping tool '%s' — handler resolution failed", defn.name)
 
     # Carry over BUILTIN_TOOLS entries (community tools like web_search,
-    # scope_search, knowledge_vault_*) that don't yet have a JSON entry.
+    # scope_search, knowledge_vault_*) that have no JSON entry, but only when
+    # the active mode admits them per _COMMUNITY_TOOL_MODES.
     for tool in BUILTIN_TOOLS:
         if tool.name in json_names:
             continue
         if not _get_community_tool_enabled(tool.name):
+            continue
+        if not _community_tool_allowed_in_mode(tool.name, mode):
             continue
         tools.append(tool)
     if subagent_enabled:

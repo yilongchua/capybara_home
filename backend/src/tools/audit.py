@@ -19,7 +19,6 @@ from pathlib import Path
 
 from src.tools.loader import get_tool_policy, load_tool_definitions
 from src.tools.tools import (
-    INTERNAL_TOOLS_JSON,
     INTERNAL_TOOLS_PLAN_JSON,
     INTERNAL_TOOLS_WORK_JSON,
     get_available_tools,
@@ -27,11 +26,9 @@ from src.tools.tools import (
 
 
 def _catalog_path_for_mode(mode: str | None) -> Path:
-    if mode == "plan" and INTERNAL_TOOLS_PLAN_JSON.exists():
+    if mode == "plan":
         return INTERNAL_TOOLS_PLAN_JSON
-    if mode in {"work", "auto", None} and INTERNAL_TOOLS_WORK_JSON.exists():
-        return INTERNAL_TOOLS_WORK_JSON
-    return INTERNAL_TOOLS_JSON
+    return INTERNAL_TOOLS_WORK_JSON
 
 
 def _format_row(tool) -> str:

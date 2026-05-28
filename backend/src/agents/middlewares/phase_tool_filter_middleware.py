@@ -1,24 +1,17 @@
-"""Phase-aware tool-list shaping.
+"""First-turn execution gate.
 
-This middleware runs in ``wrap_model_call`` and rewrites the bound tool list
-passed to the LLM based on whether the current plan is in draft or has been
-approved. The LLM literally cannot call what it cannot see — this is a much
-stronger behavioral signal than reactive runtime blocking.
+Mode-based filtering (plan vs work) is resolved up-front at agent build time:
+the catalog file selection in `src/tools/tools.py` picks
+`internal_tools_plan.json` or `internal_tools_work.json` for the JSON-driven
+tools, and `_COMMUNITY_TOOL_MODES` scopes community tools to the right mode.
+Plan-status transitions (draft → approved) are inter-graph — plan_agent
+terminates before work_agent runs — so they don't need a runtime filter either.
 
-Two symmetric filters apply:
-
-- **Draft / Plan Mode**: execution tools — ``web_search``,
-  ``query_knowledge_vault``, ``search_internal_documents``, ``task``,
-  ``write_file``, ``str_replace`` — are removed from the LLM's tool catalog.
-  ``scope_search`` (a Plan-Mode wrapper around ``web_search``) remains visible
-  so the agent can narrow scope before approval.
-- **Work Mode / approved plan**: Plan-Mode-only tools — currently
-  ``scope_search`` — are removed. The full execution catalog (``web_search``
-  etc.) passes through. This keeps ``scope_search``'s narrow Plan-Mode
-  contract from being mis-used as a lightweight ``web_search``.
-
-Pair with ``PlanExecutionGateMiddleware`` (defense in depth) and the runtime
-classifier inside it (final fallback if a custom agent re-exposes tools).
+What remains is purely behavioral: on the very first turn of a Work-Mode run
+that has no plan (i.e. work_agent invoked directly, no Plan-Mode handoff), we
+hide execution tools so the LLM is forced to reason before reaching for
+bash / write_file / web_search / task. From turn 2 onward the full catalog is
+exposed.
 """
 
 from __future__ import annotations
@@ -33,41 +26,28 @@ from langchain.agents.middleware.types import ModelCallResult, ModelRequest, Mod
 from langgraph.runtime import Runtime
 
 from src.agents.middlewares.runtime_events import append_runtime_event
-from src.tools.loader import get_tool_policy
 
 logger = logging.getLogger(__name__)
 
 
-_DRAFT_HIDDEN_TOOLS: frozenset[str] = frozenset(
+# Tools that mutate state, dispatch subagents, or hit the network. Hidden on
+# the first turn of a no-plan Work-Mode run so the LLM has to reason first.
+_EXECUTION_TOOLS: frozenset[str] = frozenset(
     {
-        # Execution-grade search tools — must wait for plan approval.
+        "bash",
+        "write_file",
+        "str_replace",
+        "task",
         "web_search",
         "query_knowledge_vault",
         "search_internal_documents",
-        # Knowledge vault writes — no content gathering during draft.
         "save_to_knowledge_vault",
-        # Subagent dispatch and write tools.
-        "task",
-        "write_file",
-        "str_replace",
     }
 )
-
-# Tools that only make sense BEFORE plan approval (or in Plan Mode). Hidden in
-# Work Mode / approved-plan state so the LLM can't reach for them as a
-# lightweight alternative to the real execution tools.
-_WORK_HIDDEN_TOOLS: frozenset[str] = frozenset({"scope_search"})
 
 
 class PhaseToolFilterState(AgentState):
     plan: NotRequired[dict | None]
-
-
-def _normalize_plan_status(raw: Any) -> str:
-    value = str(raw or "").strip().lower()
-    if value in {"draft", "approved", "executing", "completed"}:
-        return value
-    return ""
 
 
 def _runtime_context(runtime: Runtime | None) -> dict[str, Any]:
@@ -78,45 +58,31 @@ def _runtime_context(runtime: Runtime | None) -> dict[str, Any]:
 def _is_plan_mode(runtime: Runtime | None) -> bool:
     ctx = _runtime_context(runtime)
     # Prefer canonical ``current_mode``; fall back to legacy ``mode`` / ``is_plan_mode``
-    # for runs whose context predates the field rename (kept until callers migrate).
+    # for runs whose context predates the field rename.
     raw = ctx.get("current_mode") or ctx.get("mode") or ("plan" if ctx.get("is_plan_mode") else "")
     return str(raw).strip().lower() == "plan"
 
 
 def _should_filter(state: dict[str, Any], runtime: Runtime | None) -> bool:
-    """Return True when execution tools must be hidden from the LLM."""
-    plan = state.get("plan") if isinstance(state, dict) else None
-    if isinstance(plan, dict):
-        status = _normalize_plan_status(plan.get("status"))
-        if status == "draft":
-            return True
-        # If a plan is explicitly approved/executing/completed, do not filter.
-        if status in {"approved", "executing", "completed"}:
-            return False
-        # Unknown/empty status on an existing plan dict — treat as draft.
-        return True
+    """Return True only for the first-turn warm-up in Work Mode without a plan.
 
-    # No plan dict yet. Plan Mode filters unconditionally.
+    Everything else is handled by catalog selection up-front:
+      * Plan Mode → plan catalog already excludes execution tools.
+      * Work Mode post-handoff → plan dict present, agent has been reasoned about.
+      * Work Mode mid-conversation → at least one AI message exists.
+    """
+    if not isinstance(state, dict):
+        return False
+    if isinstance(state.get("plan"), dict):
+        return False
     if _is_plan_mode(runtime):
-        return True
-
-    # Work Mode with no plan: this is the pre-classification window before the
-    # planner (if enabled) has had a chance to create a draft plan. Without
-    # this branch, turn 1 of a complex work-mode query exposes the full
-    # execution toolset to the LLM, which then fires `web_search` / `task` /
-    # `query_knowledge_vault` before `PlanExecutionGateMiddleware` can react —
-    # the gate then blocks the calls after the fact, wasting a model round-
-    # trip. Match the gate's conservative default by hiding execution tools
-    # on the very first turn (no AI messages yet). From turn 2 onward, either
-    # a plan exists (handled above) or the planner has decided this is a
-    # simple query — let the full catalog through.
-    if isinstance(state, dict):
-        messages = state.get("messages")
-        if isinstance(messages, list):
-            has_ai_messages = any(getattr(m, "type", None) == "ai" for m in messages)
-            if not has_ai_messages:
-                return True
-    return False
+        return False
+    # Work Mode, no plan: gate the very first model call (no prior AI msg).
+    messages = state.get("messages")
+    if not isinstance(messages, list):
+        return False
+    has_ai_messages = any(getattr(m, "type", None) == "ai" for m in messages)
+    return not has_ai_messages
 
 
 def _filter_tools(tools: list[Any], blocked: frozenset[str]) -> tuple[list[Any], list[str]]:
@@ -133,30 +99,8 @@ def _filter_tools(tools: list[Any], blocked: frozenset[str]) -> tuple[list[Any],
     return kept, hidden
 
 
-def _filter_tools_by_policy(tools: list[Any], *, mode: str, phase: str) -> tuple[list[Any], list[str]]:
-    """JSON-driven filter: a tool is dropped when its attached policy excludes the
-    current mode or phase. Tools without an attached policy pass through — they
-    are governed by the legacy `_filter_tools` blocked-name lists.
-    """
-    kept: list[Any] = []
-    hidden: list[str] = []
-    for tool in tools:
-        policy = get_tool_policy(tool) if not isinstance(tool, dict) else None
-        if policy is None:
-            kept.append(tool)
-            continue
-        if mode and policy.mode and mode not in policy.mode:
-            hidden.append(policy.name)
-            continue
-        if phase and policy.phase and phase not in policy.phase:
-            hidden.append(policy.name)
-            continue
-        kept.append(tool)
-    return kept, hidden
-
-
 class PhaseToolFilterMiddleware(AgentMiddleware[PhaseToolFilterState]):
-    """Hide execution tools from the LLM's tool catalog while plan is draft."""
+    """Hide execution tools from the LLM on the first turn of a no-plan run."""
 
     state_schema = PhaseToolFilterState
 
@@ -167,21 +111,9 @@ class PhaseToolFilterMiddleware(AgentMiddleware[PhaseToolFilterState]):
         state = request.state if isinstance(getattr(request, "state", None), dict) else {}
         runtime = getattr(request, "runtime", None)
         tools = list(getattr(request, "tools", []) or [])
-        if not tools:
+        if not tools or not _should_filter(state, runtime):
             return request
-        if _should_filter(state, runtime):
-            blocked, phase_label = _DRAFT_HIDDEN_TOOLS, "draft"
-        else:
-            blocked, phase_label = _WORK_HIDDEN_TOOLS, "work"
-        kept, hidden = _filter_tools(tools, blocked)
-
-        # Declarative policy filter — JSON-annotated tools opt out of phases
-        # they don't belong to via their attached ToolDefinition.policy.
-        ctx_mode = str(_runtime_context(runtime).get("mode") or "").strip().lower()
-        declarative_phase = "draft" if phase_label == "draft" else "approved"
-        kept, policy_hidden = _filter_tools_by_policy(kept, mode=ctx_mode, phase=declarative_phase)
-        hidden.extend(policy_hidden)
-
+        kept, hidden = _filter_tools(tools, _EXECUTION_TOOLS)
         if not hidden:
             return request
         append_runtime_event(
@@ -189,10 +121,9 @@ class PhaseToolFilterMiddleware(AgentMiddleware[PhaseToolFilterState]):
             {
                 "source": "phase_tool_filter",
                 "decision": "tools_hidden",
-                "phase": phase_label,
+                "phase": "first_turn",
                 "hidden": hidden,
                 "kept_count": len(kept),
-                "policy_hidden": policy_hidden,
             },
         )
         return request.override(tools=kept)

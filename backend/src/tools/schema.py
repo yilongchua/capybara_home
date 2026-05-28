@@ -1,10 +1,11 @@
 """Pydantic models describing the JSON tool-definition contract.
 
-`internal_tools.json` and `external_tools.json` are the declarative source of
-truth for LLM-facing tool descriptions, schemas, and filter policy. The Python
-handlers stay where they are; only the LLM contract layer (description,
-parameter docs, mode/phase/endpoint gating) moves to JSON. See
-docs/improvements/03-tool-descriptions.md for the audit that motivated this.
+`internal_tools_plan.json` / `internal_tools_work.json` and `external_tools.json`
+are the declarative source of truth for LLM-facing tool descriptions, schemas,
+and filter policy. The Python handlers stay where they are; only the LLM
+contract layer (description, parameter docs, mode/phase/endpoint gating) moves
+to JSON. See docs/improvements/03-tool-descriptions.md for the audit that
+motivated this.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ class ToolParameters(BaseModel):
 
 
 class ToolDefinition(BaseModel):
-    """One entry in internal_tools.json."""
+    """One entry in a per-mode internal tool catalog (plan or work)."""
 
     name: str
     description: str
