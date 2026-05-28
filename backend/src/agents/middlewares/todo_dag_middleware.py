@@ -110,6 +110,21 @@ def normalize_todo_nodes(raw_todos: list[TodoNodeInput]) -> list[dict[str, Any]]
         }
         if rationale:
             node["rationale"] = rationale
+        # Preserve planner-side rich fields so downstream consumers (plan
+        # evaluator, plan.md handoff, work-mode prompt) can read them without
+        # having to plumb a parallel store.
+        objective = str(raw.get("objective") or "").strip()
+        if objective:
+            node["objective"] = objective
+        failure_fallback = str(raw.get("failure_fallback") or "").strip()
+        if failure_fallback:
+            node["failure_fallback"] = failure_fallback
+        completion_requirement = str(raw.get("completion_requirement") or "").strip()
+        if completion_requirement:
+            node["completion_requirement"] = completion_requirement
+        steps = raw.get("steps")
+        if isinstance(steps, list) and steps:
+            node["steps"] = steps
         nodes.append(node)
 
     ids = {node["id"] for node in nodes}
@@ -146,6 +161,22 @@ def merge_todo_nodes(existing_nodes: list[dict[str, Any]], raw_updates: list[Tod
         for key in ("owner", "subagent_type", "target_endpoint", "tool_budget", "rationale"):
             if key in raw:
                 target[key] = raw.get(key)
+        # Rich fields: preserve unless the patch explicitly sets a new value.
+        # An explicit empty string clears the field; an explicit non-empty
+        # value overwrites; a missing key leaves the existing value alone.
+        for key in ("objective", "failure_fallback", "completion_requirement"):
+            if key in raw:
+                value = str(raw.get(key) or "").strip()
+                if value:
+                    target[key] = value
+                else:
+                    target.pop(key, None)
+        if "steps" in raw:
+            steps = raw.get("steps")
+            if isinstance(steps, list) and steps:
+                target["steps"] = steps
+            else:
+                target.pop("steps", None)
 
     for idx, raw in enumerate(raw_updates):
         raw_id = str(raw.get("id") or "").strip()
@@ -170,6 +201,18 @@ def merge_todo_nodes(existing_nodes: list[dict[str, Any]], raw_updates: list[Tod
         rationale = str(raw.get("rationale") or "").strip()
         if rationale:
             candidate["rationale"] = rationale
+        objective = str(raw.get("objective") or "").strip()
+        if objective:
+            candidate["objective"] = objective
+        failure_fallback = str(raw.get("failure_fallback") or "").strip()
+        if failure_fallback:
+            candidate["failure_fallback"] = failure_fallback
+        completion_requirement = str(raw.get("completion_requirement") or "").strip()
+        if completion_requirement:
+            candidate["completion_requirement"] = completion_requirement
+        steps = raw.get("steps")
+        if isinstance(steps, list) and steps:
+            candidate["steps"] = steps
         base_id = str(raw_id or candidate["id"])
         next_id = base_id
         suffix = 2

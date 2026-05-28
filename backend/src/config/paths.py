@@ -146,6 +146,11 @@ class Paths:
         write to the volume-mounted paths without "Permission denied" errors.
         The explicit chmod() call is necessary because Path.mkdir(mode=...) is
         subject to the process umask and may not yield the intended permissions.
+
+        Also performs a one-time migration of files from the legacy uploads
+        location ({user-data}/uploads/) into the new nested location
+        ({user-data}/workspace/uploads/) for threads created before uploads
+        were moved under workspace. The migration is best-effort and idempotent.
         """
         for d in [
             self.sandbox_work_dir(thread_id),
@@ -154,6 +159,53 @@ class Paths:
         ]:
             d.mkdir(parents=True, exist_ok=True)
             d.chmod(0o777)
+
+        self._migrate_legacy_uploads(thread_id)
+
+    def _migrate_legacy_uploads(self, thread_id: str) -> None:
+        """Move files from legacy `{user-data}/uploads/` into `{user-data}/workspace/uploads/`.
+
+        Pre-refactor threads have their uploaded files at the legacy path; the
+        new agent + UI looks at the nested path. Without this migration those
+        files would appear lost.
+
+        Safe to call repeatedly: returns early when the legacy dir is absent
+        or empty, and skips any filename that already exists at the new path
+        (does not overwrite).
+        """
+        legacy_dir = self.thread_dir(thread_id) / "user-data" / "uploads"
+        if not legacy_dir.is_dir():
+            return
+
+        new_dir = self.sandbox_uploads_dir(thread_id)
+        try:
+            entries = list(legacy_dir.iterdir())
+        except OSError:
+            return
+
+        moved = 0
+        for entry in entries:
+            target = new_dir / entry.name
+            if target.exists():
+                continue
+            try:
+                entry.rename(target)
+                moved += 1
+            except OSError:
+                continue
+
+        try:
+            if not any(legacy_dir.iterdir()):
+                legacy_dir.rmdir()
+        except OSError:
+            pass
+
+        if moved:
+            import logging
+            logging.getLogger(__name__).info(
+                "[paths] migrated %d legacy upload(s) for thread %s from %s -> %s",
+                moved, thread_id, legacy_dir, new_dir,
+            )
 
     def resolve_virtual_path(self, thread_id: str, virtual_path: str) -> Path:
         """Resolve a sandbox virtual path to the actual host filesystem path.
