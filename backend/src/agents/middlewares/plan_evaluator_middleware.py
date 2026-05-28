@@ -24,7 +24,6 @@ import asyncio
 import json
 import logging
 import re
-import threading
 from datetime import UTC, datetime
 from typing import Any, NotRequired, override
 
@@ -32,6 +31,7 @@ from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
 from langgraph.runtime import Runtime
 
+from src.agents.middlewares._timeout_utils import run_with_timeout
 from src.agents.middlewares.runtime_events import append_runtime_event
 from src.agents.middlewares.todo_dag_middleware import (
     _is_acyclic,
@@ -398,7 +398,7 @@ class PlanEvaluatorMiddleware(AgentMiddleware[PlanEvaluatorState]):
             return raw.strip()
 
         try:
-            return _run_with_timeout(_do_call, timeout=self._timeout_seconds), None
+            return run_with_timeout(_do_call, timeout=self._timeout_seconds, label="Plan evaluator"), None
         except TimeoutError:
             logger.warning("Plan evaluator timed out; skipping further attempts")
             return None, "timeout"
@@ -705,26 +705,3 @@ class PlanEvaluatorMiddleware(AgentMiddleware[PlanEvaluatorState]):
         return payload
 
 
-# ---------------------------------------------------------------------------
-# sync timeout helper (kept for the embedded sync code path)
-# ---------------------------------------------------------------------------
-
-def _run_with_timeout(fn, timeout: float) -> Any:
-    """Run fn() in a daemon thread with a hard timeout."""
-    result_holder: list[Any] = [None]
-    exc_holder: list[BaseException | None] = [None]
-
-    def worker():
-        try:
-            result_holder[0] = fn()
-        except Exception as e:  # noqa: BLE001
-            exc_holder[0] = e
-
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
-    t.join(timeout=timeout)
-    if t.is_alive():
-        raise TimeoutError(f"Plan evaluator timed out after {timeout}s")
-    if exc_holder[0] is not None:
-        raise exc_holder[0]
-    return result_holder[0]

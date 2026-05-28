@@ -154,6 +154,11 @@ handoffs:
 planner:
   enabled: true
   max_plan_steps: 8
+  max_clarifications: 5
+  # Inter-token idle timeout for the planner LLM stream. Long generations are
+  # allowed; this only fires if no token arrives for this many seconds (wedged
+  # provider). On timeout, planning is aborted and a planning_failed SSE is emitted.
+  timeout_seconds: 120.0
   research_fanout: true
   research_fanout_min_todos: 2
 

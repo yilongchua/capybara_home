@@ -509,6 +509,8 @@ export interface VaultIngestStatusResponse {
   updated_at?: string | null;
   log_path: string;
   cancel_requested?: boolean;
+  workers_requested?: number;
+  workers_active?: number;
   accepted?: boolean | null;
   message?: string | null;
 }

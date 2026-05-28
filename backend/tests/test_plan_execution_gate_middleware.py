@@ -103,11 +103,9 @@ def test_plan_mode_blocks_execution_even_when_plan_is_approved():
 def test_plan_mode_allows_safe_read_only_tools():
     middleware = PlanExecutionGateMiddleware()
     # web_search is no longer in the plan-mode safe set — it is hidden by
-    # PhaseToolFilterMiddleware and gated by the classifier. Use scope_search
-    # for in-plan-mode searching.
+    # PhaseToolFilterMiddleware and gated by the classifier.
     safe_tools = [
         ("read_file", {}),
-        ("scope_search", {"query": "what are the top sources for X"}),
         ("bash", {"command": "rg -n \"plan_mode\" /mnt/user-data/workspace/backend/src"}),
     ]
     for tool_name, args in safe_tools:

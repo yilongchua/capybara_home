@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   CopyIcon,
@@ -21,6 +22,12 @@ import { usePanelRef } from "react-resizable-panels";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownContent } from "@/components/workspace/messages/markdown-content";
@@ -87,8 +94,10 @@ export default function VaultPage() {
   const { ingestStatus } = useVaultIngestStatus();
   const startIngest = useStartVaultIngest();
   const cancelIngest = useCancelVaultIngest();
+  const [selectedWorkers, setSelectedWorkers] = useState<number>(1);
   const ingestRunning = ingestStatus?.status === "running" || startIngest.isPending;
   const cancelRequested = Boolean(ingestStatus?.cancel_requested) || cancelIngest.isPending;
+  const activeWorkers = ingestStatus?.workers_active ?? ingestStatus?.workers_requested ?? 0;
   const ingestEtaLabel = (() => {
     if (!ingestStatus || ingestStatus.status !== "running") return "";
     const total = ingestStatus.total || 0;
@@ -109,7 +118,8 @@ export default function VaultPage() {
       const title = (ingestStatus.current_title || "").trim();
       const truncated = title.length > 48 ? `${title.slice(0, 48)}…` : title;
       const totalLabel = total > 0 ? String(total) : "?";
-      const base = `Source ${current}/${totalLabel} ingesting${truncated ? ` ${truncated}` : "..."}`;
+      const workersLabel = activeWorkers > 1 ? ` · ${activeWorkers} workers` : "";
+      const base = `Source ${current}/${totalLabel} ingesting${truncated ? ` ${truncated}` : "..."}${workersLabel}`;
       if (cancelRequested) return `${base} · stopping after current source...`;
       return ingestEtaLabel ? `${base} · ~${ingestEtaLabel} remaining` : base;
     }
@@ -226,34 +236,77 @@ export default function VaultPage() {
                   ) : null}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      if (ingestRunning) {
-                        toast.message("Ingest already running.");
-                        return;
-                      }
-                      startIngest.mutate(undefined, {
-                        onSuccess: (payload) => {
-                          if (payload.accepted === false) {
-                            toast.message(payload.message ?? "Vault ingest already running.");
-                          } else {
-                            toast.success("Vault ingest started.");
-                          }
-                        },
-                        onError: (error) => toast.error(error.message),
-                      });
-                    }}
-                    disabled={ingestRunning}
-                  >
-                    {ingestRunning ? (
-                      <Loader2Icon className="mr-2 size-4 animate-spin" />
-                    ) : (
-                      <PlayIcon className="mr-2 size-4" />
-                    )}
-                    {ingestRunning ? "Ingesting..." : "Run Ingest"}
-                  </Button>
+                  <div className="inline-flex items-stretch">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-r-none border-r-0"
+                      onClick={() => {
+                        if (ingestRunning) {
+                          toast.message("Ingest already running.");
+                          return;
+                        }
+                        startIngest.mutate(
+                          { workers: selectedWorkers },
+                          {
+                            onSuccess: (payload) => {
+                              if (payload.accepted === false) {
+                                toast.message(payload.message ?? "Vault ingest already running.");
+                              } else {
+                                toast.success(
+                                  payload.message ??
+                                    `Vault ingest started with ${selectedWorkers} worker${
+                                      selectedWorkers === 1 ? "" : "s"
+                                    }.`,
+                                );
+                              }
+                            },
+                            onError: (error) => toast.error(error.message),
+                          },
+                        );
+                      }}
+                      disabled={ingestRunning}
+                    >
+                      {ingestRunning ? (
+                        <Loader2Icon className="mr-2 size-4 animate-spin" />
+                      ) : (
+                        <PlayIcon className="mr-2 size-4" />
+                      )}
+                      {ingestRunning
+                        ? "Ingesting..."
+                        : `Run Ingest${selectedWorkers > 1 ? ` (${selectedWorkers}×)` : ""}`}
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="rounded-l-none px-2"
+                          disabled={ingestRunning}
+                          title="Choose number of parallel workers"
+                          aria-label="Choose number of parallel workers"
+                        >
+                          <ChevronDownIcon className="size-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {[1, 2, 3].map((n) => (
+                          <DropdownMenuItem
+                            key={n}
+                            onClick={() => setSelectedWorkers(n)}
+                          >
+                            <CheckIcon
+                              className={`mr-2 size-3.5 ${
+                                selectedWorkers === n ? "opacity-100" : "opacity-0"
+                              }`}
+                            />
+                            {n} worker{n === 1 ? "" : "s"}
+                            {n === 1 ? " (sequential)" : ""}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                   {ingestRunning ? (
                     <Button
                       size="sm"

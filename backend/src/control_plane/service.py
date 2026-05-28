@@ -1482,6 +1482,8 @@ class ControlPlaneService:
             "updated_at": None,
             "log_path": "",
             "cancel_requested": False,
+            "workers_requested": 0,
+            "workers_active": 0,
         }
 
     def _vault_ingest_log_path(self) -> Path:
@@ -1515,12 +1517,20 @@ class ControlPlaneService:
         self._vault_ingest_logger = logger_obj
         return logger_obj
 
-    def start_vault_ingest_job(self, *, force_reanalyze: bool = False) -> dict[str, Any]:
-        # Parallel ingest runs are allowed. Each call spawns its own worker
-        # thread; cross-runner safety is enforced by the shared queue and
-        # manifest locks owned by `_VaultCoordination`. We still keep a
-        # `_vault_ingest_job` mirror updated for the existing single-job UI
-        # status endpoint — it now reflects the most-recently-started job.
+    def start_vault_ingest_job(
+        self,
+        *,
+        force_reanalyze: bool = False,
+        workers: int = 1,
+    ) -> dict[str, Any]:
+        # Parallel ingest runs are allowed. Each call spawns `workers` runner
+        # threads that share the same `_vault_ingest_job` state. Cross-worker
+        # safety relies on the queue's atomic lease-based claim
+        # (`claim_search_queue_items`) and the `_VaultCoordination` manifest
+        # locks. Worker 0 is the "master": after every worker finishes the
+        # queue-drain loop, worker 0 runs the one-shot reprocess phase and
+        # writes the final status. Workers 1..N-1 exit after draining.
+        worker_count = max(1, min(3, int(workers)))
         job_id = f"vault_ingest_{uuid4().hex[:12]}"
         log_path = self._vault_ingest_log_path()
         with self._vault_ingest_lock:
@@ -1532,44 +1542,202 @@ class ControlPlaneService:
                     "started_at": self._utcnow_iso(),
                     "updated_at": self._utcnow_iso(),
                     "log_path": str(log_path),
+                    "workers_requested": worker_count,
+                    "workers_active": 0,
                 }
             )
 
         logger_obj = self._get_vault_ingest_logger()
         logger_obj.info(
-            "vault_ingest_start job_id=%s force_reanalyze=%s log_path=%s",
+            "vault_ingest_start job_id=%s force_reanalyze=%s workers=%d log_path=%s",
             job_id,
             force_reanalyze,
+            worker_count,
             log_path,
         )
 
-        def _runner() -> None:
-            manager = self._default_vault_manager()
-            coord = manager._coord
+        manager = self._default_vault_manager()
+        coord = manager._coord
+
+        queue_workers_remaining = [worker_count]
+        queue_workers_lock = threading.Lock()
+        queue_done_event = threading.Event()
+        # Each chunk claim is bounded so concurrent workers naturally share
+        # the queue via atomic claims (work-stealing). Looping until empty
+        # handles queues larger than `QUEUE_CLAIM_CHUNK * worker_count`.
+        QUEUE_CLAIM_CHUNK = 100
+
+        def _drain_queue_loop(worker_index: int) -> None:
+            while True:
+                with self._vault_ingest_lock:
+                    if self._vault_ingest_job.get("cancel_requested"):
+                        return
+                try:
+                    claimed = manager.claim_search_queue_items(
+                        topic="", max_items=QUEUE_CLAIM_CHUNK,
+                    )
+                except Exception:
+                    logger_obj.exception(
+                        "vault_ingest_queue_claim_failed job_id=%s worker=%d",
+                        job_id,
+                        worker_index,
+                    )
+                    return
+                if not claimed:
+                    return
+                chunk_size = len(claimed)
+                with self._vault_ingest_lock:
+                    self._vault_ingest_job["total"] = int(
+                        self._vault_ingest_job.get("total", 0)
+                    ) + chunk_size
+                    if not str(self._vault_ingest_job.get("current_title") or "").strip():
+                        self._vault_ingest_job["current_title"] = (
+                            f"Draining queue ({chunk_size} item(s))"
+                        )
+                    self._vault_ingest_job["last_status"] = "queue_started"
+                    self._vault_ingest_job["updated_at"] = self._utcnow_iso()
+                logger_obj.info(
+                    "vault_ingest_queue_drain_chunk job_id=%s worker=%d claimed=%d",
+                    job_id,
+                    worker_index,
+                    chunk_size,
+                )
+
+                def _queue_progress(
+                    index: int,
+                    total: int,
+                    source_id: str,
+                    title: str,
+                    status: str,
+                    error: str | None,
+                ) -> None:
+                    with self._vault_ingest_lock:
+                        cancel = bool(self._vault_ingest_job.get("cancel_requested"))
+                        global_index = int(self._vault_ingest_job.get("current_index", 0)) + 1
+                        self._vault_ingest_job["current_index"] = global_index
+                        self._vault_ingest_job["processed"] = global_index
+                        self._vault_ingest_job["current_source_id"] = source_id
+                        self._vault_ingest_job["current_title"] = title
+                        self._vault_ingest_job["last_status"] = status
+                        self._vault_ingest_job["last_error"] = error
+                        self._vault_ingest_job["updated_at"] = self._utcnow_iso()
+                        global_total = int(self._vault_ingest_job.get("total", 0))
+                    if cancel:
+                        raise _VaultIngestCancelled()
+                    if status == "fetch_failed":
+                        logger_obj.warning(
+                            "vault_ingest_queue_item worker=%d index=%d/%d url=%r status=%s error=%s",
+                            worker_index,
+                            global_index,
+                            global_total,
+                            title,
+                            status,
+                            error,
+                        )
+                    else:
+                        logger_obj.info(
+                            "vault_ingest_queue_item worker=%d index=%d/%d url=%r status=%s",
+                            worker_index,
+                            global_index,
+                            global_total,
+                            title,
+                            status,
+                        )
+
+                try:
+                    queue_report = manager.ingest(
+                        urls=[],
+                        source="vault_ui_run_ingest",
+                        topic="",
+                        queue_items=claimed,
+                        progress_callback=_queue_progress,
+                    )
+                except _VaultIngestCancelled:
+                    queue_ids = [
+                        str(item.get("queue_id") or "")
+                        for item in claimed
+                        if str(item.get("queue_id") or "").strip()
+                    ]
+                    manager.requeue_claimed_items(
+                        queue_ids, reason="ingest_cancelled_by_user",
+                    )
+                    raise
+                except Exception:
+                    queue_ids = [
+                        str(item.get("queue_id") or "")
+                        for item in claimed
+                        if str(item.get("queue_id") or "").strip()
+                    ]
+                    manager.requeue_claimed_items(
+                        queue_ids, reason="ingest_failed_retry",
+                    )
+                    raise
+
+                ingested = int(queue_report.get("ingested_count") or 0)
+                with self._vault_ingest_lock:
+                    self._vault_ingest_job["updated"] = int(
+                        self._vault_ingest_job.get("updated", 0)
+                    ) + ingested
+                logger_obj.info(
+                    "vault_ingest_queue_drain_chunk_done job_id=%s worker=%d ingested=%d skipped=%d",
+                    job_id,
+                    worker_index,
+                    ingested,
+                    int(queue_report.get("skipped_unchanged_count") or 0),
+                )
+
+        def _runner(worker_index: int) -> None:
             with coord.counter_lock:
                 coord.active_runners += 1
                 runner_count_at_start = coord.active_runners
+            with self._vault_ingest_lock:
+                self._vault_ingest_job["workers_active"] = int(
+                    self._vault_ingest_job.get("workers_active", 0)
+                ) + 1
+
+            drain_decremented = False
+
+            def _mark_drain_done() -> None:
+                nonlocal drain_decremented
+                if drain_decremented:
+                    return
+                drain_decremented = True
+                with queue_workers_lock:
+                    queue_workers_remaining[0] -= 1
+                    if queue_workers_remaining[0] <= 0:
+                        queue_done_event.set()
+
             try:
-                # Phase 0 — rescue any claim whose lease has expired (parallel
-                # safe: live claims with unexpired leases stay with their
-                # current owner). Replaces the old "rescue all at job start"
-                # which is no longer correct now that other runners may exist.
+                # Phase 0 — rescue stale claims (idempotent across workers).
                 try:
-                    orphaned = manager.requeue_all_claimed_items(reason="orphaned_from_prior_run")
+                    orphaned = manager.requeue_all_claimed_items(
+                        reason="orphaned_from_prior_run",
+                    )
                     if orphaned:
                         logger_obj.info(
-                            "vault_ingest_orphan_requeue job_id=%s requeued=%d",
+                            "vault_ingest_orphan_requeue job_id=%s worker=%d requeued=%d",
                             job_id,
+                            worker_index,
                             orphaned,
                         )
                 except Exception:
-                    logger_obj.exception("vault_ingest_orphan_requeue_failed job_id=%s", job_id)
+                    logger_obj.exception(
+                        "vault_ingest_orphan_requeue_failed job_id=%s worker=%d",
+                        job_id,
+                        worker_index,
+                    )
 
-                # Phase 0b — prune compiled artifacts unreachable from the
-                # manifest. Only safe when *this* is the only active runner,
-                # otherwise a peer might be mid-write with a compiled file it
-                # hasn't yet recorded to disk.
-                if runner_count_at_start == 1:
+                # Phase 0b — compiled-artifact cleanup. Only safe when this
+                # runner has NO peers, neither from this job (`worker_count > 1`
+                # means our siblings are about to start writing files that the
+                # manifest hasn't recorded yet) nor from any concurrent ingest
+                # call (`runner_count_at_start > 1`). Running cleanup against a
+                # peer mid-write deletes their compiled output.
+                if (
+                    worker_index == 0
+                    and worker_count == 1
+                    and runner_count_at_start == 1
+                ):
                     try:
                         cleanup_summary = manager.cleanup_orphan_compiled_files()
                         if cleanup_summary.get("total"):
@@ -1579,132 +1747,40 @@ class ControlPlaneService:
                                 cleanup_summary,
                             )
                     except Exception:
-                        logger_obj.exception("vault_ingest_compiled_cleanup_failed job_id=%s", job_id)
-                else:
+                        logger_obj.exception(
+                            "vault_ingest_compiled_cleanup_failed job_id=%s",
+                            job_id,
+                        )
+                elif worker_index == 0:
                     logger_obj.info(
-                        "vault_ingest_compiled_cleanup_skipped job_id=%s reason=concurrent_runners active=%d",
+                        "vault_ingest_compiled_cleanup_skipped job_id=%s reason=peers worker_count=%d active=%d",
                         job_id,
+                        worker_count,
                         runner_count_at_start,
                     )
 
-                # Phase 1 — drain queued search results directly. Approval gating
-                # has been removed; the UI's Run Ingest button is the trigger.
-                claimed_items: list[dict[str, Any]] = []
+                # Phase 1 — queue drain loop (all workers participate).
                 try:
-                    claimed_items = manager.claim_search_queue_items(topic="", max_items=10_000)
-                except Exception:
-                    logger_obj.exception("vault_ingest_queue_claim_failed job_id=%s", job_id)
-                    claimed_items = []
+                    _drain_queue_loop(worker_index)
+                finally:
+                    _mark_drain_done()
 
-                queue_total = len(claimed_items)
-                queue_ingested = 0
-                queue_skipped = 0
-                queue_rejected = 0
-                queue_status: str = ""
+                # Phase 1.5/2 — only worker 0 runs the one-shot tail.
+                if worker_index != 0:
+                    return
 
-                if claimed_items:
-                    with self._vault_ingest_lock:
-                        self._vault_ingest_job.update(
-                            {
-                                "total": queue_total,
-                                "current_index": 0,
-                                "current_title": f"Draining queue ({queue_total} item(s))",
-                                "last_status": "queue_started",
-                                "updated_at": self._utcnow_iso(),
-                            }
-                        )
-                    logger_obj.info(
-                        "vault_ingest_queue_drain_start job_id=%s claimed=%d",
-                        job_id,
-                        queue_total,
-                    )
+                queue_done_event.wait()
 
-                    def _queue_progress(
-                        index: int,
-                        total: int,
-                        source_id: str,
-                        title: str,
-                        status: str,
-                        error: str | None,
-                    ) -> None:
-                        with self._vault_ingest_lock:
-                            cancel = bool(self._vault_ingest_job.get("cancel_requested"))
-                            self._vault_ingest_job.update(
-                                {
-                                    "total": total,
-                                    "current_index": index,
-                                    "current_source_id": source_id,
-                                    "current_title": title,
-                                    "last_status": status,
-                                    "last_error": error,
-                                    "updated_at": self._utcnow_iso(),
-                                }
-                            )
-                        if cancel:
-                            raise _VaultIngestCancelled()
-                        if status == "fetch_failed":
-                            logger_obj.warning(
-                                "vault_ingest_queue_item index=%d/%d url=%r status=%s error=%s",
-                                index,
-                                total,
-                                title,
-                                status,
-                                error,
-                            )
-                        else:
-                            logger_obj.info(
-                                "vault_ingest_queue_item index=%d/%d url=%r status=%s",
-                                index,
-                                total,
-                                title,
-                                status,
-                            )
+                with self._vault_ingest_lock:
+                    current_status = str(self._vault_ingest_job.get("status") or "")
+                    cancel_pending = bool(self._vault_ingest_job.get("cancel_requested"))
+                if cancel_pending:
+                    raise _VaultIngestCancelled()
+                if current_status != "running":
+                    # Another worker terminated the job (e.g. failed mid-drain).
+                    # Skip Phase 2 so we don't waste compute on a doomed reprocess.
+                    return
 
-                    try:
-                        queue_report = manager.ingest(
-                            urls=[],
-                            source="vault_ui_run_ingest",
-                            topic="",
-                            queue_items=claimed_items,
-                            progress_callback=_queue_progress,
-                        )
-                    except _VaultIngestCancelled:
-                        queue_ids = [
-                            str(item.get("queue_id") or "")
-                            for item in claimed_items
-                            if str(item.get("queue_id") or "").strip()
-                        ]
-                        manager.requeue_claimed_items(queue_ids, reason="ingest_cancelled_by_user")
-                        raise
-                    except Exception:
-                        queue_ids = [
-                            str(item.get("queue_id") or "")
-                            for item in claimed_items
-                            if str(item.get("queue_id") or "").strip()
-                        ]
-                        manager.requeue_claimed_items(queue_ids, reason="ingest_failed_retry")
-                        raise
-                    queue_status = str(queue_report.get("status") or "")
-                    queue_ingested = int(queue_report.get("ingested_count") or 0)
-                    queue_skipped = int(queue_report.get("skipped_unchanged_count") or 0)
-                    queue_rejected = int(queue_report.get("rejected_for_trust_count") or 0) + int(
-                        queue_report.get("rejected_for_policy_count") or 0
-                    )
-                    queue_retried = int(queue_report.get("fetch_failed_count") or 0)
-                    logger_obj.info(
-                        "vault_ingest_queue_drain_done job_id=%s status=%s ingested=%d skipped=%d rejected=%d retried=%d",
-                        job_id,
-                        queue_status or "ok",
-                        queue_ingested,
-                        queue_skipped,
-                        queue_rejected,
-                        queue_retried,
-                    )
-                else:
-                    logger_obj.info("vault_ingest_queue_drain_done job_id=%s claimed=0", job_id)
-
-                # Auto-resolve any still-pending vault-queue approval cards now that
-                # the queue has been drained without requiring approval.
                 try:
                     cleared = self._auto_resolve_vault_queue_approvals()
                     if cleared:
@@ -1715,12 +1791,15 @@ class ControlPlaneService:
                         )
                 except Exception:
                     logger_obj.exception(
-                        "vault_ingest_auto_resolve_approvals_failed job_id=%s", job_id
+                        "vault_ingest_auto_resolve_approvals_failed job_id=%s",
+                        job_id,
                     )
 
-                # Phase 2 — re-analyze already-ingested sources to backfill
-                # entities/concepts. Progress reporting is offset by the queue
-                # phase so the UI shows a single monotonic counter.
+                with self._vault_ingest_lock:
+                    queue_grand_total = int(self._vault_ingest_job.get("total", 0))
+
+                reprocess_total_added = [False]
+
                 def _progress(
                     index: int,
                     total: int,
@@ -1729,13 +1808,14 @@ class ControlPlaneService:
                     status: str,
                     error: str | None,
                 ) -> None:
-                    offset_total = queue_total + total
-                    offset_index = queue_total + index
                     with self._vault_ingest_lock:
                         cancel = bool(self._vault_ingest_job.get("cancel_requested"))
+                        if not reprocess_total_added[0]:
+                            self._vault_ingest_job["total"] = queue_grand_total + int(total or 0)
+                            reprocess_total_added[0] = True
+                        offset_index = queue_grand_total + int(index)
                         self._vault_ingest_job.update(
                             {
-                                "total": offset_total,
                                 "processed": offset_index,
                                 "current_index": offset_index,
                                 "current_source_id": source_id,
@@ -1746,11 +1826,18 @@ class ControlPlaneService:
                             }
                         )
                         if status == "updated":
-                            self._vault_ingest_job["updated"] = int(self._vault_ingest_job.get("updated", 0)) + 1
+                            self._vault_ingest_job["updated"] = int(
+                                self._vault_ingest_job.get("updated", 0)
+                            ) + 1
                         elif status == "skipped_no_raw":
-                            self._vault_ingest_job["skipped_no_raw"] = int(self._vault_ingest_job.get("skipped_no_raw", 0)) + 1
+                            self._vault_ingest_job["skipped_no_raw"] = int(
+                                self._vault_ingest_job.get("skipped_no_raw", 0)
+                            ) + 1
                         elif status == "failed":
-                            self._vault_ingest_job["failed"] = int(self._vault_ingest_job.get("failed", 0)) + 1
+                            self._vault_ingest_job["failed"] = int(
+                                self._vault_ingest_job.get("failed", 0)
+                            ) + 1
+                        offset_total = int(self._vault_ingest_job.get("total", 0))
                     if cancel:
                         raise _VaultIngestCancelled()
                     if status == "failed":
@@ -1773,92 +1860,104 @@ class ControlPlaneService:
                             status,
                         )
 
-                # Seed the running "updated" counter from queue ingestions
-                # before reprocess starts incrementing on top of it.
-                with self._vault_ingest_lock:
-                    self._vault_ingest_job["updated"] = int(
-                        self._vault_ingest_job.get("updated", 0)
-                    ) + queue_ingested
-
                 report = manager.reprocess_existing_sources(
                     only_missing=not force_reanalyze,
                     progress_callback=_progress,
                 )
 
-                reprocess_total = int(report.get("total") or 0)
-                reprocess_processed = int(report.get("processed") or 0)
-                reprocess_updated = int(report.get("updated") or 0)
-                reprocess_skipped = int(report.get("skipped_no_raw") or 0)
-                reprocess_failed = int(report.get("failed") or 0)
-
                 with self._vault_ingest_lock:
-                    self._vault_ingest_job.update(
-                        {
-                            "status": "success",
-                            "total": queue_total + reprocess_total,
-                            "processed": queue_total + reprocess_processed,
-                            "updated": queue_ingested + reprocess_updated,
-                            "skipped_no_raw": reprocess_skipped,
-                            "failed": reprocess_failed,
-                            "finished_at": self._utcnow_iso(),
-                            "updated_at": self._utcnow_iso(),
-                            "last_error": None,
-                        }
-                    )
+                    final_total = int(self._vault_ingest_job.get("total", 0))
+                    final_processed = int(self._vault_ingest_job.get("processed", 0))
+                    final_updated = int(self._vault_ingest_job.get("updated", 0))
+                    final_failed = int(self._vault_ingest_job.get("failed", 0))
+                    if self._vault_ingest_job.get("status") == "running":
+                        self._vault_ingest_job.update(
+                            {
+                                "status": "success",
+                                "finished_at": self._utcnow_iso(),
+                                "updated_at": self._utcnow_iso(),
+                                "last_error": None,
+                            }
+                        )
                 logger_obj.info(
-                    "vault_ingest_done job_id=%s total=%d processed=%d updated=%d skipped_no_raw=%d failed=%d queue_ingested=%d queue_skipped=%d queue_rejected=%d",
+                    "vault_ingest_done job_id=%s total=%d processed=%d updated=%d failed=%d reprocess_report=%s",
                     job_id,
-                    queue_total + reprocess_total,
-                    queue_total + reprocess_processed,
-                    queue_ingested + reprocess_updated,
-                    reprocess_skipped,
-                    reprocess_failed,
-                    queue_ingested,
-                    queue_skipped,
-                    queue_rejected,
+                    final_total,
+                    final_processed,
+                    final_updated,
+                    final_failed,
+                    {
+                        "total": int(report.get("total") or 0),
+                        "processed": int(report.get("processed") or 0),
+                        "updated": int(report.get("updated") or 0),
+                        "failed": int(report.get("failed") or 0),
+                    },
                 )
                 with self._vault_explorer_cache_lock:
                     self._vault_explorer_cache = {}
             except _VaultIngestCancelled:
-                logger_obj.info("vault_ingest_cancelled job_id=%s", job_id)
+                logger_obj.info(
+                    "vault_ingest_cancelled job_id=%s worker=%d",
+                    job_id,
+                    worker_index,
+                )
+                # Leave `cancel_requested` set so peer workers still see the
+                # stop signal in their drain-loop / progress-callback checks.
+                # It's cleared on the next start via _new_vault_ingest_job_state().
                 with self._vault_ingest_lock:
-                    self._vault_ingest_job.update(
-                        {
-                            "status": "cancelled",
-                            "last_error": None,
-                            "finished_at": self._utcnow_iso(),
-                            "updated_at": self._utcnow_iso(),
-                            "cancel_requested": False,
-                        }
-                    )
+                    if self._vault_ingest_job.get("status") == "running":
+                        self._vault_ingest_job.update(
+                            {
+                                "status": "cancelled",
+                                "last_error": None,
+                                "finished_at": self._utcnow_iso(),
+                                "updated_at": self._utcnow_iso(),
+                            }
+                        )
                 with self._vault_explorer_cache_lock:
                     self._vault_explorer_cache = {}
             except Exception as exc:
-                logger_obj.exception("vault_ingest_failed job_id=%s error=%s", job_id, exc)
+                logger_obj.exception(
+                    "vault_ingest_failed job_id=%s worker=%d error=%s",
+                    job_id,
+                    worker_index,
+                    exc,
+                )
                 with self._vault_ingest_lock:
-                    self._vault_ingest_job.update(
-                        {
-                            "status": "failed",
-                            "last_error": str(exc),
-                            "finished_at": self._utcnow_iso(),
-                            "updated_at": self._utcnow_iso(),
-                        }
-                    )
+                    if self._vault_ingest_job.get("status") == "running":
+                        self._vault_ingest_job.update(
+                            {
+                                "status": "failed",
+                                "last_error": str(exc),
+                                "finished_at": self._utcnow_iso(),
+                                "updated_at": self._utcnow_iso(),
+                            }
+                        )
             finally:
+                _mark_drain_done()
                 with coord.counter_lock:
                     coord.active_runners = max(0, coord.active_runners - 1)
+                with self._vault_ingest_lock:
+                    self._vault_ingest_job["workers_active"] = max(
+                        0,
+                        int(self._vault_ingest_job.get("workers_active", 0)) - 1,
+                    )
 
-        thread = threading.Thread(
-            target=_runner,
-            daemon=True,
-            name=f"vault-ingest-{job_id}",
-        )
-        thread.start()
+        for i in range(worker_count):
+            thread = threading.Thread(
+                target=_runner,
+                args=(i,),
+                daemon=True,
+                name=f"vault-ingest-{job_id}-{i}",
+            )
+            thread.start()
 
         with self._vault_ingest_lock:
             snapshot = dict(self._vault_ingest_job)
         snapshot["accepted"] = True
-        snapshot["message"] = "Vault ingest job started."
+        snapshot["message"] = (
+            f"Vault ingest job started with {worker_count} worker(s)."
+        )
         return snapshot
 
     def get_vault_ingest_status(self) -> dict[str, Any]:

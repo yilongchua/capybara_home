@@ -4,8 +4,7 @@ Primary defense: ``PhaseToolFilterMiddleware`` hides execution tools from the
 LLM's tool catalog while a plan is in draft, so the LLM never sees them. This
 middleware is the *backstop*: if a custom agent re-exposes those tools, or
 if the phase filter is misconfigured, the runtime block here still prevents
-content-gathering before plan approval. ``scope_search`` (the Plan-Mode wrapper
-around ``web_search``) is allowed in draft so genuine scope discovery still works.
+content-gathering before plan approval.
 
 For the search tools (``web_search`` etc.), when the runtime block fires we
 also invoke an LLM classifier — using the chat-selected model — to distinguish
@@ -34,10 +33,6 @@ _ALLOWED_WHEN_DRAFT = {
     "ask_user_for_clarification",
     "write_todos",
     "recall",
-    # scope_search is the Plan-Mode wrapper around web_search. It exists so the
-    # LLM can perform scope-discovery queries (narrow sub-topics, sources,
-    # definitions) before plan approval. See community/scope_search/.
-    "scope_search",
 }
 
 _ALLOWED_IN_PLAN_MODE = _ALLOWED_WHEN_DRAFT | {
@@ -250,10 +245,11 @@ class PlanExecutionGateMiddleware(AgentMiddleware[PlanExecutionGateState]):
                 request,
                 (
                     "[plan_gate] Plan Mode allows scope-clarifying search only. "
-                    f"`{tool_name}` looks like content gathering for execution; use "
-                    "`scope_search` (or refine plan.md / answer the pending clarification) "
-                    "before approval. (This block is a backstop — the phase filter "
-                    "should normally have hidden this tool from the catalog.)"
+                    f"`{tool_name}` looks like content gathering for execution; refine "
+                    "plan.md or answer the pending clarification before approval, or "
+                    "narrow the query to scope discovery (taxonomy, definitions, sources). "
+                    "(This block is a backstop — the phase filter should normally have "
+                    "hidden this tool from the catalog.)"
                 ),
             )
 
@@ -287,7 +283,7 @@ class PlanExecutionGateMiddleware(AgentMiddleware[PlanExecutionGateState]):
 
         clarification_pending = bool(plan.get("clarification_pending"))
 
-        if clarification_pending and tool_name not in {"ask_user_for_clarification", "scope_search"}:
+        if clarification_pending and tool_name != "ask_user_for_clarification":
             question = str(plan.get("clarification_question") or "Please answer the pending clarification before execution.")
             return self._build_block_command(
                 request,

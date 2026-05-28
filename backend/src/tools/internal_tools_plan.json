@@ -241,7 +241,7 @@
               },
               "subagent_type": {
                 "type": "string",
-                "enum": ["general-purpose", "bash", "source-researcher", "docs-explorer", "comparison-dimension-researcher", "synthesis-reviewer", "vault-source-researcher"],
+                "enum": ["general-purpose", "source-researcher", "docs-explorer", "comparison-dimension-researcher", "synthesis-reviewer", "vault-source-researcher"],
                 "description": "Required when `owner=subagent`. Names the subagent that will execute this todo."
               },
               "target_endpoint": {

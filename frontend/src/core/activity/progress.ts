@@ -50,7 +50,7 @@ function operationIdForEvent(event: ActivityEvent): string | null {
   if (kind.startsWith("title_generation")) {
     return `title:${event.run_id}`;
   }
-  if (kind === "planning_started" || kind === "plan_created" || kind === "plan_auto_approved") {
+  if (kind === "planning_started" || kind === "planning_failed" || kind === "plan_created" || kind === "plan_auto_approved") {
     return `planner:todos:${event.run_id}`;
   }
   if (kind === "skipped_direct_answer" || kind === "parse_failed_fallback") {
@@ -79,6 +79,10 @@ function labelForEvent(event: ActivityEvent, status: ProgressOperationStatus): s
 
   if (kind === "planning_started") {
     return "Planner is creating todos...";
+  }
+  if (kind === "planning_failed") {
+    const reason = typeof event.payload?.reason === "string" ? event.payload.reason : "error";
+    return reason === "timeout" ? "Planner timed out — try again" : "Planner failed — try again";
   }
   if (kind === "plan_created" || kind === "plan_auto_approved") {
     const count = event.payload?.todo_count;

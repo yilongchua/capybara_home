@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -54,6 +56,16 @@ class PlannerState(AgentState):
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _emit_planning_failed(runtime: Runtime, *, reason: str) -> None:
+    """Mirror of the inline planning_started emit, for the failure path."""
+    append_runtime_event(runtime, {"source": "planner_middleware", "event": "planning_failed", "reason": reason})
+    try:
+        writer = get_stream_writer()
+        writer({"type": "planning_failed", "source": "planner_middleware", "reason": reason})
+    except Exception:
+        logger.exception("Failed to emit planning_failed SSE")
 
 
 def _runtime_context(runtime: Runtime) -> dict[str, Any]:
@@ -673,6 +685,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         sprint_contracts_config: SprintContractsConfig,
         research_fanout: bool = False,
         research_fanout_min_todos: int = 2,
+        timeout_seconds: float = 120.0,
         router: Any = None,  # noqa: ARG002
     ):
         # ``router`` is accepted for backwards compatibility with the
@@ -689,6 +702,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         self._sprint_contracts_config = sprint_contracts_config
         self._research_fanout = bool(research_fanout)
         self._research_fanout_min_todos = max(2, int(research_fanout_min_todos))
+        self._timeout_seconds = float(timeout_seconds)
 
     def _with_ephemeral_planner_context(self, request: ModelRequest) -> ModelRequest:
         runtime_state = request.state if isinstance(getattr(request, "state", None), dict) else {}
@@ -787,13 +801,50 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         model_name = resolve_model_name(self._requested_model)
         model = create_chat_model(name=model_name, thinking_enabled=False)
         system_prompt = PLANNER_SYSTEM_PROMPT.replace("{max_steps}", str(self._max_plan_steps)).replace("{max_clarifications}", str(self._max_clarifications))
-        response = model.invoke(
-            [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_prompt),
-            ]
-        )
-        output = _parse_plan_response(extract_text(response.content), max_steps=self._max_plan_steps)
+        messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
+
+        # Stream tokens and watch the inter-token gap rather than total wall-clock.
+        # Long local generations are fine; only a truly wedged provider (no token
+        # for `_timeout_seconds`) raises TimeoutError. Falls back to .invoke for
+        # model classes that don't expose .stream (e.g. test mocks).
+        stream_fn = getattr(model, "stream", None)
+        if not callable(stream_fn):
+            response = model.invoke(messages)
+            output = _parse_plan_response(extract_text(response.content), max_steps=self._max_plan_steps)
+            return output, model_name
+
+        parts: list[str] = []
+        last_token_at = [time.monotonic()]
+        done = threading.Event()
+        error_holder: list[BaseException | None] = [None]
+
+        def _consume() -> None:
+            try:
+                for chunk in stream_fn(messages):
+                    text = extract_text(getattr(chunk, "content", ""))
+                    if text:
+                        parts.append(text)
+                        last_token_at[0] = time.monotonic()
+            except Exception as e:  # noqa: BLE001
+                error_holder[0] = e
+            finally:
+                done.set()
+
+        consumer = threading.Thread(target=_consume, daemon=True)
+        consumer.start()
+
+        poll_interval = 1.0
+        idle_limit = self._timeout_seconds
+        while not done.wait(poll_interval):
+            if time.monotonic() - last_token_at[0] > idle_limit:
+                # Daemon thread keeps running in the background; the underlying
+                # HTTP call is not cancelled, but the process owns its lifetime.
+                raise TimeoutError(f"Planner stream idle for >{idle_limit}s (no token received)")
+
+        if error_holder[0] is not None:
+            raise error_holder[0]
+
+        output = _parse_plan_response("".join(parts), max_steps=self._max_plan_steps)
         return output, model_name
 
     @override
@@ -872,11 +923,20 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         except Exception:
             logger.exception("Failed to emit planning_started SSE")
 
-        # Invoke planner LLM
+        # Invoke planner LLM via streaming. There is no total wall-clock cap —
+        # long local generations are expected to succeed. The streaming loop
+        # inside `_invoke_planner` raises TimeoutError only when no token has
+        # arrived for `_timeout_seconds` (a wedged provider). The except blocks
+        # below emit planning_failed so the frontend can clear the spinner.
         try:
             plan_output, planner_model = self._invoke_planner(user_prompt)
+        except TimeoutError:
+            logger.warning("Planner LLM stream idle for >%ss; skipping planning", self._timeout_seconds)
+            _emit_planning_failed(runtime, reason="timeout")
+            return None
         except Exception:
             logger.exception("Planner LLM call failed; skipping planning")
+            _emit_planning_failed(runtime, reason="error")
             return None
 
         if not plan_output.parse_ok:

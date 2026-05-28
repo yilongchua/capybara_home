@@ -103,6 +103,7 @@ class VaultSufficiencyResponse(BaseModel):
 
 class VaultIngestStartRequest(BaseModel):
     force_reanalyze: bool = False
+    workers: int = Field(default=1, ge=1, le=3)
 
 
 class VaultIngestStatusResponse(BaseModel):
@@ -123,6 +124,8 @@ class VaultIngestStatusResponse(BaseModel):
     updated_at: str | None = None
     log_path: str = ""
     cancel_requested: bool = False
+    workers_requested: int = 0
+    workers_active: int = 0
     accepted: bool | None = None
     message: str | None = None
 
@@ -339,7 +342,8 @@ async def refresh_vault_explorer() -> VaultExplorerResponse:
 async def start_vault_ingest(request: VaultIngestStartRequest | None = None) -> VaultIngestStatusResponse:
     service = get_control_plane_service()
     force = bool(request.force_reanalyze) if request is not None else False
-    payload = service.start_vault_ingest_job(force_reanalyze=force)
+    workers = int(request.workers) if request is not None else 1
+    payload = service.start_vault_ingest_job(force_reanalyze=force, workers=workers)
     return VaultIngestStatusResponse.model_validate(payload)
 
 

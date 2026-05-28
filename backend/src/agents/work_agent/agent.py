@@ -321,6 +321,7 @@ def _create_planner(ctx: _RegistryContext) -> AgentMiddleware | None:
         sprint_contracts_config=get_sprint_contracts_config(),
         research_fanout=planner_cfg.research_fanout,
         research_fanout_min_todos=planner_cfg.research_fanout_min_todos,
+        timeout_seconds=planner_cfg.timeout_seconds,
     )
 
 

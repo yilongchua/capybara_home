@@ -114,6 +114,7 @@ export type ThreadStreamOptions = {
   onContextTokens?: (event: { tokenCount: number; messageCount?: number }) => void;
   onCompaction?: (event: { messagesCompressed?: number; messagesKept?: number }) => void;
   onPlanningStarted?: () => void;
+  onPlanningFailed?: (event: { reason: "timeout" | "error" }) => void;
   onPlanCreated?: (event: PlanCreatedEvent) => void;
   onPhaseStarted?: (event: PhaseStartedEvent) => void;
   onPhaseCompleted?: (event: PhaseCompletedEvent) => void;
@@ -412,6 +413,7 @@ export function useThreadStream({
   onContextTokens,
   onCompaction,
   onPlanningStarted,
+  onPlanningFailed,
   onPlanCreated,
   onPhaseStarted,
   onPhaseCompleted,
@@ -444,6 +446,7 @@ export function useThreadStream({
     onContextTokens,
     onCompaction,
     onPlanningStarted,
+    onPlanningFailed,
     onPlanCreated,
     onPhaseStarted,
     onPhaseCompleted,
@@ -459,12 +462,13 @@ export function useThreadStream({
       onContextTokens,
       onCompaction,
       onPlanningStarted,
+      onPlanningFailed,
       onPlanCreated,
       onPhaseStarted,
       onPhaseCompleted,
       onPlanAdapted,
     };
-  }, [onStart, onFinish, onToolEnd, onContextTokens, onCompaction, onPlanningStarted, onPlanCreated, onPhaseStarted, onPhaseCompleted, onPlanAdapted]);
+  }, [onStart, onFinish, onToolEnd, onContextTokens, onCompaction, onPlanningStarted, onPlanningFailed, onPlanCreated, onPhaseStarted, onPhaseCompleted, onPlanAdapted]);
 
   useEffect(() => {
     queueRef.current = messageQueue;
@@ -1037,6 +1041,9 @@ export function useThreadStream({
           break;
         case "planning_started":
           listeners.current.onPlanningStarted?.();
+          break;
+        case "planning_failed":
+          listeners.current.onPlanningFailed?.(event as unknown as Parameters<NonNullable<typeof listeners.current.onPlanningFailed>>[0]);
           break;
         case "plan_created":
           listeners.current.onPlanCreated?.(event as Parameters<typeof listeners.current.onPlanCreated>[0]);

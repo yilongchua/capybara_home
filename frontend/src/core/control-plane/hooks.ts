@@ -315,7 +315,8 @@ export function useVaultIngestStatus(options?: { refetchInterval?: number; enabl
 export function useStartVaultIngest() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (options?: { forceReanalyze?: boolean }) => startVaultIngest(options),
+    mutationFn: (options?: { forceReanalyze?: boolean; workers?: number }) =>
+      startVaultIngest(options),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["control-plane", "vault-ingest-status"] });
       void queryClient.invalidateQueries({ queryKey: ["control-plane", "vault-status"] });

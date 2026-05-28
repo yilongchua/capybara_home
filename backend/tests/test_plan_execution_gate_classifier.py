@@ -95,13 +95,13 @@ def test_classifier_caches_verdict_per_tool_call_id(monkeypatch) -> None:
     assert call_count["n"] == 1
 
 
-def test_scope_search_allowed_when_draft(monkeypatch) -> None:
+def test_recall_allowed_when_draft(monkeypatch) -> None:
     middleware = PlanExecutionGateMiddleware(requested_model=None)
-    # scope_search is in _ALLOWED_WHEN_DRAFT — it must NOT trigger the classifier
+    # recall is in _ALLOWED_WHEN_DRAFT — it must NOT trigger the classifier
     # nor require any LLM call. Sentinel: any model call should be unreachable.
-    monkeypatch.setattr(gate_mod, "create_chat_model", lambda **_: pytest.fail("classifier should not run for scope_search"))
+    monkeypatch.setattr(gate_mod, "create_chat_model", lambda **_: pytest.fail("classifier should not run for recall"))
     result = middleware.wrap_tool_call(
-        _request("scope_search", plan={"status": "draft"}, query="top sources for crystal market data"),
+        _request("recall", plan={"status": "draft"}, query="prior research on crystal market data"),
         _handler,
     )
     assert isinstance(result, ToolMessage)

@@ -4,12 +4,6 @@ from pathlib import Path
 from langchain.tools import BaseTool
 
 from src.community.knowledge_vault_search import query_knowledge_vault_tool, save_to_knowledge_vault_tool
-
-# DEPRECATED: scope_search tool is no longer used. web_search is now available
-# directly in Plan Mode (see _COMMUNITY_TOOL_MODES below and the deprecated
-# PhaseToolFilter / PlanExecutionGate middlewares). Kept as a commented import
-# so the wrapper module is preserved for reference.
-# from src.community.scope_search import scope_search_tool
 from src.community.web_search import web_search_tool
 from src.config import get_app_config
 from src.reflection import resolve_variable
@@ -43,9 +37,6 @@ BUILTIN_TOOLS = [
     recall_tool,
     write_todos_tool,
     web_search_tool,
-    # DEPRECATED: scope_search wrapper is no longer registered. web_search is
-    # now exposed directly in Plan Mode via _COMMUNITY_TOOL_MODES below.
-    # scope_search_tool,
     query_knowledge_vault_tool,
     save_to_knowledge_vault_tool,
 ]
@@ -56,7 +47,6 @@ BUILTIN_TOOLS = [
 # Membership semantics: a tool is exposed in a mode iff that mode is in its set.
 # Tools absent from this map are exposed in every mode.
 _COMMUNITY_TOOL_MODES: dict[str, frozenset[str]] = {
-    # web_search is now available in plan mode as well (scope_search deprecated).
     "web_search": frozenset({"plan", "work", "auto"}),
     "query_knowledge_vault": frozenset({"work", "auto"}),
     "save_to_knowledge_vault": frozenset({"work", "auto"}),
@@ -67,8 +57,6 @@ _COMMUNITY_TOOL_MODES: dict[str, frozenset[str]] = {
     "write_file": frozenset({"work", "auto"}),
     "str_replace": frozenset({"work", "auto"}),
     "comfyui_generate": frozenset({"work", "auto"}),
-    # DEPRECATED: scope_search wrapper no longer registered.
-    # "scope_search": frozenset({"plan"}),
 }
 
 SUBAGENT_TOOLS = [
@@ -127,7 +115,7 @@ def get_available_tools(
         mode: Optional runtime mode (`plan`, `work`, or `auto`). Selects between
             `internal_tools_plan.json` and `internal_tools_work.json` so the
             LLM-facing tool descriptions can be tailored per mode and so
-            mode-scoped community tools (web_search, scope_search, etc.) are
+            mode-scoped community tools (web_search, knowledge_vault, etc.) are
             included only in the appropriate mode. Defaults to work when unset.
 
     Returns:
@@ -273,8 +261,8 @@ def _build_builtin_tools_from_json(*, subagent_enabled: bool, supports_vision: b
             logger.exception("Skipping tool '%s' — handler resolution failed", defn.name)
 
     # Carry over BUILTIN_TOOLS entries (community tools like web_search,
-    # scope_search, knowledge_vault_*) that have no JSON entry, but only when
-    # the active mode admits them per _COMMUNITY_TOOL_MODES.
+    # knowledge_vault_*) that have no JSON entry, but only when the active
+    # mode admits them per _COMMUNITY_TOOL_MODES.
     for tool in BUILTIN_TOOLS:
         if tool.name in json_names:
             continue

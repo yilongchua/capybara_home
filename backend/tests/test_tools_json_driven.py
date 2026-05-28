@@ -2,8 +2,8 @@
 
 Notes on the surface area:
 - Legacy `BUILTIN_TOOLS` mixes 4 first-party builtins (present_files,
-  ask_user_for_clarification, recall, write_todos) with 4 community tools
-  (web_search, scope_search, knowledge-vault search/save). Sandbox tools
+  ask_user_for_clarification, recall, write_todos) with 3 community tools
+  (web_search, knowledge-vault search/save). Sandbox tools
   (bash/ls/read_file/write_file/str_replace) are sourced separately from
   `config.yaml`'s `tools:` section.
 - `internal_tools.json` consolidates the first-party builtins + sandbox tools.
@@ -26,7 +26,7 @@ from src.tools.tools import (
 # First-party (non-community) builtins that exist in both paths.
 FIRST_PARTY_NAMES = {"present_files", "ask_user_for_clarification", "recall", "write_todos"}
 SANDBOX_NAMES = {"bash", "ls", "read_file", "write_file", "str_replace"}
-COMMUNITY_NAMES = {"web_search", "scope_search", "query_knowledge_vault", "save_to_knowledge_vault"}
+COMMUNITY_NAMES = {"web_search", "query_knowledge_vault", "save_to_knowledge_vault"}
 
 
 @pytest.fixture(autouse=True)

@@ -22,6 +22,15 @@ class PlannerConfig(BaseModel):
         le=10,
         description="Maximum number of clarification questions the planner may generate.",
     )
+    timeout_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        description=(
+            "Inter-token idle timeout for the planner LLM stream. Long generations are allowed; "
+            "this only fires if no token arrives for this many seconds (wedged provider). "
+            "On timeout, planning is aborted and a planning_failed SSE is emitted."
+        ),
+    )
     # Opt-in: when true and the planner's domain is "research", todos with no
     # depends_on edges are surfaced to the agent prompt as candidates for
     # parallel `task` subagent dispatch. The lead agent issues one `task` call

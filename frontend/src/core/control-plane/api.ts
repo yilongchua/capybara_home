@@ -292,12 +292,16 @@ export async function refreshVaultExplorer(): Promise<VaultExplorerResponse> {
 }
 
 export async function startVaultIngest(
-  options?: { forceReanalyze?: boolean },
+  options?: { forceReanalyze?: boolean; workers?: number },
 ): Promise<VaultIngestStatusResponse> {
+  const workers = Math.max(1, Math.min(3, Math.trunc(options?.workers ?? 1)));
   const response = await fetch(`${getBackendBaseURL()}/api/vault/ingest/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ force_reanalyze: Boolean(options?.forceReanalyze) }),
+    body: JSON.stringify({
+      force_reanalyze: Boolean(options?.forceReanalyze),
+      workers,
+    }),
   });
   if (!response.ok) {
     await parseError(response, `Failed to start vault ingest: ${response.statusText}`);
