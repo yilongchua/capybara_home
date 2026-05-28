@@ -193,16 +193,6 @@ recursion_pivot:
   on_evaluator_failure: skip # 'skip' continues the run; 'terminate' ends it.
   min_recursion_limit: 10 # Skip pivot logic entirely below this recursion_limit.
 
-progress_guard:
-  enabled: false # Master switch for no-progress and stall detection.
-  terminate_on_stall: true # End run when no progress persists to threshold (prevents recursion-limit crashes).
-  context_pressure_threshold: 0.85 # Warn when prompt/context usage reaches this fraction of model context window.
-  conversation_inactivity_turn_threshold: 10 # Warn after this many turns with no user-visible assistant text.
-  cyclic_tool_result_threshold: 6 # Warn when identical tool results repeat this many consecutive turns.
-  no_progress_turn_threshold: 80 # Stall threshold for ending run when outputs/todos/artifacts stop changing.
-  terminate_on_cyclic_tool_results: true # End run on severe repeated identical tool-result cycles.
-  cyclic_tool_result_hard_limit: 12 # Hard-stop threshold for cyclic tool-result loops.
-
 # Retry & resume
 retry:
   enabled: true

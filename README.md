@@ -234,7 +234,7 @@ CapyHome/
 
 | File | Purpose |
 |------|---------|
-| `config.yaml` | Models, tools, sandbox, memory, channels, summarization, prompt/permissions/trajectory/metrics/progress_guard + phase-B blocks (`todos`, `routing`, `planner`, `evaluator`, `sprint_contracts`, `handoffs`, `hooks`, `retry`) + phase-C blocks (`resume`, `tool_disclosure`, `scratchpad`, `task_memory`, `memory_versioning`, `skill_curation`, `benchmarks`) + knowledge controls (for example `knowledge_vault.graph_limit` for default vault graph snapshots) |
+| `config.yaml` | Models, tools, sandbox, memory, channels, summarization, prompt/permissions/trajectory/metrics + phase-B blocks (`todos`, `routing`, `planner`, `evaluator`, `sprint_contracts`, `handoffs`, `hooks`, `retry`) + phase-C blocks (`resume`, `tool_disclosure`, `scratchpad`, `task_memory`, `memory_versioning`, `skill_curation`, `benchmarks`) + knowledge controls (for example `knowledge_vault.graph_limit` for default vault graph snapshots) |
 | `extensions_config.json` | MCP servers, skill enable/disable |
 | `.env` | API keys, endpoints, feature flags |
 

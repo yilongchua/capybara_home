@@ -18,7 +18,6 @@ from src.agents.middlewares.runtime_events import append_runtime_event
 from src.config.retry_config import RetryConfig, RetryRuleConfig, get_retry_config
 
 RETRY_ATTEMPTS_CONTEXT_KEY = "_phase_b_retry_attempts"
-RETRY_PROGRESS_GUARD_KEY = "_phase_b_retry_turn"
 
 
 def _is_retryable(exc: Exception, rule: RetryRuleConfig) -> bool:
@@ -51,7 +50,6 @@ class RetryPolicyMiddleware(AgentMiddleware[AgentState]):
             context[RETRY_ATTEMPTS_CONTEXT_KEY] = attempt_map
         tool_call_id = request.tool_call.get("id") or request.tool_call.get("name") or "tool"
         attempt_map[str(tool_call_id)] = attempt
-        context[RETRY_PROGRESS_GUARD_KEY] = bool(rule.idempotent)
         append_runtime_event(
             request.runtime,
             {

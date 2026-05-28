@@ -18,10 +18,6 @@ Layer 2 — frequency-based (tool-type saturation):
   of arguments.  Catches cross-file read loops and similar patterns where each
   call uses different args (so Layer 1's hash never repeats) but the agent
   is clearly stuck saturating a single tool type.
-
-This middleware complements ProgressGuardMiddleware: ProgressGuard detects
-stalls by inspecting *outputs* (unchanged artifacts/todos/files), while
-LoopDetectionMiddleware detects repetitive *inputs* (call patterns).
 """
 
 from __future__ import annotations

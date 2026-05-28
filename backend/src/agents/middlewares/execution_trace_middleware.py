@@ -43,7 +43,6 @@ _SOURCE_STAGE: dict[str, str] = {
     "plan_followup_middleware": "harness",
     "title_middleware": "lead",
     "task_tool": "subagent",
-    "progress_guard": "harness",
     "retry_policy_middleware": "harness",
     "permission_middleware": "harness",
     "hooks_middleware": "harness",

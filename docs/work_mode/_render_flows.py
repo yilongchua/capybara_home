@@ -277,7 +277,7 @@ def render_work_mode_no_plan():
     # 9. After-model middlewares
     add("post_mw", 1200, 1140, 540, 200,
         "Post-model / wrap_tool_call middlewares",
-        "ToolResultTruncation · WebSearchCircuitBreaker\nSubagentLimit · TodoFailureRetry  (work-mode only)\nScratchpadTaskMemory · ResumeState\nProgressGuard · PlanFollowup\nLoopDetection · RecursionBudgetPivot",
+        "ToolResultTruncation · WebSearchCircuitBreaker\nSubagentLimit · TodoFailureRetry  (work-mode only)\nScratchpadTaskMemory · ResumeState\nPlanFollowup\nLoopDetection · RecursionBudgetPivot",
         C_MID, "rect")
 
     # 10. Loop back to before_model
@@ -516,7 +516,7 @@ def render_plan_mode_end_to_end():
 
     add("after_post", 1240, 1830, 500, 140,
         "Post-tool middlewares",
-        "ToolResultTruncation · SubagentLimit\nTodoFailureRetry  (work-mode only)\nProgressGuard · LoopDetection\nRecursionBudgetPivot",
+        "ToolResultTruncation · SubagentLimit\nTodoFailureRetry  (work-mode only)\nLoopDetection\nRecursionBudgetPivot",
         C_MID)
 
     add("sync", 60, 1830, 510, 140,

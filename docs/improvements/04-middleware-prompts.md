@@ -159,7 +159,6 @@ These were checked and contain no LLM-facing prompts. Included here so future au
 | `autoresearch_middleware` | [backend/src/agents/middlewares/autoresearch_middleware.py](../../backend/src/agents/middlewares/autoresearch_middleware.py) | Delegates to `control_plane/autoresearch_loop/` (audit prompts there) |
 | `skill_disclosure_middleware` | [backend/src/agents/middlewares/skill_disclosure_middleware.py](../../backend/src/agents/middlewares/skill_disclosure_middleware.py) | Injects skill bodies as messages |
 | `tool_disclosure_middleware` | [backend/src/agents/middlewares/tool_disclosure_middleware.py](../../backend/src/agents/middlewares/tool_disclosure_middleware.py) | Phase-based tool gating |
-| `progress_guard_middleware` | [backend/src/agents/middlewares/progress_guard_middleware.py](../../backend/src/agents/middlewares/progress_guard_middleware.py) | Heuristic stall detection |
 | `loop_detection_middleware` | [backend/src/agents/middlewares/loop_detection_middleware.py](../../backend/src/agents/middlewares/loop_detection_middleware.py) | Static warning injection |
 | `work_mode_middleware` | [backend/src/agents/middlewares/work_mode_middleware.py](../../backend/src/agents/middlewares/work_mode_middleware.py) | Templated instructions (not LLM-generated) |
 

@@ -28,15 +28,6 @@ class ViewedImageData(TypedDict):
     mime_type: str
 
 
-class ProgressGuardRuntimeState(TypedDict, total=False):
-    no_progress_turns: int
-    inactivity_turns: int
-    repeated_tool_result_turns: int
-    last_snapshot_hash: str
-    last_tool_result_sig: str
-    emitted_signals: list[str]
-
-
 class TrajectoryRuntimeState(TypedDict, total=False):
     run_id: str
     file_path: str
@@ -312,7 +303,6 @@ class ThreadState(AgentState):
     todos: NotRequired[list | None]
     uploaded_files: NotRequired[list[dict] | None]
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]  # image_path -> {base64, mime_type}
-    progress_guard: NotRequired[ProgressGuardRuntimeState | None]
     recursion_pivot: NotRequired[dict | None]
     trajectory: NotRequired[TrajectoryRuntimeState | None]
     skill_disclosure: NotRequired[SkillDisclosureState | None]

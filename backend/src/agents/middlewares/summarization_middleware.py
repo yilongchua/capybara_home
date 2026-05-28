@@ -47,7 +47,6 @@ _OPERATIONAL_MESSAGE_NAMES = {
     "work_mode_instruction",
     "work_mode_plan_rerun",
     "evaluator_feedback",
-    "progress_guard_warning",
     "task_deferred",
     "todo_failure_recovery",
     "todo_reminder",

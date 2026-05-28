@@ -23,7 +23,7 @@ Both systems share the same DNA — LangGraph-based harness, middleware chains, 
 | **Evaluation** | EvaluatorMiddleware + deterministic pre-checks | None | CapyHome ahead |
 | **Memory** | JSON + LLM extraction, debounced 30s, versioned | JSON + LLM extraction, debounced 2s, per-agent | Roughly equal |
 | **Context summarization** | SummarizationMiddleware + memory flush hook | SummarizationMiddleware | CapyHome ahead |
-| **Loop detection** | LoopDetectionMiddleware + ProgressGuard | LoopDetectionMiddleware | Roughly equal |
+| **Loop detection** | LoopDetectionMiddleware | LoopDetectionMiddleware | Roughly equal |
 | **Per-agent personality** | Per-agent config.yaml only | Per-agent `SOUL.md` injected into prompt | **DeerFlow ahead** |
 | **Skills** | Progressive disclosure, matcher, body injection | Static injection into prompt | CapyHome ahead |
 | **Sandbox** | Abstract (local/docker/k8s), virtual paths | Abstract (local/docker) | CapyHome ahead |
@@ -177,7 +177,7 @@ Priority 2 is a quick win with no risk — ship it first. Priority 1 is the most
 | Auto-thinking budget (80% of max_tokens) | Local models have no thinking budget constraints |
 | Prompt cache block control | Local models do not use Anthropic cache control |
 | Web search diversity (Exa, Tavily, Jina, DDGS) | CapyHome's `websearch` Docker instance (SearXNG + crawl4ai) is a more complete local extraction pipeline than any of DeerFlow's external API tools |
-| `LoopDetectionMiddleware` | Already live — capyhome's version plus `ProgressGuard` layered on top |
+| `LoopDetectionMiddleware` | Already live |
 | `TodoMiddleware` (flat list) | CapyHome's `TodoDagMiddleware` (DAG-based) is strictly more capable |
 | Memory debounce (2s) | CapyHome's 30s is intentional to allow batching; 2s would thrash a local LLM |
 | DeerFlow's model provider classes | CapyHome uses the langchain ecosystem which covers all local providers |

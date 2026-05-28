@@ -31,7 +31,6 @@ from src.config.metrics_config import MetricsConfig, load_metrics_config_from_di
 from src.config.model_config import ModelConfig
 from src.config.permissions_config import PermissionsConfig, load_permissions_config_from_dict
 from src.config.planner_config import PlannerConfig, load_planner_config_from_dict
-from src.config.progress_guard_config import ProgressGuardConfig, load_progress_guard_config_from_dict
 from src.config.prompt_config import PromptConfig, load_prompt_config_from_dict
 from src.config.quality_gate_config import QualityGateConfig, load_quality_gate_config_from_dict
 from src.config.question_generation_config import load_question_generation_config_from_dict
@@ -75,7 +74,6 @@ class AppConfig(BaseModel):
     metrics: MetricsConfig = Field(default_factory=MetricsConfig, description="Runtime metrics configuration")
     execution_trace: ExecutionTraceConfig = Field(default_factory=ExecutionTraceConfig, description="Execution trace middleware configuration")
     subagents: SubagentsAppConfig = Field(default_factory=SubagentsAppConfig, description="Subagent timeout and concurrency policy")
-    progress_guard: ProgressGuardConfig = Field(default_factory=ProgressGuardConfig, description="Progress guard configuration")
     recursion_pivot: RecursionPivotConfig = Field(default_factory=RecursionPivotConfig, description="Recursion-budget evaluator pivot configuration")
     quality_gate: QualityGateConfig = Field(default_factory=QualityGateConfig, description="Report quality gate configuration")
     loop_detection: LoopDetectionConfig = Field(
@@ -200,8 +198,6 @@ class AppConfig(BaseModel):
         # src/config/harness_config.py for contract).
         load_harness_config_from_dict(config_data.get("harness", {}))
 
-        # Load progress guard config
-        load_progress_guard_config_from_dict(config_data.get("progress_guard", {}))
         load_recursion_pivot_config_from_dict(config_data.get("recursion_pivot", {}))
         load_quality_gate_config_from_dict(config_data.get("quality_gate", {}))
         load_loop_detection_config_from_dict(config_data.get("loop_detection", {}))

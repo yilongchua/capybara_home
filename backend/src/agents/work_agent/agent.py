@@ -32,7 +32,6 @@ from src.agents.middlewares.plan_evaluator_middleware import PlanEvaluatorMiddle
 from src.agents.middlewares.plan_file_sync_middleware import PlanFileSyncMiddleware
 from src.agents.middlewares.planner_middleware import PlannerMiddleware
 from src.agents.middlewares.pro_followup_middleware import PlanFollowupMiddleware
-from src.agents.middlewares.progress_guard_middleware import ProgressGuardMiddleware
 from src.agents.middlewares.question_generation_middleware import QuestionGenerationMiddleware
 from src.agents.middlewares.recursion_pivot_middleware import RecursionBudgetPivotMiddleware
 from src.agents.middlewares.resume_state_middleware import ResumeStateMiddleware
@@ -538,11 +537,9 @@ def _build_middleware_registry(
         MiddlewareSpec("scratchpad_task_memory", bind(_create_scratchpad_task_memory), after={"todo_failure_retry"}),
         MiddlewareSpec("plan_file_sync", lambda: PlanFileSyncMiddleware(), after={"scratchpad_task_memory"}),
         MiddlewareSpec("resume_state", bind(_create_resume_state), after={"plan_file_sync"}),
-        MiddlewareSpec("progress_guard", lambda: ProgressGuardMiddleware(), after={"resume_state"}),
-        MiddlewareSpec("plan_followup", lambda: PlanFollowupMiddleware(), after={"progress_guard", "evaluator"}),
-        # LoopDetectionMiddleware complements ProgressGuard: ProgressGuard detects stalls by
-        # inspecting outputs (unchanged artifacts/todos/files), while LoopDetection detects
-        # repetitive inputs (identical call-pattern hashes and per-tool-type frequency saturation).
+        MiddlewareSpec("plan_followup", lambda: PlanFollowupMiddleware(), after={"resume_state", "evaluator"}),
+        # LoopDetectionMiddleware detects repetitive inputs (identical call-pattern hashes
+        # and per-tool-type frequency saturation).
         MiddlewareSpec("loop_detection", bind(_create_loop_detection), after={"plan_followup"}),
         # RecursionBudgetPivotMiddleware: at configured budget thresholds, calls an evaluator LLM
         # in before_model to inject steering. Runs after the output-focused guards so its decision
@@ -565,7 +562,7 @@ def _build_middleware_registry(
         MiddlewareSpec(
             "clarification",
             lambda: ClarificationMiddleware(),
-            after={"metrics", "permissions", "memory", "subagent_limit", "progress_guard", "loop_detection", "recursion_pivot", "evaluator", "execution_trace", "activity_timeline"},
+            after={"metrics", "permissions", "memory", "subagent_limit", "loop_detection", "recursion_pivot", "evaluator", "execution_trace", "activity_timeline"},
         ),
     ]
 

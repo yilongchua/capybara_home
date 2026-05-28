@@ -10,7 +10,7 @@ All configuration nodes are already implemented as `pydantic.BaseModel`. This fi
 
 | Model | File | Line | Purpose / Anchor field set |
 |-------|------|-----:|----------------------------|
-| `AppConfig` | [src/config/app_config.py](../../backend/src/config/app_config.py) | 61 | Root — composes every sub-config below (`models[]`, `sandbox`, `tools[]`, `tool_groups[]`, `skills`, `prompt`, `permissions`, `trajectory`, `metrics`, `execution_trace`, `dreamy_timeout`, `subagents`, `progress_guard`, `recursion_pivot`, `quality_gate`, `loop_detection`, `todos`, `routing`, `planner`, `evaluator`, `sprint_contracts`, `handoffs`, `hooks`, `retry`, `resume`, `tool_disclosure`, `web_search_summary`, `scratchpad`, `task_memory`, `memory_versioning`, `skill_curation`, `benchmarks`, `extensions`, `pipelines`, `approvals`, `redaction`, `csv_profiles`, `tool_backends`, `scheduler`, `generation`, `knowledge_vault`, `checkpointer`). |
+| `AppConfig` | [src/config/app_config.py](../../backend/src/config/app_config.py) | 61 | Root — composes every sub-config below (`models[]`, `sandbox`, `tools[]`, `tool_groups[]`, `skills`, `prompt`, `permissions`, `trajectory`, `metrics`, `execution_trace`, `dreamy_timeout`, `subagents`, `recursion_pivot`, `quality_gate`, `loop_detection`, `todos`, `routing`, `planner`, `evaluator`, `sprint_contracts`, `handoffs`, `hooks`, `retry`, `resume`, `tool_disclosure`, `web_search_summary`, `scratchpad`, `task_memory`, `memory_versioning`, `skill_curation`, `benchmarks`, `extensions`, `pipelines`, `approvals`, `redaction`, `csv_profiles`, `tool_backends`, `scheduler`, `generation`, `knowledge_vault`, `checkpointer`). |
 | `GatewayConfig` | [src/gateway/config.py](../../backend/src/gateway/config.py) | 6 | FastAPI Gateway runtime config (host/port/CORS/static-roots). |
 
 ---
@@ -33,7 +33,6 @@ All configuration nodes are already implemented as `pydantic.BaseModel`. This fi
 | `DreamyTimeoutConfig` | [src/config/dreamy_timeout_config.py](../../backend/src/config/dreamy_timeout_config.py) | 6 | Dreamy workflow watchdog. |
 | `SubagentsAppConfig` | [src/config/subagents_config.py](../../backend/src/config/subagents_config.py) | 20 | `enabled`, `max_concurrent_limit`, `max_primary_per_turn`, `overrides[]`. |
 | `SubagentOverrideConfig` | [src/config/subagents_config.py](../../backend/src/config/subagents_config.py) | 10 | Per-subagent override of `model`, `max_turns`, `timeout_seconds`. |
-| `ProgressGuardConfig` | [src/config/progress_guard_config.py](../../backend/src/config/progress_guard_config.py) | 6 | No-progress detector thresholds. |
 | `RecursionPivotConfig` | [src/config/recursion_pivot_config.py](../../backend/src/config/recursion_pivot_config.py) | 8 | Evaluator pivot trigger at recursion-budget thresholds. |
 | `QualityGateConfig` | [src/config/quality_gate_config.py](../../backend/src/config/quality_gate_config.py) | 6 | Report quality-check thresholds. |
 | `LoopDetectionConfig` | [src/config/loop_detection_config.py](../../backend/src/config/loop_detection_config.py) | 6 | Repetitive tool-call detection thresholds. |

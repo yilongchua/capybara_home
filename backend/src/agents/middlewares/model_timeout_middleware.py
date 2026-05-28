@@ -12,8 +12,7 @@ TrajectoryMiddleware on the next `before/after_model`):
     {"source": "model_timeout_middleware", "stage": "...", "timeout_s": N}
 
 On timeout we replace the model call result with a single AIMessage carrying
-a system-warning style content. The agent picks that up in its next iteration
-and ProgressGuard can terminate the run if the loop fails to make progress.
+a system-warning style content. The agent picks that up in its next iteration.
 """
 
 from __future__ import annotations

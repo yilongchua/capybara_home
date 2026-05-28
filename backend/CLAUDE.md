@@ -123,7 +123,7 @@ CI runs these regression tests for every pull request via [.github/workflows/bac
 - `work_run_handoff._load_canonical_plan_overrides(values)` reads plan.md from disk at handoff and overrides ThreadState.plan + todo_graph with user edits, closing the gap where manual plan.md edits were silently lost
 
 **ThreadState** (`src/agents/thread_state.py`):
-- Extends `AgentState` with: `sandbox`, `thread_data`, `title`, `artifacts`, `todos`, `todo_graph`, `plan`, `eval_attempts`, `deferred_task_calls`, `handoff_artifacts`, `retry_meta`, `hooks_state`, `uploaded_files`, `viewed_images`, `progress_guard`, `trajectory`, `skill_disclosure`, `resume_meta`, `scratchpad`, `task_memory`, `memory_version_ref`
+- Extends `AgentState` with: `sandbox`, `thread_data`, `title`, `artifacts`, `todos`, `todo_graph`, `plan`, `eval_attempts`, `deferred_task_calls`, `handoff_artifacts`, `retry_meta`, `hooks_state`, `uploaded_files`, `viewed_images`, `trajectory`, `skill_disclosure`, `resume_meta`, `scratchpad`, `task_memory`, `memory_version_ref`
 - Uses custom reducers: `merge_artifacts` (deduplicate), `merge_viewed_images` (merge/clear)
 
 **Runtime Configuration** (via `config.configurable`):
@@ -148,7 +148,7 @@ Middlewares execute in strict order in `src/agents/work_agent/agent.py`:
 10. **ViewImageMiddleware** / **RetryPolicyMiddleware** / **ModelTimeoutMiddleware** - Vision injection, retries, and bounded model/tool calls
 11. **WebSearchCircuitBreakerMiddleware** / **ToolResultTruncationMiddleware** / **SubagentLimitMiddleware** - Search retry controls, tool-output caps, and endpoint-aware `task` scheduling
 12. **EvaluatorMiddleware** / **TodoFailureRetryMiddleware** / **ScratchpadTaskMemoryMiddleware** / **PlanFileSyncMiddleware** - Final verification, todo repair, handoff scratchpad, and plan-file sync
-13. **ResumeStateMiddleware** / **ProgressGuardMiddleware** / **PlanFollowupMiddleware** / **LoopDetectionMiddleware** / **RecursionBudgetPivotMiddleware** - Resume continuity, stall detection, follow-up planning, repetitive-call detection, and evaluator-driven mid-run steering at recursion-budget thresholds (lead agent only, off by default; see `recursion_pivot` config)
+13. **ResumeStateMiddleware** / **PlanFollowupMiddleware** / **LoopDetectionMiddleware** / **RecursionBudgetPivotMiddleware** - Resume continuity, follow-up planning, repetitive-call detection, and evaluator-driven mid-run steering at recursion-budget thresholds (lead agent only, off by default; see `recursion_pivot` config)
 14. **TrajectoryMiddleware** / **ExecutionTraceMiddleware** / **ActivityTimelineMiddleware** / **MetricsMiddleware** - Runtime trace, activity, and metrics capture
 15. **ClarificationMiddleware** - Intercepts `ask_user_for_clarification` tool calls, interrupts via `Command(goto=END)` (must be last)
 
@@ -408,7 +408,6 @@ Public API on the facade is unchanged — every public method delegates one-line
 - `permissions` - Declarative tool permission policy (`allow`/`deny`/`ask` + `default_mode`)
 - `trajectory` - JSONL trajectory logging settings
 - `metrics` - Runtime metrics switch
-- `progress_guard` - Warn-first no-progress detector and optional termination mode
 - `todos` - DAG todo tracking switch (`dag_enabled`)
 - `routing` - Per-stage model routing map + fallback
 - `planner` / `evaluator` - Pro-mode planner/evaluator switches and limits

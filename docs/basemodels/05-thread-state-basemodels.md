@@ -22,7 +22,6 @@ All targets live in [src/agents/thread_state.py](../../backend/src/agents/thread
 | `SandboxState` | `class SandboxState(TypedDict)` | thread_state.py | 14 | `sandbox_id: str \| None = None` | None. |
 | `ThreadDataState` | `ThreadDataState` | thread_state.py | 18 | `workspace_path`, `uploads_path`, `outputs_path`, `mounted_path`, `mounted_prompt_injected_path` — all `str \| None = None` | `model_validator`: if any of `*_path` are set they must be absolute. |
 | `ViewedImageData` | `ViewedImageData` | thread_state.py | 26 | `base64: str` (non-empty), `mime_type: Literal["image/png","image/jpeg","image/gif","image/webp"]` | `Field(min_length=1)` on `base64`. |
-| `ProgressGuardRuntimeState` | `ProgressGuardRuntimeState` | thread_state.py | 31 | `no_progress_turns: int = 0` (ge=0), `inactivity_turns: int = 0`, `repeated_tool_result_turns: int = 0`, `last_snapshot_hash: str = ""`, `last_tool_result_sig: str = ""`, `emitted_signals: list[str] = []` | Counters non-negative. |
 | `TrajectoryRuntimeState` | `TrajectoryRuntimeState` | thread_state.py | 40 | `run_id: str`, `file_path: str` | Non-empty + path validator. |
 | `SkillDisclosureState` | `SkillDisclosureState` | thread_state.py | 45 | `active: dict[str, int] = {}`, `last_injected_hash: str = ""`, `turn: int = 0` (ge=0) | Hash sha256 hex regex. |
 | `PlanState` | `PlanState` (36 fields, `total=False`) | thread_state.py | 51 | (see §5.2 detailed schema below) | Cross-field validators detailed in §5.2. |
@@ -154,7 +153,6 @@ Each migrated model has many readers. Migration owners must update the following
 | `scratchpad` | 8 sites |
 | `task_memory` | 5 sites |
 | `dreamy_intent` | 12 sites (dreamy_* middlewares) |
-| `progress_guard` | 4 sites |
 | `trajectory` | 3 sites |
 | `resume_meta` | 6 sites |
 | `handoff_artifacts` | 5 sites |

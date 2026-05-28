@@ -85,7 +85,7 @@ Recommended split into **sub-phases** to keep PRs reviewable. Each sub-phase mig
 
 | Sub-phase | Targets (from §05) | Approx. sites touched |
 |-----------|--------------------|----------------------:|
-| 4a | Leaf states with no cross-validators: `SandboxState`, `ThreadDataState`, `ViewedImageData`, `ProgressGuardRuntimeState`, `TrajectoryRuntimeState`, `SkillDisclosureState`, `RetryRuntimeState`, `HandoffArtifactState`, `HooksRuntimeState`, `MemoryVersionRefState`, `ScratchpadEntry`, `TaskMemoryFact`, `BackgroundFollowupJob`, `SteeringIntentState`, `ExecutionIntentState`, `QualityGateState`, `HandoffMetaState` | ~40 |
+| 4a | Leaf states with no cross-validators: `SandboxState`, `ThreadDataState`, `ViewedImageData`, `TrajectoryRuntimeState`, `SkillDisclosureState`, `RetryRuntimeState`, `HandoffArtifactState`, `HooksRuntimeState`, `MemoryVersionRefState`, `ScratchpadEntry`, `TaskMemoryFact`, `BackgroundFollowupJob`, `SteeringIntentState`, `ExecutionIntentState`, `QualityGateState`, `HandoffMetaState` | ~40 |
 | 4b | DAG-validated: `TodoGraphItem`, `TodoGraphState`, `PlanHistoryItem` | ~24 |
 | 4c | Plan tree: `PlanState` + new sub-models (`PlanRisk`, `PlanEvaluationState`, `PlanClarificationState`, `PlanClarificationItem`, `PlanClarificationOption`, `PlanClarificationAnswer`, `PlanApprovalState`) | ~38 |
 | 4d | Work-mode + phase execution: `WorkModeState`, `PhaseExecutionState`, `PhaseResultRecord` | ~24 |
