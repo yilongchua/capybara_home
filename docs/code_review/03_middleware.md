@@ -44,6 +44,7 @@ Detailed findings below.
 ### 1. `WriteFileArtifactMiddleware.wrap_tool_call` skips quality gate and artifact promotion entirely
 - File: `backend/src/agents/middlewares/write_file_artifact_middleware.py:249-251`
 - Severity: Critical
+- Status: Completed — fixed by sharing artifact promotion and quality-gate logic across `wrap_tool_call` and `awrap_tool_call`; sync-path regression tests added.
 - Issue: The sync override is `return handler(request)` only; all the quality-
   gate pre-check + artifact promotion logic lives exclusively in
   `awrap_tool_call`. Any sync code path (embedded `CapyHomeClient.chat`,
@@ -61,6 +62,7 @@ Detailed findings below.
 ### 2. `EvaluatorMiddleware.aafter_model` invokes the sync `after_model` (blocking LLM call from event loop)
 - File: `backend/src/agents/middlewares/evaluator_middleware.py:333-335`
 - Severity: Critical
+- Status: Completed — fixed by running the sync evaluator path via `asyncio.to_thread(...)` from `aafter_model`; async regression test added.
 - Issue: `aafter_model` is `return self.after_model(state, runtime)`, and
   `after_model` calls `self._evaluate_llm(state)` which calls `model.invoke(prompt)`
   — a synchronous, blocking network call. Inside the event loop, this blocks all
@@ -75,6 +77,7 @@ Detailed findings below.
 ### 3. `PlanFollowupMiddleware` daemon thread leaks an entire `CapyHomeClient` per follow-up
 - File: `backend/src/agents/middlewares/pro_followup_middleware.py:36-85,199-210`
 - Severity: Critical
+- Status: Completed — `CapyHomeClient.close()` was added, background follow-up/work-handoff flows close temporary clients in `finally`, `_failed_jobs` is bounded, and follow-up/work-handoff submission now uses a shared bounded background executor instead of ad-hoc daemon threads.
 - Issue: `_run_background_followup` constructs `CapyHomeClient(...)` per
   invocation but never closes it. The client owns checkpointers, model
   factories, and (per `daemon_agent_invoke.py:45-61`) can swap in a transient
@@ -92,6 +95,7 @@ Detailed findings below.
 ### 4. `runtime_events._compact_runtime_events` leaks the event queue when only one consumer runs
 - File: `backend/src/agents/middlewares/runtime_events.py:38-69`
 - Severity: High (verges on critical for long-running threads)
+- Status: Completed — single-consumer runtime event queues now compact after a one-drain grace period; regression test added.
 - Issue: The comment says "Keep the queue intact until we have at least two
   active consumers" and the code does
   `if len(valid_cursor_values) < 2: return` (line 51). If only one consumer
@@ -107,6 +111,7 @@ Detailed findings below.
 ### 5. `AutoresearchMiddleware._autoresearch_triggered` instance flag is not thread-safe
 - File: `backend/src/agents/middlewares/autoresearch_middleware.py:98-102,186-196`
 - Severity: High
+- Status: Completed — per-instance flag replaced with runtime-scoped storage backed by mutable context or a locked `WeakKeyDictionary`; concurrency-scope regression test added.
 - Issue: `self._autoresearch_triggered: bool` is a per-instance scalar mutated
   from `wrap_model_call` / `awrap_model_call` and read from `after_agent`.
   Middleware instances are typically reused across runs in the same process.
@@ -127,6 +132,7 @@ Detailed findings below.
 ### 6. `_TOOL_INPUT_BY_TASK_ID_KEY` store in `runtime.context` is never bounded
 - File: `backend/src/agents/middlewares/activity_timeline_middleware.py:115-136`
 - Severity: High
+- Status: Completed — tool-input scratch storage now lives in run-scoped storage, stores timestamps, evicts stale/old entries, and is cleared on `after_agent`; regression test added.
 - Issue: `_remember_tool_input` stores `{task_id: tool_input}` keyed in
   `runtime.context` and `_recall_tool_input` pops by id. But if `tool_call_end`
   is never observed (e.g. a tool returns a `Command` that doesn't propagate
@@ -140,6 +146,7 @@ Detailed findings below.
 ### 7. `runtime.context` is mutated as a dict but is not guaranteed to be one
 - File: `backend/src/agents/middlewares/runtime_events.py:25-35`, `activity_timeline_middleware.py:115-126`
 - Severity: High
+- Status: Completed for the cited buses — a run-scoped storage helper backed by `WeakKeyDictionary` now owns runtime events and activity tool-input scratch state; runtime events no longer require mutable `runtime.context`.
 - Issue: Multiple call-sites do `context[KEY] = ...` against
   `runtime.context`. The `Runtime` API in LangGraph documents `context` as a
   read-only typed object in newer versions. Several middlewares already
@@ -156,6 +163,7 @@ Detailed findings below.
 ### 8. `TrajectoryMiddleware._TRAJECTORY_LOCK` serializes ALL trajectory writes globally
 - File: `backend/src/agents/middlewares/trajectory_middleware.py:33-58,127-132`
 - Severity: High
+- Status: Completed — trajectory handle lookup uses a cache lock, while writes use per-file locks so unrelated trajectory files no longer serialize behind one global fsync lock; regression test added.
 - Issue: Single module-level lock guards both the handle cache and every
   `handle.write/flush/fsync`. Multiple concurrent runs (different threads,
   even different agents in the same process) contend on this lock. With
@@ -170,6 +178,7 @@ Detailed findings below.
 ### 9. `SummarizationMiddleware._fire_hooks` positional-argument shape detection is brittle
 - File: `backend/src/agents/middlewares/summarization_middleware.py:876-895`
 - Severity: High
+- Status: Completed — `_fire_hooks` now has an explicit `(state, to_summarize, preserved, runtime)` signature and tests verify hooks receive state.
 - Issue: `_fire_hooks(*args)` checks `len(args)==3` vs `4` to decide whether
   the first argument is a `state`. Any future signature change or accidental
   keyword call breaks the dispatch silently (the `TypeError` only fires if
@@ -186,6 +195,7 @@ Detailed findings below.
 ### 10. `ResumeStateMiddleware.aafter_model` re-enters the sync path
 - File: `backend/src/agents/middlewares/resume_state_middleware.py:89-90`
 - Severity: Medium-High
+- Status: Evaluated — no implementation change; the sync method is CPU-only and performs no disk/network I/O, so this pattern is acceptable here. The evaluator instance of this pattern was fixed separately in #2.
 - Issue: `async def aafter_model: return self.after_model(state, runtime)`. The
   sync method is CPU-only here (no I/O) so this is functionally OK, but the
   pattern repeats across many middlewares (`HooksMiddleware.aafter_model`,
@@ -201,6 +211,7 @@ Detailed findings below.
 ### 11. `SummarizationMiddleware` skill-rescue runs after partition without re-checking token budget
 - File: `backend/src/agents/middlewares/summarization_middleware.py:585-618`
 - Severity: Medium-High
+- Status: Completed — preserved tokens are recomputed after rescue and a warning is logged when the preserved window exceeds the active token trigger threshold; regression test added.
 - Issue: `_partition_with_skill_rescue` moves rescued messages into the
   *preserved* set after the base class has already chosen `cutoff_index`.
   Rescue can push the kept-budget arbitrarily over the target. With
@@ -216,6 +227,7 @@ Detailed findings below.
 ### 12. `WebSearchSummaryMiddleware._run_with_timeout` orphans the worker thread on timeout
 - File: `backend/src/agents/middlewares/web_search_summary_middleware.py:92-110`
 - Severity: Medium-High
+- Status: Completed for unbounded thread growth — sync timeout work now runs on the shared bounded background executor instead of spawning one daemon thread per call. A timed-out already-running LLM call may still finish in the background, but concurrency is capped.
 - Issue: `t.join(timeout=timeout); if t.is_alive(): raise TimeoutError(...)`.
   The thread is *not* cancelled — it continues running in the background,
   potentially completing its LLM call long after the timeout. Multiple
