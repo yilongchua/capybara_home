@@ -1972,11 +1972,22 @@ class ControlPlaneService:
         with self._vault_ingest_lock:
             return dict(self._vault_ingest_job)
 
-    def lint_vault_pages(self, *, dry_run: bool = True) -> dict[str, Any]:
+    def lint_vault_pages(
+        self,
+        *,
+        dry_run: bool = True,
+        use_llm: bool = False,
+        entity_slugs: list[str] | None = None,
+        concept_slugs: list[str] | None = None,
+    ) -> dict[str, Any]:
         """Find and (optionally) remove low-quality entity/concept pages.
 
         Refuses to mutate state while any ingest runner is active so we don't
         race with peers that are mid-write. A dry-run preview is always safe.
+
+        Pass explicit `entity_slugs` / `concept_slugs` to commit a specific
+        list (typically from a dry-run preview) without re-evaluating — this
+        keeps the LLM judge from running twice per lint session.
         """
         manager = self._default_vault_manager()
         if not dry_run:
@@ -1986,7 +1997,12 @@ class ControlPlaneService:
                         "Cannot lint while a vault ingest is running. "
                         "Wait for the active run to finish and try again.",
                     )
-        report = manager.lint_and_prune_pages(dry_run=dry_run)
+        report = manager.lint_and_prune_pages(
+            dry_run=dry_run,
+            use_llm=use_llm,
+            entity_slugs_to_prune=entity_slugs,
+            concept_slugs_to_prune=concept_slugs,
+        )
         if not dry_run and (
             report.get("entities", {}).get("removed", 0)
             or report.get("concepts", {}).get("removed", 0)

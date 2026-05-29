@@ -328,11 +328,22 @@ export async function cancelVaultIngest(): Promise<VaultIngestStatusResponse> {
   return response.json() as Promise<VaultIngestStatusResponse>;
 }
 
-export async function lintVault(options?: { dryRun?: boolean }): Promise<VaultLintResponse> {
+export async function lintVault(options?: {
+  dryRun?: boolean;
+  useLlm?: boolean;
+  entitySlugs?: string[];
+  conceptSlugs?: string[];
+}): Promise<VaultLintResponse> {
+  const body: Record<string, unknown> = {
+    dry_run: options?.dryRun ?? true,
+    use_llm: options?.useLlm ?? false,
+  };
+  if (options?.entitySlugs !== undefined) body.entity_slugs = options.entitySlugs;
+  if (options?.conceptSlugs !== undefined) body.concept_slugs = options.conceptSlugs;
   const response = await fetch(`${getBackendBaseURL()}/api/vault/lint`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ dry_run: options?.dryRun ?? true }),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     await parseError(response, `Failed to lint vault: ${response.statusText}`);

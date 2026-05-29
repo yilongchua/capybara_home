@@ -341,7 +341,12 @@ export function useCancelVaultIngest() {
 export function useLintVault() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (options?: { dryRun?: boolean }) => lintVault(options),
+    mutationFn: (options?: {
+      dryRun?: boolean;
+      useLlm?: boolean;
+      entitySlugs?: string[];
+      conceptSlugs?: string[];
+    }) => lintVault(options),
     onSuccess: (_data, variables) => {
       // Only invalidate vault views after a real prune so a dry-run preview
       // doesn't churn the explorer / entity-browser unnecessarily.

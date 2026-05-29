@@ -132,6 +132,9 @@ class VaultIngestStatusResponse(BaseModel):
 
 class VaultLintRequest(BaseModel):
     dry_run: bool = True
+    use_llm: bool = False
+    entity_slugs: list[str] | None = None
+    concept_slugs: list[str] | None = None
 
 
 class VaultLintFinding(BaseModel):
@@ -389,9 +392,14 @@ async def cancel_vault_ingest() -> VaultIngestStatusResponse:
 @router.post("/lint", response_model=VaultLintResponse)
 async def lint_vault(request: VaultLintRequest | None = None) -> VaultLintResponse:
     service = get_control_plane_service()
-    dry_run = bool(request.dry_run) if request is not None else True
+    req = request or VaultLintRequest()
     try:
-        payload = service.lint_vault_pages(dry_run=dry_run)
+        payload = service.lint_vault_pages(
+            dry_run=bool(req.dry_run),
+            use_llm=bool(req.use_llm),
+            entity_slugs=req.entity_slugs,
+            concept_slugs=req.concept_slugs,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return VaultLintResponse.model_validate(payload)

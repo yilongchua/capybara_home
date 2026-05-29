@@ -20,7 +20,7 @@ reminder messages and `jump_to: "model"`) make the contract leaky.
 
 ## Critical Findings
 
-### 1. `_HANDOFF_GUARD` can retain stale duplicate-detection entries
+### ~~1. `_HANDOFF_GUARD` can retain stale duplicate-detection entries~~ ✅ FIXED
 - **File:** `backend/src/agents/middlewares/work_run_handoff.py:328-332`
 - **Severity:** Critical
 - **Issue:** `_IN_FLIGHT_HANDOFFS` is protected by a lock, so the set-add itself is
@@ -34,7 +34,7 @@ reminder messages and `jump_to: "model"`) make the contract leaky.
   object, and on the duplicate-check path probe `existing_thread.is_alive()` before
   rejecting.
 
-### 2. `WorkModeMiddleware._completed_before` is per-instance mutable state in a singleton-per-graph object
+### ~~2. `WorkModeMiddleware._completed_before` is per-instance mutable state in a singleton-per-graph object~~ ✅ FIXED
 - **File:** `backend/src/agents/middlewares/work_mode_middleware.py:110-115, 222-250`
 - **Severity:** Critical
 - **Issue:** The middleware is instantiated once per `make_work_agent(...)` call
@@ -52,7 +52,7 @@ reminder messages and `jump_to: "model"`) make the contract leaky.
   `last_completed_ids: list[str]`) so the diff is checkpointed and stable across
   invocations.
 
-### 3. `_is_acyclic` conflates cycle detection with dangling-dependency validation
+### ~~3. `_is_acyclic` conflates cycle detection with dangling-dependency validation~~ ✅ FIXED
 - **File:** `backend/src/agents/middlewares/todo_dag_middleware.py:44-64`
 - **Severity:** Critical
 - **Issue:** The DFS cycle detection is structurally sound: `visited` plus the active
@@ -70,7 +70,7 @@ reminder messages and `jump_to: "model"`) make the contract leaky.
   list of missing dep ids) and `_is_acyclic(...)` (pure cycle check). Have callers
   raise distinct exceptions.
 
-### 4. `await` performed via `asyncio.run` inside daemon threads
+### ~~4. `await` performed via `asyncio.run` inside daemon threads~~ ✅ FIXED
 - **File:** `backend/src/agents/middlewares/work_run_handoff.py:113-117, 125-129, 168-175, 274-278, 305-312`
 - **Severity:** Critical
 - **Issue:** Each `client.threads.get_state(...)` / `update_state(...)` returns
@@ -85,7 +85,7 @@ reminder messages and `jump_to: "model"`) make the contract leaky.
   via `loop = asyncio.new_event_loop(); loop.run_until_complete(coro)` reused for
   all calls in that thread.
 
-### 5. `_get_memory_context` swallows all exceptions with a bare `print`
+### ~~5. `_get_memory_context` swallows all exceptions with a bare `print`~~ ✅ FIXED
 - **File:** `backend/src/agents/work_agent/prompt.py:335-337`
 - **Severity:** High
 - **Issue:** Any error in memory loading (import error, broken JSON, permission
@@ -149,7 +149,7 @@ reminder messages and `jump_to: "model"`) make the contract leaky.
 
 ## High Severity
 
-### 6. `TodoFailureRetryMiddleware._MAX_TODO_RECOVERY_ATTEMPTS=10` is per-thread but not bounded across runs
+### ~~6. `TodoFailureRetryMiddleware._MAX_TODO_RECOVERY_ATTEMPTS=10` is per-thread but not bounded across runs~~ ✅ FIXED
 - **File:** `backend/src/agents/middlewares/todo_failure_retry_middleware.py:20, 103-110`
 - **Severity:** High
 - **Issue:** The counter is stored in state (`todo_recovery_attempts`), but
@@ -164,7 +164,7 @@ reminder messages and `jump_to: "model"`) make the contract leaky.
 - **Recommendation:** Reset `todo_recovery_attempts` on each new user turn (in
   `before_model` when a new `HumanMessage` is the latest message).
 
-### 7. `WorkModeMiddleware` injects `next_todo['id']` into a `SystemMessage` without escaping
+### ~~7. `WorkModeMiddleware` injects `next_todo['id']` into a `SystemMessage` without escaping~~ ✅ FIXED
 - **File:** `backend/src/agents/middlewares/work_mode_middleware.py:363-370, 386-392`
 - **Severity:** High
 - **Issue:** `todo_content`, `rationale`, `subagent_hint`, and `next_todo['id']`
@@ -180,7 +180,7 @@ reminder messages and `jump_to: "model"`) make the contract leaky.
 - **Recommendation:** Escape content (replace closing tags) before interpolation,
   and add a length cap. Treat todo content as untrusted.
 
-### 8. `_is_report_todo` keyword matcher is too broad
+### ~~8. `_is_report_todo` keyword matcher is too broad~~ ✅ FIXED
 - **File:** `backend/src/agents/middlewares/work_mode_middleware.py:56-58`
 - **Severity:** High
 - **Issue:** Any todo whose content contains "report" or "comprehensive"
@@ -195,7 +195,7 @@ reminder messages and `jump_to: "model"`) make the contract leaky.
   `node["kind"]` annotation, or require the planner to mark the todo as
   `kind="report"` rather than infer from content text.
 
-### 9. `_inject_memory_context` may insert before/inside an `<active_skills>` body
+### ~~9. `_inject_memory_context` may insert before/inside an `<active_skills>` body~~ ✅ FIXED
 - **File:** `backend/src/agents/work_agent/prompt.py:464-472`
 - **Severity:** High
 - **Issue:** The injector searches for `\n<thinking_style>` and inserts memory
@@ -215,7 +215,7 @@ reminder messages and `jump_to: "model"`) make the contract leaky.
   `<!--__MEMORY_INJECTION_POINT__-->`) baked into the cached prompt, and verify
   no prior memory block exists before inserting.
 
-### 10. `prompt_cache._cache` grows unbounded with no eviction
+### ~~10. `prompt_cache._cache` grows unbounded with no eviction~~ ✅ FIXED
 - **File:** `backend/src/agents/work_agent/prompt_cache.py:35, 144-148`
 - **Severity:** High
 - **Issue:** Cache key includes `agent_name`, `subagent_enabled`,
@@ -230,7 +230,7 @@ reminder messages and `jump_to: "model"`) make the contract leaky.
 - **Recommendation:** Cap cache size with an LRU policy (e.g., `functools.lru_cache`
   with `maxsize=64`, or manual LRU eviction).
 
-### 11. `_run_work_mode_handoff` reads stale `values` then overrides with on-disk plan.md, but never re-validates the merged state
+### ~~11. `_run_work_mode_handoff` reads stale `values` then overrides with on-disk plan.md, but never re-validates the merged state~~ ✅ FIXED
 - **File:** `backend/src/agents/middlewares/work_run_handoff.py:206-281`
 - **Severity:** High
 - **Issue:** On line 249 `invoke_state.update(_load_canonical_plan_overrides(values))`
@@ -247,7 +247,7 @@ reminder messages and `jump_to: "model"`) make the contract leaky.
   equivalent validator) on the parsed payload before handoff. If validation
   fails, log and fall back to checkpointed state with an SSE event.
 
-### 12. `before_model`'s self-heal of in-progress todos races with `deferred_task_calls`
+### ~~12. `before_model`'s self-heal of in-progress todos races with `deferred_task_calls`~~ ✅ FIXED
 - **File:** `backend/src/agents/middlewares/work_mode_middleware.py:194-216`
 - **Severity:** High
 - **Issue:** The self-heal flips "in_progress" todos back to "pending" when no
@@ -263,7 +263,7 @@ reminder messages and `jump_to: "model"`) make the contract leaky.
   `existing_pe.last_todo_id != node_id` for at least one cycle), or scope the
   self-heal to a status timestamp older than N seconds.
 
-### 13. `wrap_model_call` injection mutates `request` indirectly via `override` but `_ephemeral_work_instruction` mutates nothing — yet relies on `runtime_obj.state`
+### ~~13. `wrap_model_call` injection mutates `request` indirectly via `override` but `_ephemeral_work_instruction` mutates nothing — yet relies on `runtime_obj.state`~~ ✅ FIXED
 - **File:** `backend/src/agents/middlewares/work_mode_middleware.py:144-154`
 - **Severity:** High
 - **Issue:** The fallback reads `runtime_obj.state` (lines 147-149). The

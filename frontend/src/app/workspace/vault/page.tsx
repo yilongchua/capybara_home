@@ -349,7 +349,7 @@ export default function VaultPage() {
                     variant="outline"
                     onClick={() => {
                       lintVaultMutation.mutate(
-                        { dryRun: true },
+                        { dryRun: true, useLlm: true },
                         {
                           onSuccess: (preview) => setLintPreview(preview),
                           onError: (error) => toast.error(error.message),
@@ -360,7 +360,7 @@ export default function VaultPage() {
                     title={
                       ingestRunning
                         ? "Wait for ingest to finish before linting"
-                        : "Scan for low-quality entities/concepts to prune"
+                        : "LLM-judged scan for low-value entities/concepts (uses memory.json + vault context)"
                     }
                   >
                     {lintVaultMutation.isPending && lintPreview === null ? (
@@ -688,8 +688,15 @@ export default function VaultPage() {
             {lintTotalToRemove > 0 ? (
               <Button
                 onClick={() => {
+                  if (!lintPreview) return;
+                  const entitySlugs = lintPreview.entities.flagged.map((f) => f.slug);
+                  const conceptSlugs = lintPreview.concepts.flagged.map((f) => f.slug);
                   lintVaultMutation.mutate(
-                    { dryRun: false },
+                    {
+                      dryRun: false,
+                      entitySlugs,
+                      conceptSlugs,
+                    },
                     {
                       onSuccess: (result) => {
                         const removed =
