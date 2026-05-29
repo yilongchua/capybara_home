@@ -204,6 +204,76 @@ class ControlPlaneService:
             except Exception:
                 logger.exception("Failed to record autoresearch stranded-detection audit event")
 
+        # Crash / hot-reload recovery: any run still marked ``running`` or any
+        # in-flight step belongs to a worker thread from a *previous* process
+        # that no longer exists. Mark them failed and clear the matching
+        # autoresearch objective's running_run_id / current_activity, otherwise
+        # the UI would show a perpetual spinner.
+        self._recover_orphaned_runs()
+
+    def _recover_orphaned_runs(self) -> None:
+        """Finalise pipeline runs left in ``running`` state by a dead process.
+
+        Called from ``_seed_from_config`` at construction time. Any run that
+        on-disk state shows as ``running`` cannot still be in-flight (the only
+        executor is the in-process thread pool, and a new process has no
+        threads from the old one). The same goes for any ``running`` step. We
+        mark them failed, append a sentinel error, and clear the matching
+        autoresearch objective's running_run_id / current_activity.
+        """
+        from src.control_plane.models import utcnow as _utcnow
+
+        snapshot = self._store.read()
+        orphan_run_ids: list[str] = []
+        for run_id, run in snapshot.runs.items():
+            if run.status == "running":
+                orphan_run_ids.append(run_id)
+            elif any(step.status == "running" for step in run.steps):
+                orphan_run_ids.append(run_id)
+        if not orphan_run_ids:
+            return
+
+        now = _utcnow()
+
+        def mutate(snapshot):
+            for run_id in orphan_run_ids:
+                run = snapshot.runs.get(run_id)
+                if run is None:
+                    continue
+                for step in run.steps:
+                    if step.status == "running":
+                        step.status = "failed"
+                        step.finished_at = step.finished_at or now
+                        step.updated_at = now
+                        step.error = step.error or "Orphaned by backend restart."
+                        step.logs.append("Step marked failed: process restarted while running.")
+                if run.status == "running":
+                    run.status = "failed"
+                    run.finished_at = run.finished_at or now
+                    run.updated_at = now
+                    run.alerts.append("Run failed: backend restarted while iteration was running.")
+            for objective in snapshot.autoresearch_objectives.values():
+                if objective.running_run_id and objective.running_run_id in orphan_run_ids:
+                    objective.running_run_id = None
+                    objective.current_activity = None
+                    objective.current_activity_at = None
+                    objective.updated_at = now
+
+        self._store.mutate(mutate)
+        try:
+            self._append_audit_event(
+                "pipeline_runs_orphan_recovery",
+                f"Recovered {len(orphan_run_ids)} orphaned pipeline run(s) after restart.",
+                metadata={"run_ids": orphan_run_ids},
+            )
+        except Exception:
+            logger.exception("Failed to record orphan-recovery audit event")
+        logger.warning(
+            "control_plane: marked %d orphaned pipeline run(s) failed after restart: %s",
+            len(orphan_run_ids),
+            orphan_run_ids,
+        )
+
     def _builtin_templates(self) -> list[PipelineTemplate]:
         return self._templates.builtin_templates()
 
