@@ -95,6 +95,8 @@ class ControlPlaneService:
         self._startup_lock = threading.Lock()
         self._active_startup_job_id: str | None = None
         self._service_state: dict[str, dict[str, Any]] = {}
+        self._stop_requested_run_ids: set[str] = set()
+        self._stop_requested_lock = threading.Lock()
         self._triggers = TriggersService(self._store, self._redaction)
         self._feedback = FeedbackService(self._store)
         self._artifacts = ArtifactsService(self._store)
@@ -170,12 +172,37 @@ class ControlPlaneService:
                 manager = self._default_vault_manager()
             except Exception:
                 logger.exception("Autoresearch migration: failed to build vault manager for legacy purge")
-                return
-            for legacy_id in legacy_objective_ids:
-                try:
-                    manager.purge_objective(objective_id=legacy_id)
-                except Exception:
-                    logger.exception("Autoresearch migration: failed to purge legacy vault dir for %s", legacy_id)
+            else:
+                for legacy_id in legacy_objective_ids:
+                    try:
+                        manager.purge_objective(objective_id=legacy_id)
+                    except Exception:
+                        logger.exception("Autoresearch migration: failed to purge legacy vault dir for %s", legacy_id)
+
+        # Surface stranded autoresearch objectives so the UI can prompt the user
+        # to click Run. An objective is "stranded" when status=active but the
+        # bootstrap run never finished (no scheduler job created yet). We do
+        # NOT auto-trigger runs here: the iteration loop is expensive and the
+        # user may not want N runs starting on every backend boot. The audit
+        # event is best-effort.
+        stranded = [
+            objective
+            for objective in self._store.read().autoresearch_objectives.values()
+            if objective.status == "active"
+            and not objective.scheduler_job_id
+            and not objective.latest_run_id
+        ]
+        if stranded:
+            try:
+                self._append_audit_event(
+                    "autoresearch_stranded_detected",
+                    f"{len(stranded)} autoresearch objective(s) need manual recovery (Run button).",
+                    metadata={
+                        "objective_ids": [obj.objective_id for obj in stranded],
+                    },
+                )
+            except Exception:
+                logger.exception("Failed to record autoresearch stranded-detection audit event")
 
     def _builtin_templates(self) -> list[PipelineTemplate]:
         return self._templates.builtin_templates()
@@ -285,6 +312,49 @@ class ControlPlaneService:
 
     def resume_autoresearch_objective(self, objective_id: str) -> AutoresearchObjective:
         return self._autoresearch_orchestrator.resume_objective(objective_id=objective_id)
+
+    def run_autoresearch_objective_now(self, objective_id: str) -> dict[str, Any]:
+        return self._autoresearch_orchestrator.run_objective_now(objective_id=objective_id)
+
+    def stop_autoresearch_objective(self, objective_id: str) -> AutoresearchObjective:
+        return self._autoresearch_orchestrator.stop_objective(objective_id=objective_id)
+
+    # Cooperative cancellation registry. The autoresearch loop checks
+    # ``is_run_stop_requested`` at phase boundaries; setting the flag here makes
+    # the next check raise ``StopIteration`` inside the loop so the run is
+    # cancelled cleanly. Tracked per ``run_id`` rather than per objective so a
+    # delayed cancel never accidentally stops a *future* iteration.
+    def request_run_stop(self, run_id: str) -> None:
+        with self._stop_requested_lock:
+            self._stop_requested_run_ids.add(run_id)
+
+    def is_run_stop_requested(self, run_id: str) -> bool:
+        with self._stop_requested_lock:
+            return run_id in self._stop_requested_run_ids
+
+    def clear_run_stop(self, run_id: str) -> None:
+        with self._stop_requested_lock:
+            self._stop_requested_run_ids.discard(run_id)
+
+    def set_autoresearch_activity(
+        self,
+        *,
+        objective_entry_id: str,
+        run_id: str | None,
+        activity: str | None,
+    ) -> None:
+        from src.control_plane.models import utcnow as _utcnow
+
+        def mutate(snapshot):
+            current = snapshot.autoresearch_objectives.get(objective_entry_id)
+            if current is None:
+                return
+            current.running_run_id = run_id
+            current.current_activity = activity
+            current.current_activity_at = _utcnow() if activity else None
+            current.updated_at = _utcnow()
+
+        self._store.mutate(mutate)
 
     def delete_autoresearch_objective(self, objective_id: str) -> dict[str, Any]:
         return self._autoresearch_orchestrator.delete_objective(objective_id=objective_id)
@@ -828,6 +898,19 @@ class ControlPlaneService:
                     log_line=log_line,
                 )
             except Exception as exc:
+                from src.control_plane.autoresearch_loop import AutoresearchStopped
+
+                if isinstance(exc, AutoresearchStopped):
+                    logger.info("Pipeline step cancelled by user: run=%s step=%s", run_id, step.step_id)
+                    self._update_step_state(
+                        run_id,
+                        step.step_id,
+                        status="cancelled",
+                        error=str(exc) or "Stop requested",
+                        finished=True,
+                        log_line="Step cancelled by user.",
+                    )
+                    return self._finalize_run(run_id, status="cancelled", alert="Cancelled by user.")
                 logger.exception("Pipeline step failed: run=%s step=%s", run_id, step.step_id)
                 failed_output: dict[str, Any] | None = None
                 if isinstance(exc, AgentExecutionError):
@@ -945,21 +1028,61 @@ class ControlPlaneService:
             or f"autoresearch-{objective_slug}"
         )
 
-        return run_one_iteration(
-            vault_root=vault_root,
-            objective_slug=objective_slug,
-            topic=topic,
-            endpoint_goal=endpoint_goal,
-            thread_id=thread_id,
-            max_questions=int(vault_cfg.autoresearch_max_questions_per_iteration),
-            max_followups=int(vault_cfg.autoresearch_max_questions_per_iteration),
-            max_researcher_fanout=int(vault_cfg.autoresearch_max_researcher_fanout),
-            novelty_decay_threshold=float(vault_cfg.autoresearch_novelty_decay_threshold),
-            novelty_window=int(vault_cfg.autoresearch_novelty_window),
-            dedup_similarity_threshold=float(vault_cfg.autoresearch_dedup_similarity_threshold),
-            model_name=str(vault_cfg.cot_model or "").strip() or None,
-            vault_search=vault_lookup,
-        )
+        # Find the objective entry up-front so the progress callback can mutate
+        # the right record. We pass entry_id (not objective_id) so renames or
+        # re-creations don't accidentally collide.
+        objective_match = self._autoresearch_orchestrator._get_objective_internal(objective_slug)
+        objective_entry_id = objective_match.id if objective_match else None
+        run_id = run.id
+
+        def _progress(activity: str) -> None:
+            if objective_entry_id is None:
+                return
+            self.set_autoresearch_activity(
+                objective_entry_id=objective_entry_id,
+                run_id=run_id,
+                activity=activity,
+            )
+
+        def _stop_check() -> bool:
+            return self.is_run_stop_requested(run_id)
+
+        if objective_entry_id is not None:
+            self.set_autoresearch_activity(
+                objective_entry_id=objective_entry_id,
+                run_id=run_id,
+                activity="Starting iteration",
+            )
+
+        try:
+            return run_one_iteration(
+                vault_root=vault_root,
+                objective_slug=objective_slug,
+                topic=topic,
+                endpoint_goal=endpoint_goal,
+                thread_id=thread_id,
+                max_questions=int(vault_cfg.autoresearch_max_questions_per_iteration),
+                max_followups=int(vault_cfg.autoresearch_max_questions_per_iteration),
+                max_researcher_fanout=int(vault_cfg.autoresearch_max_researcher_fanout),
+                novelty_decay_threshold=float(vault_cfg.autoresearch_novelty_decay_threshold),
+                novelty_window=int(vault_cfg.autoresearch_novelty_window),
+                dedup_similarity_threshold=float(vault_cfg.autoresearch_dedup_similarity_threshold),
+                model_name=str(vault_cfg.cot_model or "").strip() or None,
+                vault_search=vault_lookup,
+                progress_callback=_progress,
+                stop_check=_stop_check,
+            )
+        finally:
+            # Always clear the activity + running_run_id, regardless of
+            # success/cancel/failure. The stop-flag is cleared here too so a
+            # subsequent run doesn't inherit a stale stop request.
+            self.clear_run_stop(run_id)
+            if objective_entry_id is not None:
+                self.set_autoresearch_activity(
+                    objective_entry_id=objective_entry_id,
+                    run_id=None,
+                    activity=None,
+                )
 
     def _execute_step_with_agent(
         self,

@@ -169,6 +169,109 @@ class AutoresearchOrchestratorAgent:
         self._service._store.mutate(mutate)
         return self.get_objective(objective_id)
 
+    # --------------------------------------------------------------- run now
+
+    def run_objective_now(self, *, objective_id: str) -> dict[str, Any]:
+        """Trigger an immediate iteration for an objective.
+
+        Two paths:
+        - If a daily scheduler job already exists, defer to ``run_scheduler_job_now``
+          so the run is recorded against the job.
+        - Otherwise (stranded objective: crashed before first run completed),
+          queue a bootstrap run directly so the lifecycle can recover. The
+          objective's status is forced back to ``active`` and ``pause_reason``
+          is cleared, matching the resume contract.
+        """
+        objective = self.get_objective(objective_id)
+        normalized_objective_id = objective.objective_id
+
+        if objective.scheduler_job_id:
+            run = self._service.run_scheduler_job_now(objective.scheduler_job_id)
+            return {
+                "objective": self.get_objective(normalized_objective_id),
+                "bootstrap_run": run,
+                "via": "scheduler_job",
+            }
+
+        run = self._service.create_run(
+            template_id=self.template_id,
+            inputs={
+                "autoresearch_topic": objective.topic,
+                "objective_id": normalized_objective_id,
+                "endpoint_goal": objective.endpoint_goal,
+            },
+            requires_approval=False,
+            summary=f"Autoresearch recovery iteration: {objective.topic}",
+            metadata={
+                "manual_trigger": True,
+                "source_thread_id": objective.source_thread_id,
+                "objective_id": normalized_objective_id,
+                "autoresearch_continuous": True,
+                "first_run_for_objective": True,
+                "recovery_run": True,
+            },
+        )
+        if not run.requires_approval:
+            run = self._service.start_run_in_background(run.id)
+
+        def mutate(snapshot):
+            current = snapshot.autoresearch_objectives.get(objective.id)
+            if current is None:
+                return
+            current.status = "active"
+            current.pause_reason = None
+            current.updated_at = utcnow()
+
+        self._service._store.mutate(mutate)
+        self._service._append_audit_event(
+            "autoresearch_objective_run_now",
+            f"Manual run triggered for stranded autoresearch objective {normalized_objective_id}.",
+            metadata={
+                "objective_id": normalized_objective_id,
+                "run_id": run.id,
+            },
+        )
+        return {
+            "objective": self.get_objective(normalized_objective_id),
+            "bootstrap_run": run,
+            "via": "bootstrap_recovery",
+        }
+
+    # ---------------------------------------------------------------- stop
+
+    def stop_objective(self, *, objective_id: str) -> AutoresearchObjective:
+        """Request cooperative cancellation of the objective's running iteration.
+
+        The loop polls a stop flag at phase boundaries; once it observes the
+        flag it raises and the run finalises as ``cancelled``. We do not block
+        on completion here — the request is fire-and-forget and the UI will
+        observe the cleared ``running_run_id`` on the next poll.
+        """
+        objective = self.get_objective(objective_id)
+        running_run_id = (objective.running_run_id or "").strip()
+        if not running_run_id:
+            raise ValueError(f"Autoresearch objective {objective_id} has no running run to stop.")
+        self._service.request_run_stop(running_run_id)
+        self._service._append_audit_event(
+            "autoresearch_objective_stop_requested",
+            f"Stop requested for autoresearch objective {objective.objective_id} (run {running_run_id}).",
+            metadata={
+                "objective_id": objective.objective_id,
+                "run_id": running_run_id,
+            },
+        )
+
+        def mutate(snapshot):
+            current = snapshot.autoresearch_objectives.get(objective.id)
+            if current is None:
+                return
+            current.current_activity = "Stopping…"
+            current.current_activity_at = utcnow()
+            current.updated_at = utcnow()
+
+        self._service._store.mutate(mutate)
+        return self.get_objective(objective_id)
+
     # ----------------------------------------------------------------- crud
 
     def delete_objective(self, *, objective_id: str) -> dict[str, Any]:

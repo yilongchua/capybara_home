@@ -250,6 +250,9 @@ export interface AutoresearchObjective {
   ledger_markdown_path?: string | null;
   ledger_json_path?: string | null;
   pause_reason?: string | null;
+  running_run_id?: string | null;
+  current_activity?: string | null;
+  current_activity_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -307,6 +310,12 @@ export interface StartAutoresearchObjectiveResponse {
   objective: AutoresearchObjective;
   bootstrap_run?: PipelineRun | null;
   scheduled_time: string;
+}
+
+export interface RunAutoresearchObjectiveResponse {
+  objective: AutoresearchObjective;
+  bootstrap_run?: PipelineRun | null;
+  via: string;
 }
 
 export interface DeleteAutoresearchObjectiveResponse {

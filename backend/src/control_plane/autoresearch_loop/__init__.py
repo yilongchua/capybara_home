@@ -12,7 +12,7 @@ reflector loop. Each scheduled run executes one iteration:
 """
 
 from .ledger import QuestionLedger, QuestionNode
-from .loop import run_one_iteration
+from .loop import AutoresearchStopped, run_one_iteration
 from .stop_criteria import compute_novelty_rate, should_stop
 from .taxonomy import (
     DEFAULT_TAXONOMY,
@@ -25,6 +25,7 @@ from .taxonomy import (
 __all__ = [
     "QuestionNode",
     "QuestionLedger",
+    "AutoresearchStopped",
     "run_one_iteration",
     "compute_novelty_rate",
     "should_stop",

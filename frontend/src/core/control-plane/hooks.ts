@@ -52,6 +52,8 @@ import {
   getVaultIngestStatus,
   refreshVaultExplorer,
   resumeAutoresearchObjective,
+  runAutoresearchObjective,
+  stopAutoresearchObjective,
 } from "./api";
 import type {
   AutoresearchObjective,
@@ -653,6 +655,35 @@ export function useResumeAutoresearchObjective() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (objectiveId: string) => resumeAutoresearchObjective(objectiveId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["control-plane", "autoresearch-objectives"],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "integrations"] });
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "runs"] });
+      publishControlPlaneRefresh(["vault", "runs", "integrations"]);
+    },
+  });
+}
+
+export function useStopAutoresearchObjective() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (objectiveId: string) => stopAutoresearchObjective(objectiveId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["control-plane", "autoresearch-objectives"],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["control-plane", "runs"] });
+      publishControlPlaneRefresh(["vault", "runs", "integrations"]);
+    },
+  });
+}
+
+export function useRunAutoresearchObjective() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (objectiveId: string) => runAutoresearchObjective(objectiveId),
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: ["control-plane", "autoresearch-objectives"],

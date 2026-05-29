@@ -16,6 +16,7 @@ import type {
   SchedulerRuntimeJobCreateRequest,
   StartAutoresearchObjectiveRequest,
   StartAutoresearchObjectiveResponse,
+  RunAutoresearchObjectiveResponse,
   DeleteAutoresearchObjectiveResponse,
   CleanupAutoresearchResponse,
   CleanupPipelineRunsRequest,
@@ -188,6 +189,36 @@ export async function resumeAutoresearchObjective(
     await parseError(response, `Failed to resume autoresearch objective: ${response.statusText}`);
   }
   return response.json() as Promise<AutoresearchObjective>;
+}
+
+export async function stopAutoresearchObjective(
+  objectiveId: string,
+): Promise<AutoresearchObjective> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/pipelines/autoresearch/${encodeURIComponent(objectiveId)}/stop`,
+    {
+      method: "POST",
+    },
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to stop autoresearch objective: ${response.statusText}`);
+  }
+  return response.json() as Promise<AutoresearchObjective>;
+}
+
+export async function runAutoresearchObjective(
+  objectiveId: string,
+): Promise<RunAutoresearchObjectiveResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/pipelines/autoresearch/${encodeURIComponent(objectiveId)}/run`,
+    {
+      method: "POST",
+    },
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to run autoresearch objective: ${response.statusText}`);
+  }
+  return response.json() as Promise<RunAutoresearchObjectiveResponse>;
 }
 
 export async function deleteAutoresearchObjective(
