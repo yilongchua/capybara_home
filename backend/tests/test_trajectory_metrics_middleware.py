@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, ToolMessage
 
+from src.agents.middlewares import trajectory_middleware as trajectory_module
 from src.agents.middlewares.metrics_middleware import MetricsMiddleware, get_metrics_snapshot, reset_metrics_snapshot
 from src.agents.middlewares.trajectory_middleware import TrajectoryMiddleware
 from src.config.metrics_config import MetricsConfig, set_metrics_config
@@ -89,3 +90,14 @@ def test_trajectory_skips_fsync_when_disabled(monkeypatch, tmp_path: Path):
     middleware.before_agent(state, runtime)
 
     assert calls == []
+
+
+def test_trajectory_uses_distinct_write_locks_per_file(tmp_path: Path):
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+
+    handle_a, lock_a = trajectory_module._get_trajectory_handle(first)  # noqa: SLF001
+    handle_b, lock_b = trajectory_module._get_trajectory_handle(second)  # noqa: SLF001
+
+    assert handle_a is not handle_b
+    assert lock_a is not lock_b

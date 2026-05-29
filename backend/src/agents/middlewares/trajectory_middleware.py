@@ -31,31 +31,37 @@ logger = logging.getLogger(__name__)
 # Per-run append-mode file handles so we pay one open() per run instead of one
 # per event. Cleaned up on process exit.
 _TRAJECTORY_HANDLES: dict[str, IO[str]] = {}
-_TRAJECTORY_LOCK = Lock()
+_TRAJECTORY_WRITE_LOCKS: dict[str, Lock] = {}
+_TRAJECTORY_CACHE_LOCK = Lock()
 
 
 def _close_trajectory_handles() -> None:
-    with _TRAJECTORY_LOCK:
+    with _TRAJECTORY_CACHE_LOCK:
         for handle in _TRAJECTORY_HANDLES.values():
             try:
                 handle.close()
             except Exception:
                 pass
         _TRAJECTORY_HANDLES.clear()
+        _TRAJECTORY_WRITE_LOCKS.clear()
 
 
 atexit.register(_close_trajectory_handles)
 
 
-def _get_trajectory_handle(file_path: Path) -> IO[str]:
+def _get_trajectory_handle(file_path: Path) -> tuple[IO[str], Lock]:
     key = str(file_path)
-    with _TRAJECTORY_LOCK:
+    with _TRAJECTORY_CACHE_LOCK:
+        write_lock = _TRAJECTORY_WRITE_LOCKS.get(key)
+        if write_lock is None:
+            write_lock = Lock()
+            _TRAJECTORY_WRITE_LOCKS[key] = write_lock
         handle = _TRAJECTORY_HANDLES.get(key)
         if handle is not None and not handle.closed:
-            return handle
+            return handle, write_lock
         handle = open(file_path, "a", encoding="utf-8")
         _TRAJECTORY_HANDLES[key] = handle
-        return handle
+        return handle, write_lock
 
 
 class TrajectoryMiddlewareState(AgentState):
@@ -124,8 +130,8 @@ class TrajectoryMiddleware(AgentMiddleware[TrajectoryMiddlewareState]):
                 "event": event_type,
                 "payload": self._truncate(payload, cfg.max_payload_chars),
             }
-            handle = _get_trajectory_handle(file_path)
-            with _TRAJECTORY_LOCK:
+            handle, write_lock = _get_trajectory_handle(file_path)
+            with write_lock:
                 handle.write(json.dumps(record, ensure_ascii=False) + os.linesep)
                 handle.flush()
                 if cfg.fsync:

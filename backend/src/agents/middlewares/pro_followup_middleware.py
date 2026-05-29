@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.config import get_config, get_stream_writer
 from langgraph.runtime import Runtime
 
+from src.agents.background import submit_background_task
 from src.agents.middlewares.message_selection import latest_message_text, latest_real_ai_answer
 from src.agents.middlewares.runtime_events import append_runtime_event
 from src.agents.thread_state import BackgroundFollowupJob
@@ -24,10 +25,19 @@ logger = logging.getLogger(__name__)
 # user on the next model turn (since SSE writers are only usable inside a run).
 _failed_jobs: dict[str, tuple[str, str]] = {}  # thread_id -> (job_id, error_msg)
 _failed_jobs_lock = threading.Lock()
+_MAX_FAILED_JOBS = 256
 
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _record_failed_job(thread_id: str, job_id: str, error_msg: str) -> None:
+    with _failed_jobs_lock:
+        _failed_jobs[thread_id] = (job_id, error_msg)
+        while len(_failed_jobs) > _MAX_FAILED_JOBS:
+            oldest_thread_id = next(iter(_failed_jobs))
+            _failed_jobs.pop(oldest_thread_id, None)
 
 
 class PlanFollowupState(AgentState):
@@ -44,27 +54,28 @@ def _run_background_followup(
     from src.client import CapyHomeClient
 
     time.sleep(2.0)
-    client = CapyHomeClient(
-        model_name=requested_model_name,
-        thinking_enabled=True,
-        subagent_enabled=True,
-        plan_mode=False,
-        auto_mode=False,
-    )
-    config = client._get_runnable_config(  # noqa: SLF001
-        thread_id,
-        model_name=requested_model_name,
-        thinking_enabled=True,
-        subagent_enabled=True,
-    )
-    config["configurable"].update(
-        {
-            "mode": "work",
-            "background_followup": True,
-            "plan_behavior": "work_background_followup",
-        }
-    )
+    client = None
     try:
+        client = CapyHomeClient(
+            model_name=requested_model_name,
+            thinking_enabled=True,
+            subagent_enabled=True,
+            plan_mode=False,
+            auto_mode=False,
+        )
+        config = client._get_runnable_config(  # noqa: SLF001
+            thread_id,
+            model_name=requested_model_name,
+            thinking_enabled=True,
+            subagent_enabled=True,
+        )
+        config["configurable"].update(
+            {
+                "mode": "work",
+                "background_followup": True,
+                "plan_behavior": "work_background_followup",
+            }
+        )
         invoke_client_agent_async(
             client,
             {"messages": [HumanMessage(name="plan_followup_prompt", content=summary_prompt)]},
@@ -80,8 +91,12 @@ def _run_background_followup(
     except Exception as exc:
         logger.exception("Background Plan follow-up failed for thread %s", thread_id)
         # Surface the failure on the next model turn for this thread.
-        with _failed_jobs_lock:
-            _failed_jobs[thread_id] = (job_id, str(exc))
+        _record_failed_job(thread_id, job_id, str(exc))
+    finally:
+        if client is not None:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
 
 
 class PlanFollowupMiddleware(AgentMiddleware[PlanFollowupState]):
@@ -196,18 +211,17 @@ class PlanFollowupMiddleware(AgentMiddleware[PlanFollowupState]):
             f"Original user request:\n{user_text}\n\n"
             f"Foreground answer already delivered:\n{answer_text}\n"
         )
-        worker = threading.Thread(
-            target=_run_background_followup,
-            kwargs={
-                "thread_id": thread_id,
-                "job_id": job_id,
-                "requested_model_name": requested_model_name if isinstance(requested_model_name, str) else None,
-                "summary_prompt": summary_prompt,
-            },
-            name=f"plan-followup-{thread_id[:8]}",
-            daemon=True,
+        submitted = submit_background_task(
+            f"plan-followup-{thread_id[:8]}",
+            _run_background_followup,
+            thread_id=thread_id,
+            job_id=job_id,
+            requested_model_name=requested_model_name if isinstance(requested_model_name, str) else None,
+            summary_prompt=summary_prompt,
         )
-        worker.start()
+        if not submitted:
+            _record_failed_job(thread_id, job_id, "Background executor is full")
+            return None
 
         append_runtime_event(
             runtime,

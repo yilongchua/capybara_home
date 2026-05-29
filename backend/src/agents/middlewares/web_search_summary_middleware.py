@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import threading
 from typing import Any, override
 
 from langchain.agents import AgentState
@@ -28,6 +27,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
+from src.agents.background import run_with_timeout
 from src.agents.middlewares.runtime_events import append_runtime_event
 from src.config.web_search_summary_config import get_web_search_summary_config
 from src.models import create_chat_model, resolve_model_name
@@ -90,24 +90,8 @@ def _build_summarized_tool_content(*, query: str, summary: str, orig_chars: int,
 
 
 def _run_with_timeout(fn, timeout: float) -> Any:
-    """Run fn() in a daemon thread with a hard timeout."""
-    result_holder: list[Any] = [None]
-    exc_holder: list[BaseException | None] = [None]
-
-    def worker():
-        try:
-            result_holder[0] = fn()
-        except Exception as e:  # noqa: BLE001
-            exc_holder[0] = e
-
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
-    t.join(timeout=timeout)
-    if t.is_alive():
-        raise TimeoutError(f"Web search summary timed out after {timeout}s")
-    if exc_holder[0] is not None:
-        raise exc_holder[0]
-    return result_holder[0]
+    """Run fn() on the shared bounded background executor with a timeout."""
+    return run_with_timeout("web_search_summary", fn, timeout)
 
 
 class WebSearchSummaryMiddleware(AgentMiddleware[AgentState]):

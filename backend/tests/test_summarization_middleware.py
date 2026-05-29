@@ -174,12 +174,14 @@ class TestHookDispatch:
         preserved = [_human("new")]
         rt = _runtime(thread_id="t-hook", agent_name="agent-1")
 
-        mw._fire_hooks(to_summarize, preserved, rt)
+        state = {"messages": [*to_summarize, *preserved]}
+        mw._fire_hooks(state, to_summarize, preserved, rt)
 
         assert len(fired_events) == 1
         event = fired_events[0]
         assert event.thread_id == "t-hook"
         assert event.agent_name == "agent-1"
+        assert event.state is state
         assert len(event.messages_to_summarize) == 1
         assert len(event.preserved_messages) == 1
 
@@ -189,17 +191,26 @@ class TestHookDispatch:
 
         mw = _make_mw(hooks=[bad_hook])
         # Should not raise
-        mw._fire_hooks([_human("a")], [_human("b")], _runtime())
+        mw._fire_hooks({"messages": []}, [_human("a")], [_human("b")], _runtime())
 
     def test_multiple_hooks_all_called(self):
         called = []
         mw = _make_mw(hooks=[lambda e: called.append("h1"), lambda e: called.append("h2")])
-        mw._fire_hooks([_human("a")], [], _runtime())
+        mw._fire_hooks({"messages": []}, [_human("a")], [], _runtime())
         assert called == ["h1", "h2"]
 
     def test_no_hooks_no_error(self):
         mw = _make_mw(hooks=[])
-        mw._fire_hooks([], [], _runtime())  # should not raise
+        mw._fire_hooks({"messages": []}, [], [], _runtime())  # should not raise
+
+    def test_preserved_budget_warning_after_rescue(self, caplog):
+        mw = _make_mw()
+        mw._last_trigger_threshold = 10
+
+        with caplog.at_level("WARNING"):
+            mw._warn_if_preserved_over_budget([_human("a"), _human("b")])
+
+        assert "preserved window exceeds trigger threshold" in caplog.text
 
 
 # ---------------------------------------------------------------------------

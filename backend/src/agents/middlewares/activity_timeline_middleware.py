@@ -27,9 +27,12 @@ from src.agents.activity_timeline import (
     merge_context_metrics,
     stream_activity_event,
 )
+from src.agents.middlewares.run_scoped import clear_run_store_key, get_run_store
 from src.agents.middlewares.runtime_events import append_runtime_event, drain_runtime_events
 
 _TOOL_INPUT_BY_TASK_ID_KEY = "_activity_tool_input_by_task_id"
+_TOOL_INPUT_MAX_ENTRIES = 128
+_TOOL_INPUT_TTL_SECONDS = 10 * 60
 _LONG_RUNNING_TOOL_NAMES = frozenset(
     {
         "bash",
@@ -105,34 +108,48 @@ def _subagent_group_title(payload: dict[str, Any]) -> str:
     return _as_str(payload.get("group_title")) or f"{_subagent_label(payload)}: {_subagent_description(payload)}"
 
 
-def _runtime_context(runtime: Runtime) -> dict[str, Any]:
-    context = getattr(runtime, "context", None)
-    if isinstance(context, dict):
-        return context
-    return {}
+def _tool_input_store(runtime: Runtime) -> dict[str, dict[str, Any]]:
+    store = get_run_store(runtime)
+    raw = store.get(_TOOL_INPUT_BY_TASK_ID_KEY)
+    if not isinstance(raw, dict):
+        raw = {}
+        store[_TOOL_INPUT_BY_TASK_ID_KEY] = raw
+    return raw
+
+
+def _prune_tool_input_store(store: dict[str, dict[str, Any]], *, now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    for key, entry in list(store.items()):
+        created_at = entry.get("created_at") if isinstance(entry, dict) else None
+        if not isinstance(created_at, (int, float)) or now - float(created_at) > _TOOL_INPUT_TTL_SECONDS:
+            store.pop(key, None)
+    if len(store) <= _TOOL_INPUT_MAX_ENTRIES:
+        return
+    ordered = sorted(
+        store.items(),
+        key=lambda item: float(item[1].get("created_at") or 0) if isinstance(item[1], dict) else 0,
+    )
+    for key, _entry in ordered[: max(0, len(store) - _TOOL_INPUT_MAX_ENTRIES)]:
+        store.pop(key, None)
 
 
 def _remember_tool_input(runtime: Runtime, task_id: str | None, tool_input: str | None) -> None:
     if not task_id or not tool_input:
         return
-    context = _runtime_context(runtime)
-    if not context:
-        return
-    store = context.get(_TOOL_INPUT_BY_TASK_ID_KEY)
-    if not isinstance(store, dict):
-        store = {}
-        context[_TOOL_INPUT_BY_TASK_ID_KEY] = store
-    store[task_id] = tool_input
+    store = _tool_input_store(runtime)
+    _prune_tool_input_store(store)
+    store[task_id] = {"text": tool_input, "created_at": time.time()}
 
 
 def _recall_tool_input(runtime: Runtime, task_id: str | None) -> str | None:
     if not task_id:
         return None
-    context = _runtime_context(runtime)
-    store = context.get(_TOOL_INPUT_BY_TASK_ID_KEY)
+    store = get_run_store(runtime).get(_TOOL_INPUT_BY_TASK_ID_KEY)
     if not isinstance(store, dict):
         return None
     value = store.pop(task_id, None)
+    if isinstance(value, dict):
+        return _as_str(value.get("text"))
     return _as_str(value)
 
 
@@ -504,6 +521,7 @@ class ActivityTimelineMiddleware(AgentMiddleware[ActivityTimelineMiddlewareState
     @override
     def after_agent(self, state: ActivityTimelineMiddlewareState, runtime: Runtime) -> dict | None:
         payload = self._flush_runtime_activity(runtime)
+        clear_run_store_key(runtime, _TOOL_INPUT_BY_TASK_ID_KEY)
         return payload or None
 
     @override

@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from src.agents.background import submit_background_task
 from src.agents.common.handoff import parse_plan_md
 from src.agents.middlewares.todo_dag_middleware import _materialize_ready_ids, normalize_todo_nodes
 from src.config.handoffs_config import get_handoffs_config
@@ -235,6 +236,7 @@ def _run_work_mode_handoff(
 
         for attempt in range(1, max_attempts + 1):
             values: dict[str, Any] = {}
+            client = None
             try:
                 try:
                     values = _read_thread_values(lg_client, thread_id, loop=loop)
@@ -319,6 +321,11 @@ def _run_work_mode_handoff(
                     time.sleep(0.8)
                     continue
                 break
+            finally:
+                if client is not None:
+                    close = getattr(client, "close", None)
+                    if callable(close):
+                        close()
 
         if last_error is not None:
             exc = last_error
@@ -371,14 +378,11 @@ def spawn_work_mode_handoff(
             with _HANDOFF_GUARD:
                 _IN_FLIGHT_HANDOFFS.discard(thread_id)
 
-    worker = threading.Thread(
-        target=_run_with_cleanup,
-        name=f"work-mode-handoff-{thread_id[:8]}{thread_name_suffix}",
-        daemon=True,
+    submitted = submit_background_task(
+        f"work-mode-handoff-{thread_id[:8]}{thread_name_suffix}",
+        _run_with_cleanup,
     )
-    try:
-        worker.start()
-    except Exception:
+    if not submitted:
         with _HANDOFF_GUARD:
             _IN_FLIGHT_HANDOFFS.discard(thread_id)
-        raise
+        logger.warning("Could not submit work-mode handoff for thread %s; background executor is full", thread_id)

@@ -11,6 +11,7 @@ from langgraph.types import Command
 
 import src.agents.middlewares.message_selection as message_selection
 from src.agents.middlewares.activity_timeline_middleware import ActivityTimelineMiddleware
+from src.agents.middlewares.run_scoped import get_run_store
 from src.agents.middlewares.runtime_events import append_runtime_event
 
 
@@ -244,6 +245,33 @@ def test_tool_wrap_surfaces_file_operation_progress_without_adding_messages(monk
     assert "Writing file: /mnt/user-data/workspace/report.md..." in lines
     assert "Wrote: /mnt/user-data/workspace/report.md" in lines
     assert len(streamed) == len(events)
+
+
+def test_after_agent_clears_orphaned_tool_inputs(monkeypatch) -> None:
+    runtime = _runtime()
+    middleware = ActivityTimelineMiddleware()
+    request = ToolCallRequest(
+        tool_call={
+            "name": "write_file",
+            "args": {"path": "/mnt/user-data/workspace/report.md"},
+            "id": "call-file",
+            "type": "tool_call",
+        },
+        tool=None,
+        runtime=runtime,
+        state={},
+    )
+
+    import src.agents.middlewares.activity_timeline_middleware as module
+
+    monkeypatch.setattr(module, "stream_activity_event", lambda _event: None)
+    module._remember_tool_input(runtime, "orphan", "stale input")
+    assert "_activity_tool_input_by_task_id" in get_run_store(runtime)
+
+    middleware.wrap_tool_call(request, lambda _request: ToolMessage(content="OK", tool_call_id="call-file"))
+    middleware.after_agent({}, runtime)
+
+    assert "_activity_tool_input_by_task_id" not in get_run_store(runtime)
 
 
 def test_prompt_selection_does_not_ingest_activity_timeline_state() -> None:

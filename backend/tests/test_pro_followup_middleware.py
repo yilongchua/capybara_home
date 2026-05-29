@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def _make_runtime(thread_id: str = "thread-xyz", *, mode: str = "work") -> SimpleNamespace:
@@ -32,7 +32,7 @@ class TestPlanFollowupFailureSurfacing:
         mock_client_instance = MagicMock()
         mock_client_instance._get_runnable_config.return_value = {"configurable": {}}
         mock_client_instance._ensure_agent.return_value = None
-        mock_client_instance._agent.invoke.side_effect = RuntimeError("model unavailable")
+        mock_client_instance._agent.ainvoke = AsyncMock(side_effect=RuntimeError("model unavailable"))
 
         mock_client_cls = MagicMock(return_value=mock_client_instance)
         stub_module = types.ModuleType("src.client")
@@ -59,6 +59,7 @@ class TestPlanFollowupFailureSurfacing:
             job_id, error_msg = mod._failed_jobs["thread-fail"]
         assert job_id == "job-001"
         assert "model unavailable" in error_msg
+        mock_client_instance.close.assert_called_once()
 
     def test_before_model_emits_sse_for_failed_job_and_clears_entry(self):
         """before_model must emit SSE for any recorded failure and remove the entry."""
@@ -126,6 +127,17 @@ class TestPlanFollowupFailureSurfacing:
         with mod._failed_jobs_lock:
             assert "thread-A" in mod._failed_jobs
 
+    def test_failed_jobs_store_is_bounded(self):
+        mod = self._mod
+
+        for i in range(mod._MAX_FAILED_JOBS + 5):
+            mod._record_failed_job(f"thread-{i}", f"job-{i}", "failed")
+
+        with mod._failed_jobs_lock:
+            assert len(mod._failed_jobs) == mod._MAX_FAILED_JOBS
+            assert "thread-0" not in mod._failed_jobs
+            assert f"thread-{mod._MAX_FAILED_JOBS + 4}" in mod._failed_jobs
+
     def test_before_model_disables_background_deepen_without_plan_context(self):
         """Plan mode without plan/todo context must not advertise background deepening."""
         mod = self._mod
@@ -151,13 +163,13 @@ class TestPlanFollowupFailureSurfacing:
         }
 
         with (
-            patch("src.agents.middlewares.pro_followup_middleware.threading.Thread") as mock_thread,
+            patch("src.agents.middlewares.pro_followup_middleware.submit_background_task") as mock_submit,
             patch("src.agents.middlewares.pro_followup_middleware.get_config", return_value={"metadata": {}}),
         ):
             result = middleware.after_model(state, runtime)
 
         assert result is None
-        mock_thread.assert_not_called()
+        mock_submit.assert_not_called()
 
     def test_after_model_uses_latest_real_user_prompt_not_synthetic_reminder(self):
         mod = self._mod
@@ -174,13 +186,13 @@ class TestPlanFollowupFailureSurfacing:
         }
 
         with (
-            patch("src.agents.middlewares.pro_followup_middleware.threading.Thread") as mock_thread,
+            patch("src.agents.middlewares.pro_followup_middleware.submit_background_task", return_value=True) as mock_submit,
             patch("src.agents.middlewares.pro_followup_middleware.get_config", return_value={"metadata": {}}),
         ):
             result = middleware.after_model(state, runtime)
 
         assert result is not None
-        kwargs = mock_thread.call_args.kwargs["kwargs"]
+        kwargs = mock_submit.call_args.kwargs
         assert "Find good bubble tea near town." in kwargs["summary_prompt"]
         assert "<system_reminder>" not in kwargs["summary_prompt"]
 
@@ -197,8 +209,8 @@ class TestPlanFollowupFailureSurfacing:
             ],
         }
 
-        with patch("src.agents.middlewares.pro_followup_middleware.threading.Thread") as mock_thread:
+        with patch("src.agents.middlewares.pro_followup_middleware.submit_background_task") as mock_submit:
             result = middleware.after_model(state, runtime)
 
         assert result is None
-        mock_thread.assert_not_called()
+        mock_submit.assert_not_called()

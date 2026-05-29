@@ -292,8 +292,14 @@ class CapyHomeSummarizationMiddleware(SummarizationMiddleware):
         if cutoff_index <= 0:
             return None
 
+        if force:
+            self._last_trigger_type = "manual"
+            self._last_trigger_threshold = None
+            self._last_trigger_observed = total_tokens
+        else:
+            self._last_trigger_type = self._detect_trigger_type(messages, total_tokens)
         to_summarize, preserved = self._partition_with_skill_rescue(messages, cutoff_index)
-        self._last_trigger_type = "manual" if force else self._detect_trigger_type(messages, total_tokens)
+        self._warn_if_preserved_over_budget(preserved)
         self._fire_hooks(state, to_summarize, preserved, runtime)
         self._summary_state_snapshot = state
         summary = self._create_summary(to_summarize)
@@ -353,8 +359,14 @@ class CapyHomeSummarizationMiddleware(SummarizationMiddleware):
         if cutoff_index <= 0:
             return None
 
+        if force:
+            self._last_trigger_type = "manual"
+            self._last_trigger_threshold = None
+            self._last_trigger_observed = total_tokens
+        else:
+            self._last_trigger_type = self._detect_trigger_type(messages, total_tokens)
         to_summarize, preserved = self._partition_with_skill_rescue(messages, cutoff_index)
-        self._last_trigger_type = "manual" if force else self._detect_trigger_type(messages, total_tokens)
+        self._warn_if_preserved_over_budget(preserved)
         self._fire_hooks(state, to_summarize, preserved, runtime)
         self._summary_state_snapshot = state
         summary = await self._acreate_summary(to_summarize)
@@ -617,6 +629,24 @@ class CapyHomeSummarizationMiddleware(SummarizationMiddleware):
 
         return remaining, rescue_bundle + preserved
 
+    def _warn_if_preserved_over_budget(self, preserved: list[AnyMessage]) -> None:
+        threshold = self._last_trigger_threshold
+        if not isinstance(threshold, (int, float)) or threshold <= 0:
+            return
+        try:
+            preserved_tokens = self.token_counter(preserved)
+        except Exception:
+            logger.debug("Could not count preserved tokens after summarization rescue", exc_info=True)
+            return
+        if preserved_tokens <= threshold:
+            return
+        logger.warning(
+            "Summarization preserved window exceeds trigger threshold after rescue: preserved_tokens=%s threshold=%s preserved_messages=%s",
+            preserved_tokens,
+            threshold,
+            len(preserved),
+        )
+
     # ------------------------------------------------------------------
     # Phase C — scaled, substantive-content anchor rescue
     # ------------------------------------------------------------------
@@ -873,15 +903,13 @@ class CapyHomeSummarizationMiddleware(SummarizationMiddleware):
             except Exception:
                 logger.exception("Failed to persist compaction archive for thread %s", thread_id)
 
-    def _fire_hooks(self, *args) -> None:
-        if len(args) == 3:
-            state: AgentState | None = None
-            to_summarize, preserved, runtime = args
-        elif len(args) == 4:
-            state, to_summarize, preserved, runtime = args
-        else:
-            raise TypeError("_fire_hooks expects (to_summarize, preserved, runtime) or (state, to_summarize, preserved, runtime)")
-
+    def _fire_hooks(
+        self,
+        state: AgentState,
+        to_summarize: list[AnyMessage],
+        preserved: list[AnyMessage],
+        runtime: Runtime,
+    ) -> None:
         if not self._before_summarization_hooks:
             return
 
