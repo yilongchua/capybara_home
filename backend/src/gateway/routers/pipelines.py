@@ -64,6 +64,12 @@ class AutoresearchStartResponse(BaseModel):
     scheduled_time: str
 
 
+class AutoresearchRunNowResponse(BaseModel):
+    objective: AutoresearchObjective
+    bootstrap_run: PipelineRun | None = None
+    via: str
+
+
 class AutoresearchDeleteResponse(BaseModel):
     deleted: bool
     objective_id: str
@@ -274,6 +280,29 @@ async def resume_autoresearch(objective_id: str) -> AutoresearchObjective:
     service = get_control_plane_service()
     try:
         return service.resume_autoresearch_objective(objective_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/pipelines/autoresearch/{objective_id}/run", response_model=AutoresearchRunNowResponse)
+async def run_autoresearch_now(objective_id: str) -> AutoresearchRunNowResponse:
+    service = get_control_plane_service()
+    try:
+        result = service.run_autoresearch_objective_now(objective_id)
+        return AutoresearchRunNowResponse(
+            objective=result["objective"],
+            bootstrap_run=result.get("bootstrap_run"),
+            via=str(result.get("via") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/pipelines/autoresearch/{objective_id}/stop", response_model=AutoresearchObjective)
+async def stop_autoresearch(objective_id: str) -> AutoresearchObjective:
+    service = get_control_plane_service()
+    try:
+        return service.stop_autoresearch_objective(objective_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

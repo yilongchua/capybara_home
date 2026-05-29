@@ -243,6 +243,9 @@ class AutoresearchObjective(BaseModel):
     ledger_markdown_path: str | None = None
     ledger_json_path: str | None = None
     pause_reason: str | None = None
+    running_run_id: str | None = None
+    current_activity: str | None = None
+    current_activity_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     model_config = ConfigDict(extra="allow")

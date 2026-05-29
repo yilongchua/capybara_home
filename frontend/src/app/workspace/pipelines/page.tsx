@@ -1,10 +1,9 @@
 "use client";
 
-import { CalendarClockIcon, ChevronDownIcon, ListChecksIcon, PlayIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { CalendarClockIcon, ListChecksIcon, Loader2Icon, PlayIcon, PlusIcon, SquareIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -12,11 +11,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import {
   Dialog,
   DialogContent,
@@ -45,8 +39,9 @@ import {
   useAutoresearchObjectives,
   useDeleteAutoresearchObjective,
   useIntegrationStatus,
-  useRunSchedulerJob,
+  useRunAutoresearchObjective,
   useStartAutoresearchObjective,
+  useStopAutoresearchObjective,
   useUpdateRuntimeSchedulerJob,
   useUpdateRuntimeSchedulerJobTime,
 } from "@/core/control-plane";
@@ -100,9 +95,16 @@ function EndpointInput({
 export default function PipelinesPage() {
   const { t } = useI18n();
   const { integrationStatus } = useIntegrationStatus();
-  const { objectives, isLoading } = useAutoresearchObjectives({ refetchInterval: 20_000 });
+  const [anyRunning, setAnyRunning] = useState(false);
+  const { objectives, isLoading } = useAutoresearchObjectives({
+    refetchInterval: anyRunning ? 3_000 : 20_000,
+  });
+  useEffect(() => {
+    setAnyRunning(objectives.some((obj) => Boolean((obj.running_run_id ?? "").trim())));
+  }, [objectives]);
   const startAutoresearch = useStartAutoresearchObjective();
-  const runSchedulerJob = useRunSchedulerJob();
+  const runAutoresearchObjective = useRunAutoresearchObjective();
+  const stopAutoresearchObjective = useStopAutoresearchObjective();
   const deleteAutoresearchObjective = useDeleteAutoresearchObjective();
   const updateSchedulerJobTime = useUpdateRuntimeSchedulerJobTime();
   const updateSchedulerJob = useUpdateRuntimeSchedulerJob();
@@ -201,17 +203,31 @@ export default function PipelinesPage() {
                 )}/ledger.md`;
                 const progressPercent = objectiveProgress[objective.objective_id] ?? 0;
                 const noveltyPercent = ((objective.last_novelty_rate ?? 1) * 100).toFixed(0);
-                const lastReflection = (objective.last_reflection ?? "").trim();
                 const job = scheduleJobByObjectiveId.get(objective.objective_id);
+                const hasLedger = Boolean((objective.ledger_markdown_path ?? "").trim());
+                const isRunning = Boolean((objective.running_run_id ?? "").trim());
+                const currentActivity = (objective.current_activity ?? "").trim();
 
                 return (
                   <Card key={objective.id} className="h-full">
                     <CardHeader className="space-y-1">
                       <div className="flex items-start justify-between gap-2">
                         <CardTitle className="text-base">{objective.topic || objective.objective_id}</CardTitle>
-                        <Badge variant={objective.status === "active" ? "secondary" : "outline"}>
-                          {objective.status}
-                        </Badge>
+                        {isRunning ? (
+                          <span
+                            className="text-primary inline-flex shrink-0 items-center gap-1 text-[11px]"
+                            title={currentActivity || "Running"}
+                          >
+                            <Loader2Icon className="size-3 animate-spin" />
+                            <span className="max-w-[180px] truncate">
+                              {currentActivity || "Running"}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground shrink-0 text-[11px]">
+                            Updated {formatTimeAgo(objective.updated_at)}
+                          </span>
+                        )}
                       </div>
                       <div className="space-y-1">
                         <div className="flex items-center justify-end text-xs">
@@ -277,83 +293,93 @@ export default function PipelinesPage() {
                               }
                             />
                           </div>
+                        </div>
+                      ) : null}
+
+                      <div className="flex gap-2">
+                        {isRunning ? (
                           <Button
-                            className="w-full"
+                            className="flex-1"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              stopAutoresearchObjective.mutate(objective.objective_id, {
+                                onSuccess: () => toast.success("Stop requested."),
+                                onError: (error) => toast.error(error.message),
+                              })
+                            }
+                            disabled={stopAutoresearchObjective.isPending}
+                          >
+                            <SquareIcon className="size-4" />
+                            Stop
+                          </Button>
+                        ) : (
+                          <Button
+                            className="flex-1"
                             size="sm"
                             onClick={() =>
-                              runSchedulerJob.mutate(job.id, {
+                              runAutoresearchObjective.mutate(objective.objective_id, {
                                 onSuccess: () => toast.success("Run started."),
                                 onError: (error) => toast.error(error.message),
                               })
                             }
-                            disabled={runSchedulerJob.isPending}
+                            disabled={runAutoresearchObjective.isPending}
                           >
                             <PlayIcon className="size-4" />
                             Run
                           </Button>
-                        </div>
-                      ) : null}
-
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        className="w-full"
-                        onClick={() => {
-                          if (!window.confirm("Delete this objective and all its vault tracking files? This cannot be undone.")) return;
-                          deleteAutoresearchObjective.mutate(objective.objective_id, {
-                            onSuccess: () => toast.success("Objective deleted."),
-                            onError: (error) => toast.error(error.message),
-                          });
-                        }}
-                        disabled={deleteAutoresearchObjective.isPending}
-                      >
-                        <Trash2Icon className="size-4" />
-                        Delete Objective
-                      </Button>
+                        )}
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="flex-1"
+                          onClick={() => {
+                            if (!window.confirm("Delete this objective and all its vault tracking files? This cannot be undone.")) return;
+                            deleteAutoresearchObjective.mutate(objective.objective_id, {
+                              onSuccess: () => toast.success("Objective deleted."),
+                              onError: (error) => toast.error(error.message),
+                            });
+                          }}
+                          disabled={deleteAutoresearchObjective.isPending}
+                        >
+                          <Trash2Icon className="size-4" />
+                          Delete
+                        </Button>
+                      </div>
 
                       <div className="rounded-md border p-3 space-y-1">
                         <p className="text-xs font-medium">Question Ledger</p>
-                        <a
-                          className="text-primary inline-flex items-center gap-1 text-xs underline"
-                          href={ledgerLink}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Open ledger.md
-                        </a>
+                        {hasLedger ? (
+                          <a
+                            className="text-primary inline-flex items-center gap-1 text-xs underline"
+                            href={ledgerLink}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open ledger.md
+                          </a>
+                        ) : (
+                          <p className="text-muted-foreground text-xs">
+                            No ledger yet — run an iteration to populate.
+                          </p>
+                        )}
                         <p className="text-muted-foreground text-[11px]">
                           Iteration #{objective.loop_iteration} · novelty {noveltyPercent}%
                           {objective.last_stop_reason ? ` · ${objective.last_stop_reason}` : ""}
                         </p>
                       </div>
 
-                      <Collapsible>
-                        <CollapsibleTrigger className="flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-xs font-medium">
-                          <span className="inline-flex items-center gap-1">
-                            <ListChecksIcon className="size-3.5" />
-                            Cluster Coverage / Reflection
-                          </span>
-                          <ChevronDownIcon className="size-4" />
-                        </CollapsibleTrigger>
-                        <CollapsibleContent className="mt-2 rounded-md border p-3 space-y-2">
-                          <div>
-                            <p className="mb-1 text-[11px] font-medium">Cluster coverage</p>
-                            {coveredClusters.length === 0 ? (
-                              <p className="text-muted-foreground text-xs">No clusters covered yet.</p>
-                            ) : (
-                              <p className="text-xs">{coveredClusters.join(" · ")}</p>
-                            )}
-                          </div>
-                          {lastReflection ? (
-                            <div>
-                              <p className="mb-1 text-[11px] font-medium">Latest reflection</p>
-                              <p className="text-xs">{lastReflection}</p>
-                            </div>
-                          ) : null}
-                        </CollapsibleContent>
-                      </Collapsible>
-
-                      <p className="text-muted-foreground text-[11px]">Updated {formatTimeAgo(objective.updated_at)}</p>
+                      <div className="rounded-md border p-3 space-y-1">
+                        <p className="inline-flex items-center gap-1 text-xs font-medium">
+                          <ListChecksIcon className="size-3.5" />
+                          Cluster Coverage
+                        </p>
+                        {coveredClusters.length === 0 ? (
+                          <p className="text-muted-foreground text-xs">No clusters covered yet.</p>
+                        ) : (
+                          <p className="text-xs">{coveredClusters.join(" · ")}</p>
+                        )}
+                      </div>
                     </CardContent>
                   </Card>
                 );

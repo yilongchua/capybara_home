@@ -29,6 +29,10 @@ from .taxonomy import load_taxonomy
 logger = logging.getLogger(__name__)
 
 
+class AutoresearchStopped(RuntimeError):
+    """Raised when ``run_one_iteration`` observes a cooperative stop request."""
+
+
 def run_one_iteration(
     *,
     vault_root: Path,
@@ -44,6 +48,8 @@ def run_one_iteration(
     dedup_similarity_threshold: float,
     model_name: str | None = None,
     vault_search: Callable[[str], list[dict[str, Any]]] | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+    stop_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Execute exactly one autoresearch loop iteration.
 
@@ -51,6 +57,20 @@ def run_one_iteration(
     The returned dict has a ``stop`` boolean and ``reason`` so the caller can
     flip the objective to ``completed_endpoint``.
     """
+    def emit(activity: str) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(activity)
+        except Exception:
+            logger.exception("autoresearch loop: progress_callback raised, ignoring")
+
+    def check_stop() -> None:
+        if stop_check is not None and stop_check():
+            raise AutoresearchStopped("Stop requested")
+
+    emit("Loading ledger and taxonomy")
+    check_stop()
     ledger = QuestionLedger(vault_root=vault_root, objective_slug=objective_slug)
     state = ledger.load()
     previous_iteration = int(state.get("loop_iteration") or 0)
@@ -61,6 +81,8 @@ def run_one_iteration(
     recent = ledger.recent_questions(limit=15)
 
     # 1. Generator
+    check_stop()
+    emit("Generating sub-questions")
     candidates = generate_questions(
         topic=topic,
         endpoint_goal=endpoint_goal,
@@ -96,6 +118,8 @@ def run_one_iteration(
         }
 
     # 2. Dedup
+    check_stop()
+    emit(f"Dedup checking {len(candidates)} candidate question(s)")
     verdicts = classify_questions(
         candidates=candidates,
         existing_questions=existing,
@@ -132,6 +156,8 @@ def run_one_iteration(
             endpoint_goal=endpoint_goal,
         )
 
+    check_stop()
+    emit(f"Researching {len(survivors)} question(s) via web search")
     outcomes = dispatch_questions(
         topic=topic,
         endpoint_goal=endpoint_goal,
@@ -139,6 +165,7 @@ def run_one_iteration(
         thread_id=thread_id,
         max_fanout=max_researcher_fanout,
     )
+    check_stop()
 
     answered_nodes: list[dict[str, Any]] = []
     for node in survivors:
@@ -166,6 +193,8 @@ def run_one_iteration(
             answered_nodes.append(updated)
 
     # 4. Reflector
+    emit("Reflecting on answers and proposing follow-ups")
+    check_stop()
     reflection = reflect(
         topic=topic,
         endpoint_goal=endpoint_goal,
@@ -203,7 +232,8 @@ def run_one_iteration(
             endpoint_goal=endpoint_goal,
         )
 
-    # 5. Stop check
+    # 5. Stop check (novelty saturation, not user-requested stop)
+    emit("Updating ledger and computing novelty")
     fresh_questions = ledger.questions()
     stop, novelty_rate, reason = should_stop(
         questions=fresh_questions,
