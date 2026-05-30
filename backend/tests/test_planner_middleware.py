@@ -77,6 +77,70 @@ def test_auto_mode_approves_plan_and_still_pauses_before_execution(monkeypatch) 
     assert update["plan"].get("approved_at")
 
 
+def _planner_with_clarification(monkeypatch) -> PlannerMiddleware:
+    """Planner whose LLM output includes one pending clarification."""
+    middleware = PlannerMiddleware(
+        requested_model=None,
+        max_plan_steps=8,
+        dag_enabled=True,
+        handoffs_config=SimpleNamespace(enabled=False),
+        sprint_contracts_config=SimpleNamespace(enabled=False),
+    )
+
+    def _fake_invoke(_prompt: str) -> tuple[PlannerOutput, str]:
+        return (
+            PlannerOutput(
+                title="Festival Plan",
+                summary="Plan a festival.",
+                objective="Deliver an execution plan.",
+                domain="events",
+                todos=[
+                    {"id": "todo-1", "content": "Find venues", "depends_on": [], "rationale": "Site first."},
+                    {"id": "todo-2", "content": "Estimate budget", "depends_on": [], "rationale": "Cost."},
+                ],
+                clarifications=[
+                    PlannerClarification(
+                        question="Is 30k total or per day?",
+                        options=[
+                            ClarificationOption(label="Total", recommended=True),
+                            ClarificationOption(label="Per day"),
+                        ],
+                    )
+                ],
+            ),
+            "test-model",
+        )
+
+    monkeypatch.setattr(middleware, "_invoke_planner", _fake_invoke)
+    return middleware
+
+
+def test_pending_clarification_halts_turn_before_execution(monkeypatch) -> None:
+    """A draft plan with a pending clarification must pause, not run execution tools.
+
+    Regression for the case where the planner produced clarifications but the run
+    continued into the lead model and executed work (task/web_search) while the
+    clarification sat unanswered.
+    """
+    middleware = _planner_with_clarification(monkeypatch)
+    state = {"messages": [HumanMessage(content="Plan a 30k EDM festival in Porto")]}
+    update = middleware.before_model(state, _runtime())
+    assert update is not None
+    assert update.get("jump_to") == "end"
+    assert update["plan"]["clarification_pending"] is True
+    assert update["plan"]["status"] == "draft"
+
+
+def test_auto_mode_does_not_halt_on_pending_clarification(monkeypatch) -> None:
+    """Auto mode must never block on user input, even when a clarification is pending."""
+    middleware = _planner_with_clarification(monkeypatch)
+    state = {"messages": [HumanMessage(content="Plan a 30k EDM festival in Porto")]}
+    update = middleware.before_model(state, _runtime(auto_mode=True))
+    assert update is not None
+    assert update.get("jump_to") is None
+    assert update["plan"]["clarification_pending"] is True
+
+
 def test_planner_clarifications_normalize_recommended_first_and_option_count() -> None:
     output = PlannerOutput(
         domain="research",

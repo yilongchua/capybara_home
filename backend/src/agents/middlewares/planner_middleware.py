@@ -1175,12 +1175,22 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                 thread_name_suffix="-planner-auto",
                 clarification_pending=clarification_pending,
             )
-        # Fresh-plan semantics: in plan_foreground mode, always halt the
-        # planning turn after producing a plan so the user can review (even
-        # for draft plans where no handoff fires). Skip the halt when a
-        # clarification is pending because the planner explicitly wants the
-        # next turn to surface the clarification prompt.
-        if not clarification_pending and _plan_behavior(runtime) == "plan_foreground":
+        # Fresh-plan semantics: in plan_foreground mode, halt the planning turn
+        # after producing a plan so the user can review before any execution.
+        #
+        # This deliberately INCLUDES draft plans with a pending clarification.
+        # The plan_created SSE event already carries the clarifications and
+        # `clarification_pending`, so the frontend surfaces them in the inline
+        # Execute Plan popup; halting here lets the user answer there before any
+        # work runs. The previous behaviour fell through to the lead model and
+        # relied on it calling `ask_user_for_clarification` — which it does not
+        # reliably do, so the run executed todos (subagent fan-out, web_search)
+        # while the clarification sat unanswered.
+        #
+        # Auto mode is the exception: it must never block on user input, so when
+        # a clarification is pending under auto_mode we fall through without
+        # halting and let the existing auto-resolution path proceed.
+        if _plan_behavior(runtime) == "plan_foreground" and not (clarification_pending and auto_mode):
             payload["jump_to"] = "end"
         return payload
 
