@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import hashlib
 from typing import Any, NotRequired, TypedDict, override
-from uuid import uuid4
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
@@ -12,6 +11,14 @@ from langchain_core.messages import HumanMessage
 from langgraph.runtime import Runtime
 
 from src.agents.steering_queue_store import claim_next_steering_intent
+
+
+def _deterministic_legacy_id(message: str) -> str:
+    """Derive a stable id from a legacy intent's message so reloads from
+    checkpoint produce the same id. `uuid4()` would mint a fresh id on every
+    read, breaking any downstream dedup that relies on intent_id."""
+    digest = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
+    return f"legacy-{digest}"
 
 
 class SteeringIntent(TypedDict, total=False):
@@ -41,10 +48,12 @@ def _normalize_intents(raw: Any) -> list[SteeringIntent]:
             continue
         intent_id = candidate.get("intent_id")
         if not isinstance(intent_id, str) or not intent_id.strip():
-            intent_id = str(uuid4())
+            intent_id = _deterministic_legacy_id(stripped)
         created_at = candidate.get("created_at")
         if not isinstance(created_at, str) or not created_at.strip():
-            created_at = datetime.now(UTC).isoformat()
+            # Stable timestamp tied to the deterministic id so dedup keyed on
+            # (intent_id, created_at) doesn't drift across reads.
+            created_at = "1970-01-01T00:00:00+00:00"
         normalized.append(
             {
                 "intent_id": intent_id.strip(),
@@ -62,9 +71,9 @@ def _legacy_intent(raw: Any) -> SteeringIntent | None:
     if not message:
         return None
     return {
-        "intent_id": f"legacy-{uuid4()}",
+        "intent_id": _deterministic_legacy_id(message),
         "message": message,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": "1970-01-01T00:00:00+00:00",
     }
 
 

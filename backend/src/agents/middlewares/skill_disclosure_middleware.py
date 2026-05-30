@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import re
+from collections import OrderedDict
 from threading import Lock
 from typing import Any, NotRequired, override
 
@@ -19,11 +20,11 @@ from src.skills.types import Skill
 
 _PATH_TOKEN_RE = re.compile(r"(?:/|\.{1,2}/|[A-Za-z0-9_\-./]+/[A-Za-z0-9_\-./]+)")
 
-# Cache skill-file contents keyed by absolute path; invalidated when mtime shifts.
-# A skill body is re-read twice per selection pass (once for token estimate, once
-# for block content) and once per turn — without caching, disk I/O scales with
-# turn count × enabled-skill count.
-_SKILL_BODY_CACHE: dict[str, tuple[float, str]] = {}
+# Bounded LRU cache for skill-file contents keyed by absolute path; invalidated
+# when mtime shifts. mtime check alone would leak entries for deleted/renamed
+# skills, so we also cap the number of distinct paths held.
+_SKILL_BODY_CACHE_MAX = 128
+_SKILL_BODY_CACHE: OrderedDict[str, tuple[float, str]] = OrderedDict()
 _SKILL_BODY_LOCK = Lock()
 
 
@@ -38,10 +39,14 @@ def _read_skill_body(skill: Skill) -> str:
     with _SKILL_BODY_LOCK:
         cached = _SKILL_BODY_CACHE.get(key)
         if cached is not None and cached[0] == mtime:
+            _SKILL_BODY_CACHE.move_to_end(key)  # LRU bump
             return cached[1]
     body = path.read_text(encoding="utf-8")
     with _SKILL_BODY_LOCK:
         _SKILL_BODY_CACHE[key] = (mtime, body)
+        _SKILL_BODY_CACHE.move_to_end(key)
+        while len(_SKILL_BODY_CACHE) > _SKILL_BODY_CACHE_MAX:
+            _SKILL_BODY_CACHE.popitem(last=False)  # evict oldest
     return body
 
 

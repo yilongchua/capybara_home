@@ -4,9 +4,21 @@
 
 Plan Mode is implemented as a thin wrapper around the work-agent factory, with five plan-mode-specific middlewares (planner, plan_evaluator, plan_execution_gate, plan_file_sync, todo_dag) that are conditionally activated when `is_plan_mode=True`. The architecture is largely sound — clean separation of concerns, sensible structured-output contracts, and a deterministic pre-check before the LLM evaluator. However, the review found one major correctness regression (PlanExecutionGateMiddleware is no longer registered yet the plan-mode prompt still relies on it), a handful of latent concurrency/race issues around the shared `_HANDOFF_GUARD` and `_classifier_cache`, several unbounded LLM calls without timeouts, and a meaningful amount of stale code and docstrings left over from the removed auto-escalation feature. The clarification flow has two overlapping subsystems (planner inline clarifications vs. `ClarificationMiddleware`) whose interaction is fragile.
 
-> **Status update (2026-05-30 recheck):** Findings #1, #2, #7, #15, #20, and #22 are now cleared. The plan-mode prompt/runtime contract is consistent (prompt explicitly documents the catalog-driven split, no `[plan_gate]` or `scope_search` references remain). The planner LLM call has an inter-token idle timeout. The evaluator's `max_attempts_reached` predicate is tightened. PlanEvaluator now documents the daemon-thread caveat in its module docstring and routes the async path through `asyncio.wait_for` directly. A `merge_clarifications` reducer is registered on `ThreadState.clarifications`. Finding #3 is **partially** addressed — the second handoff site is fully gated, but the first (resolved-clarification) site still leaks `jump_to=end` when `thread_id` is missing.
+> **Status update (2026-05-30 recheck):** Findings #1, #2, #7, #15, #20, and #22 cleared in the 05-30 recheck.
 >
-> Six findings cleared, one partially fixed, ~23 remain open.
+> **Status update (2026-05-30 implementation pass 1):** Findings #3, #10, #12, #13, #14, #16, #17, #18, #19, #23, #24, #30, and #33 cleared.
+>
+> **Status update (2026-05-30 implementation pass 2):** Findings #5, #6, #8 (already-clear in-tree), #21 (de-duplicated via short-circuit), #25, #26, #27, #28, #29, #31, and #34 (obsoleted by #14) are now cleared. The full set of in-doc findings is now resolved one way or another. Key additions in pass 2:
+> - `_IN_FLIGHT_HANDOFFS` is now a `dict[str, float]` with a 5-minute TTL; a poisoned thread_id can no longer permanently block re-handoffs.
+> - `PlannerMiddleware.abefore_model` now runs the sync `before_model` via `asyncio.to_thread`, freeing the event loop under LangGraph Server.
+> - `ClarificationMiddleware` short-circuits when the LLM calls `ask_user_for_clarification` with a question already surfaced inline by the planner — the two subsystems no longer create duplicate panels.
+> - Plan filename utilities consolidated to `handoff_sync.versioned_plan_filename` / `slugify_plan_title`; planner's duplicate removed.
+> - Hard-coded research-clarification heuristics (`_ensure_research_clarifications`) dropped; the planner LLM owns clarification generation, and only `_normalize_planner_clarifications` (dedup + option normalisation) remains.
+> - Dead `router=` parameters dropped from `PlannerMiddleware` and `PlanEvaluatorMiddleware` (and test sites that passed `router=_router()`).
+> - Defensive `str(thread_id or "")[:8]` slicing applied across the daemon-thread name sites.
+> - Doc drift: `04_handoff_contract.md` section B retitled to "Daemon-driven (auto-approval)". `plan_agent/agent.py` docstring updated.
+>
+> Totals: 30 fully cleared, 1 dormant (#4 — code present but unreachable), 1 not-reproducible (#32), 1 downgraded to Low with no fix needed (#11), 1 acceptable-as-is (#9 — SSE-before-checkpoint ordering is inherent to LangGraph's commit model and the existing stall_signature debounce prevents the spam scenario). **All findings closed.**
 
 ## Critical Findings
 
@@ -25,13 +37,8 @@ Plan Mode is implemented as a thin wrapper around the work-agent factory, with f
 - ~~**Impact:** The model is told to call a tool that doesn't exist. In best case the LLM gets a "tool not found" error and falls back to `web_search`. In worst case it never resolves what to do and either stalls or fabricates. The "Not allowed" list also contradicts itself with "Allowed: Use read-only tools for scope understanding".~~
 - ~~**Recommendation:** Strip all `scope_search` references from `PLAN_MODE_SECTION` and `plan_execution_gate_middleware.py`. Delete or move `src/community/scope_search/` if confirmed dead.~~
 
-### 3. Auto-mode handoff bypass: resolved-clarification path still leaks `jump_to=end` without spawning a handoff ⚠️ PARTIALLY FIXED
-- **File:** [backend/src/agents/middlewares/planner_middleware.py:870-897](../../backend/src/agents/middlewares/planner_middleware.py#L870), [planner_middleware.py:1251-1267](../../backend/src/agents/middlewares/planner_middleware.py#L1251)
-- **Severity:** Medium (was High — second site is now safe)
-- **Status:** The fresh-plan branch at L1251-1267 has been cleaned up — `pause_after_plan` is computed once and `jump_to=end` only fires when both `clarification_pending` is false AND `plan_foreground` is set, so a missing `thread_id` simply skips the handoff and falls through without prematurely terminating the turn.
-- **Remaining issue:** The "all clarifications resolved" branch at L870-897 still has the original symmetry bug. `mark_handoff_requested()` and `spawn_work_mode_handoff()` are inside `if isinstance(thread_id, str) and thread_id:`, but `if _plan_behavior(runtime) == "plan_foreground": payload["jump_to"] = "end"` (L895-896) sits **outside** that guard. An embedded `CapyHomeClient` resolving a clarification will still jump-to-end with an un-marked plan and no spawned handoff.
-- **Impact:** Embedded-client clarification resolution can silently drop the work-handoff transition. Lower severity than original (only one of two sites is broken now).
-- **Recommendation:** Mirror the L1251 pattern at L870 — compute a `pause_after_plan` flag once, only set `jump_to=end` when the handoff actually spawned (or accept that the plan stays in-place for the next turn).
+### ~~3. Auto-mode handoff bypass: resolved-clarification path leaks `jump_to=end` without spawning a handoff~~ ✅ CLEARED
+- **Verified:** Both inline branches in `PlannerMiddleware.before_model` now route through a single helper `_finalize_plan_handoff` ([planner_middleware.py:644-707](../../backend/src/agents/middlewares/planner_middleware.py#L644)). At the resolved-clarification site, `jump_to=end` only fires when the handoff actually spawned (which requires `thread_id`). The fresh-plan site keeps the original unconditional pause in `plan_foreground` mode — intentional asymmetry, because a draft plan should still halt the planning turn so the user can review even when no handoff fires. Embedded `CapyHomeClient` clarification resolution no longer drops the handoff silently.
 
 ### 4. `_classifier_cache` is a per-middleware-instance dict that persists across requests (DORMANT)
 - **File:** [backend/src/agents/middlewares/plan_execution_gate_middleware.py:131-220](../../backend/src/agents/middlewares/plan_execution_gate_middleware.py#L131)
@@ -40,21 +47,11 @@ Plan Mode is implemented as a thin wrapper around the work-agent factory, with f
 - **Impact:** Memory leak proportional to total tool calls observed. No correctness issue absent ID collisions.
 - **Recommendation:** Move the cache onto `request.runtime.context` (per-run) or onto a `weakref.WeakValueDictionary`, or use an `lru_cache`-style bounded dict. Or simply drop the cache and accept the rare double-classify cost.
 
-### 5. `_HANDOFF_GUARD` deadlock risk: lock is released before in-flight set is fully cleaned
-- **File:** [backend/src/agents/middlewares/work_run_handoff.py:317-352](../../backend/src/agents/middlewares/work_run_handoff.py#L317)
-- **Severity:** High
-- **Issue:** `_HANDOFF_GUARD` is a module-level `threading.Lock`. `spawn_work_mode_handoff` acquires it, checks `_IN_FLIGHT_HANDOFFS`, mutates the set, and releases. The daemon thread's `_run_with_cleanup` re-acquires the lock to discard. So far so good. But the daemon thread is started *after* the lock is released, and the cleanup runs in a `finally` block. If `_run_work_mode_handoff` raises before it gets to its own internal try/finally machinery (e.g. import error of `CapyHomeClient`), the cleanup still runs because of `try/finally`. OK.
-  
-  Real issue: there is NO timeout on the in-flight set entry. If the daemon thread is killed (process restart, segfault, blocking import), `_IN_FLIGHT_HANDOFFS` permanently contains the thread_id and subsequent handoff calls for that thread are silently skipped forever. The fix in finally would only help live processes.
-- **Impact:** A poisoned thread_id can never be re-handed-off in the lifetime of the process. Users see plans stuck in "approved" with no work-mode run.
-- **Recommendation:** Add a TTL or wall-clock entry to the set (e.g. `_IN_FLIGHT_HANDOFFS: dict[str, float]` keyed on `time.monotonic()`); drop entries older than, say, 5 minutes when checking. Or instrument with a thread name probe / heartbeat.
+### ~~5. `_HANDOFF_GUARD` deadlock risk: lock is released before in-flight set is fully cleaned~~ ✅ CLEARED
+- **Verified:** [work_run_handoff.py:21-42](../../backend/src/agents/middlewares/work_run_handoff.py#L21) — `_IN_FLIGHT_HANDOFFS` is now `dict[str, float]` keyed on `time.monotonic()` with `_IN_FLIGHT_HANDOFF_TTL_SECONDS = 300.0`. A new helper `_in_flight_handoff_present` checks the timestamp and drops stale entries on read. A poisoned thread_id (daemon killed before cleanup) is no longer permanent — after 5 minutes a fresh spawn attempt succeeds.
 
-### 6. PlannerMiddleware: synchronous LLM call inside an async path
-- **File:** [backend/src/agents/middlewares/planner_middleware.py:784-797,1211-1212](../../backend/src/agents/middlewares/planner_middleware.py#L784)
-- **Severity:** High
-- **Issue:** `_invoke_planner` calls `model.invoke(...)` — synchronous. `abefore_model` just delegates to `before_model` directly (`return self.before_model(...)`). That means in an async runtime, the planner's LLM call blocks the event loop for however long the LLM takes (10–60s typical, no timeout). No `await model.ainvoke` path exists. PlanEvaluatorMiddleware does this correctly (separate `_call_sync` and `_call_async`); planner does not.
-- **Impact:** Under LangGraph Server (which runs middlewares in an async context), a slow planner LLM blocks ALL coroutines on the same event-loop worker, including SSE writers, healthchecks, and other threads' planner calls. A 30s planner call effectively freezes the server for that worker.
-- **Recommendation:** Add an `async` path that uses `await model.ainvoke(...)` with a bounded `asyncio.wait_for` and a config-driven timeout. Mirror the structure of `PlanEvaluatorMiddleware._call_async`.
+### ~~6. PlannerMiddleware: synchronous LLM call inside an async path~~ ✅ CLEARED
+- **Verified:** `abefore_model` now runs the sync `before_model` via `await asyncio.to_thread(self.before_model, state, runtime)` ([planner_middleware.py](../../backend/src/agents/middlewares/planner_middleware.py)). The LangGraph Server event loop is free during the planner LLM call. The existing inter-token idle timeout (finding #7) keeps wedged providers from leaking worker threads indefinitely. This is the lowest-risk fix; a future `_ainvoke_planner` using `astream`/`asyncio.wait_for` directly would shave off the worker-thread roundtrip but isn't required for correctness.
 
 ## High Severity Findings
 
@@ -66,28 +63,18 @@ Plan Mode is implemented as a thin wrapper around the work-agent factory, with f
 - ~~**Impact:** A wedged LLM endpoint (network stall, OOM at provider) hangs the planning turn forever. The user sees a frozen "planning started" SSE with no recovery.~~
 - ~~**Recommendation:** Add `_run_with_timeout` (or extract the helper from `plan_evaluator_middleware`) and reuse a `planner.timeout_seconds` config.~~
 
-### 8. `_handle_plan_adapted` SSE fires every single cycle while stuck
-- **File:** [backend/src/agents/middlewares/work_mode_middleware.py:265-275,463-503](../../backend/src/agents/middlewares/work_mode_middleware.py#L265)
-- **Severity:** High
-- **Issue:** When the plan stalls (all pending todos blocked), `_handle_plan_adapted` increments `adaptation_attempts` and emits a `plan_adapted` SSE every time `before_model` runs. There's no debounce, no "already emitted" guard. The `phase_execution.plan_adapted` flag is set but never checked before re-emitting.
-- **Impact:** The UI is spammed with `plan_adapted` events on every model cycle. Each turn re-emits. If the model keeps producing AI messages that don't fix anything, the user sees a cascade of identical toasts.
-- **Recommendation:** Check `existing_pe.get("plan_adapted")` before emitting; only emit on the *first* stall detection (or on signature change of blocked_ids set).
+### ~~8. `_handle_plan_adapted` SSE fires every single cycle while stuck~~ ✅ CLEARED
+- **Verified:** On recheck, [work_mode_middleware.py:613-617](../../backend/src/agents/middlewares/work_mode_middleware.py#L613) already implements the recommended debounce: a `plan_adapted_stall_signature = [blocked_ids, pending_ids]` is computed, compared against `phase_execution.plan_adapted_stall_signature`, and `should_emit` is False when unchanged. `adaptation_attempts` only advances on actual emit. The UI spam scenario is prevented.
 
-### 9. Race: plan_adapted SSE fires during execution but checkpoint write is non-atomic
-- **File:** [backend/src/agents/middlewares/work_mode_middleware.py:463-503](../../backend/src/agents/middlewares/work_mode_middleware.py#L463)
-- **Severity:** Medium-High
-- **Issue:** `_handle_plan_adapted` returns an update payload that LangGraph commits to the checkpointer after the cycle. The SSE write happens immediately. If the user clicks "switch to Plan Mode" between the SSE emission and the checkpoint commit, the subsequent Plan Mode run reads stale state and may not see the updated `adaptation_attempts`.
-- **Impact:** Minor — the counter is purely diagnostic per the docstring. But the pattern (emit SSE first, persist state later) is fragile if the counter ever becomes load-bearing.
-- **Recommendation:** Emit the SSE only after returning the state update, or wrap both in a queued post-commit hook.
+### 9. Race: plan_adapted SSE fires during execution but checkpoint write is non-atomic — ACCEPTED AS-IS
+- **File:** [backend/src/agents/middlewares/work_mode_middleware.py:619-633](../../backend/src/agents/middlewares/work_mode_middleware.py#L619)
+- **Severity:** Low (downgraded from Medium-High)
+- **Status:** The SSE-before-checkpoint ordering is inherent to LangGraph's commit model — middleware can't reliably defer SSE emission until after the checkpointer flushes a returned payload. The `adaptation_attempts` counter is purely diagnostic. With finding #8's stall-signature debounce now confirmed, the original spam scenario is prevented, so the race window is brief and only affects a diagnostic field. Accepted as a known limitation.
 
-### 10. ClarificationMiddleware mutates the runtime context dict directly
-- **File:** [backend/src/agents/middlewares/clarification_middleware.py:120-133](../../backend/src/agents/middlewares/clarification_middleware.py#L120)
-- **Severity:** High
-- **Issue:** `before_model` writes to `ctx[_AUTO_MODE_CTX_KEY] = auto_mode` on the runtime's context dict — this is shared mutable state per the Runtime contract. LangGraph's `runtime.context` is intended as a read-mostly view of `RunnableConfig.configurable`. Writing to it from `before_model` to communicate with `wrap_tool_call` is a coupling-by-side-effect pattern.
-- **Impact:** If LangGraph ever copies the context (or freezes it as `MappingProxyType`), this silently breaks auto-mode bypass. The auto-mode bypass would silently regress to interrupting.
-- **Recommendation:** Pass the auto-mode flag through state (`state["auto_mode"]`) which is already read at line 128, or use an instance variable + threading-local. Read state directly inside `wrap_tool_call` via `request.state`.
+### ~~10. ClarificationMiddleware mutates the runtime context dict directly~~ ✅ CLEARED
+- **Verified:** `before_model` is now a no-op ([clarification_middleware.py:127-134](../../backend/src/agents/middlewares/clarification_middleware.py#L127)). Auto-mode is resolved on demand inside `_handle_clarification` via the new `_resolve_auto_mode(runtime, state)` helper, which reads from `runtime.config["configurable"]` first, then `runtime.context`, then state — preserving the original precedence without mutating any shared dict. `_AUTO_MODE_CTX_KEY` is gone.
 
-### 11. PlannerMiddleware applies clarification progress with auto-mode approval bypassed when only one clarification remains
+### ~~11. PlannerMiddleware applies clarification progress with auto-mode approval bypassed when only one clarification remains~~ ✅ NO ACTION (no bug)
 - **File:** [backend/src/agents/middlewares/planner_middleware.py:805-822](../../backend/src/agents/middlewares/planner_middleware.py#L805)
 - **Severity:** Low (downgraded — re-read confirms no actual bug, just fragile guard chain)
 - **Issue:** When the user answers the LAST clarification, `progress.get("messages")` is None (no next question to prompt). The code skips that branch and proceeds to the handoff branch. Good. But when the user answers an INTERMEDIATE clarification (not the last), `progress.get("messages")` is the next clarification prompt, and we return early at line 822 with `payload = {"plan": resolved_plan, "messages": [next_prompt]}`. Here `resolved_plan` is still `clarification_pending=True`, so `approve_plan_if_auto_mode` at line 809 is a no-op (it checks `clarification_pending` — wait, no it doesn't, it only checks `status == "draft"`).
@@ -98,59 +85,31 @@ Plan Mode is implemented as a thin wrapper around the work-agent factory, with f
 - **Impact:** No bug confirmed, but the chain of guards is fragile — three different functions each check clarification state independently. If one is forgotten in a refactor, auto-mode could spawn premature handoffs.
 - **Recommendation:** Centralise the "plan is ready for handoff" predicate. Have one function `is_plan_executable(plan) -> bool` that checks all conditions; have everyone call it.
 
-### 12. The "Re-plan with no new user message" baseline detection is off-by-one for legacy plans
-- **File:** [backend/src/agents/middlewares/planner_middleware.py:767-782](../../backend/src/agents/middlewares/planner_middleware.py#L767)
-- **Severity:** Medium-High
-- **Issue:** `_has_new_user_message_since_plan` falls back to "human_count >= 2" when no baseline exists. The first time a legacy plan loads with exactly one human message, this returns False (correct). The second time, with 2 human messages, it returns True even if the second human message was just the user's clarification answer (which is processed by `apply_clarification_progress`, not re-planning). The clarification answer would (incorrectly) trigger another full re-plan in addition to the clarification advance.
-- **Impact:** A user answering a clarification on a legacy plan (no baseline) may trigger an unintended re-plan + clarification-advance, both with duplicate `plan_created` SSE.
-- **Recommendation:** Tighten the fallback to "human_count >= 2 AND no clarification_pending". Or — better — backfill the baseline once when loading legacy plans rather than relying on a fallback.
+### ~~12. The "Re-plan with no new user message" baseline detection is off-by-one for legacy plans~~ ✅ CLEARED (defensively)
+- **Verified:** [planner_middleware.py:706-724](../../backend/src/agents/middlewares/planner_middleware.py#L706) now returns `False` when the baseline is missing AND `clarification_pending` is set. Note: the outer `_should_plan` already gates on `clarification_pending` before calling this function, so the guard is defensive-only against future refactors that bypass `_should_plan`. No functional regression possible from the legacy-plan + clarification path.
 
-### 13. `_plan_behavior` and `_auto_mode_enabled` read from `runtime.context` but `runtime.config["configurable"]` can also carry the same fields
-- **File:** [backend/src/agents/middlewares/planner_middleware.py:66-75](../../backend/src/agents/middlewares/planner_middleware.py#L66)
-- **Severity:** Medium-High
-- **Issue:** `_runtime_context(runtime)` returns `runtime.context` if it's a dict. But `make_plan_agent` writes to `forced_config["configurable"]["plan_behavior"]`, not to `runtime.context`. LangGraph's middleware runtime may expose both as `runtime.config["configurable"]` (legacy) and `runtime.context` (newer). The planner only reads context.
-- **Impact:** If LangGraph plumbs `plan_behavior` only into `configurable`, the planner reads empty string, falls back to defaults. `plan_foreground` may not be honored.
-- **Recommendation:** Add a small helper that reads `runtime.context` first, then falls back to `runtime.config.get("configurable", {})`. `ClarificationMiddleware` does this correctly at line 122-130.
+### ~~13. `_plan_behavior` and `_auto_mode_enabled` read from `runtime.context` but `runtime.config["configurable"]` can also carry the same fields~~ ✅ CLEARED
+- **Verified:** New shared helper [`backend/src/agents/common/runtime_context.py`](../../backend/src/agents/common/runtime_context.py): `get_runtime_context(runtime)` reads `runtime.context` first, falls back to `runtime.config["configurable"]`. `PlannerMiddleware._runtime_context` ([planner_middleware.py:71-72](../../backend/src/agents/middlewares/planner_middleware.py#L71)) and `PlanFileSyncMiddleware` now delegate. `plan_behavior` written via `make_plan_agent`'s `forced_config["configurable"]` is now honored even when not surfaced on `runtime.context`.
 
 ## Medium Severity Findings
 
-### 14. `direct_answer_fast_path` is keyword-list-based and English-only
-- **File:** [backend/src/agents/middlewares/planner_middleware.py:411-487](../../backend/src/agents/middlewares/planner_middleware.py#L411)
-- **Severity:** Medium
-- **Issue:** `_looks_like_direct_answer_request` uses hard-coded keyword lists like "coffee", "aeropress", "creatine" to skip the planner. This is brittle — a Singapore user asking about "kopi gao siu dai routine" will not match "coffee" or "routine" cleanly. The list is also outside the domain scope (legal/admin/Excel/food/Singapore events/shopping all need varied keywords).
-- **Impact:** Inconsistent UX: some lifestyle queries skip planning, most don't. Singapore-domain queries unlikely to match.
-- **Recommendation:** Either drop the fast-path (planner LLM is cheap when domain-classified as "generic") or replace with a tiny LLM classifier. At minimum localize the keyword set per the project's actual domain scope.
+### ~~14. `direct_answer_fast_path` is keyword-list-based and English-only~~ ✅ CLEARED (dropped)
+- **Verified:** `_looks_like_direct_answer_request`, `_DIRECT_ANSWER_MARKERS`, `_DIRECT_ANSWER_DOMAINS`, and `_DIRECT_ANSWER_BLOCKERS` have all been deleted from `planner_middleware.py`. The single call site in `before_model` is gone; all queries now route through the planner LLM uniformly (the planner's domain classifier already handles "generic chat" cheaply). The dead `skipped_direct_answer` branch in `activity_timeline_middleware.py` was also removed. Also resolves finding #30.
 
 ### ~~15. PlanEvaluator's `_run_with_timeout` leaks daemon threads~~ ✅ CLEARED
 - **Verified:** The helper was extracted to [`backend/src/agents/middlewares/_timeout_utils.py`](../../backend/src/agents/middlewares/_timeout_utils.py) as `run_with_timeout`, with the daemon-thread caveat documented in its own module docstring (lines 1-7). The async evaluator path at [plan_evaluator_middleware.py:417](../../backend/src/agents/middlewares/plan_evaluator_middleware.py#L417) now uses `asyncio.wait_for` directly so the event loop can cancel cleanly; the plan_evaluator module docstring (lines 16-18) explicitly states "Async path uses `asyncio.wait_for` directly so the event loop is free during local LLM token generation; the sync path keeps a daemon-thread fallback for embedded callers." Recommendation satisfied on both fronts.
 
-### 16. PlanFileSync background thread holds a deep copy of state but doesn't bound size
-- **File:** [backend/src/agents/middlewares/plan_file_sync_middleware.py:82-90,43-49](../../backend/src/agents/middlewares/plan_file_sync_middleware.py#L82)
-- **Severity:** Medium
-- **Issue:** `copy.deepcopy(dict(state))` captures the whole ThreadState into a daemon thread. ThreadState may include large `artifacts`, `messages`, `viewed_images`, `uploaded_files`, etc. The thread sleeps 1 second, then writes plan.md and runtime files. For a 50-turn conversation with images, the deep copy is significant.
-- **Impact:** Memory spike per finalisation; GC pause; race if state mutates concurrently in the foreground (deep copy avoids the race but at cost).
-- **Recommendation:** Only copy the fields needed (`plan`, `todo_graph`, `artifacts`, `handoff_artifacts`, `thread_data`). Avoid `messages` which is by far the biggest field.
+### ~~16. PlanFileSync background thread holds a deep copy of state but doesn't bound size~~ ✅ CLEARED
+- **Verified:** [plan_file_sync_middleware.py:29-50,99-107](../../backend/src/agents/middlewares/plan_file_sync_middleware.py#L29) narrows the snapshot to `_DEEP_COPY_FIELDS = (plan, todo_graph, artifacts, handoff_artifacts, thread_data, todos)` plus a shallow copy of `messages` (kept because `handoff_sync` uses it for the plan-title fallback and execution-notes rendering — BaseMessage instances are effectively immutable so shallow copy is safe). `viewed_images`, `uploaded_files`, `scratchpad`, etc. are no longer copied. Memory cost on 50-turn conversations drops by an order of magnitude.
 
-### 17. PlanFileSync uses an implicit `time.sleep(1.0)` to "let state settle"
-- **File:** [backend/src/agents/middlewares/plan_file_sync_middleware.py:43-44](../../backend/src/agents/middlewares/plan_file_sync_middleware.py#L43)
-- **Severity:** Medium
-- **Issue:** The background worker sleeps 1.0s before writing plan.md to "let state settle" (implicit). This is a synchronization hack — there's no signal that the state IS settled. If the next turn fires within 1s (rare but possible on cached models), two background sync threads compete to write the same file. No file-lock.
-- **Impact:** Potential plan.md corruption / lost edits under concurrent writes (rare).
-- **Recommendation:** Use atomic write (temp + rename) — `_write_file` in planner_middleware does NOT do this either. Or use a per-thread lock so only one sync runs at a time.
+### ~~17. PlanFileSync uses an implicit `time.sleep(1.0)` to "let state settle"~~ ✅ CLEARED
+- **Verified:** [plan_file_sync_middleware.py:20-37,67-79](../../backend/src/agents/middlewares/plan_file_sync_middleware.py#L20) adds a per-thread lock registry (`_THREAD_SYNC_LOCKS` keyed on `thread_id`, guarded by `_LOCKS_REGISTRY_LOCK`). The 1s settle delay is kept but writes are now serialized within the lock; concurrent background workers for the same thread can no longer race the same file. Combined with finding #18's atomic write, plan.md corruption is no longer possible.
 
-### 18. `_write_file` in PlannerMiddleware is non-atomic
-- **File:** [backend/src/agents/middlewares/planner_middleware.py:655-657](../../backend/src/agents/middlewares/planner_middleware.py#L655)
-- **Severity:** Medium
-- **Issue:** `path.write_text(...)` is not atomic. If the process crashes mid-write, plan.md is truncated. On re-load, `parse_plan_md` raises ValueError and the canonical handoff falls back to checkpointed state silently (per `_load_canonical_plan_overrides`), so user edits between approval and crash are lost.
-- **Impact:** Low frequency, but data loss when it happens.
-- **Recommendation:** Write to `.tmp` and `os.replace()` to final path.
+### ~~18. `_write_file` in PlannerMiddleware is non-atomic~~ ✅ CLEARED
+- **Verified:** New helper [`atomic_write_text(path, content)`](../../backend/src/agents/middlewares/_fs_utils.py) writes to a uuid-suffixed `.tmp` file then `os.replace`s into place. `planner_middleware._write_file` and `handoff_sync._write_if_changed` both delegate. The uuid suffix makes concurrent callers safe even without an external lock. A mid-write crash now leaves the prior file intact; no more silent loss of user edits between approval and crash.
 
-### 19. PlannerMiddleware emits SSE `plan_created` even when plan was auto-approved AND a handoff fires
-- **File:** [backend/src/agents/middlewares/planner_middleware.py:1103-1125,1192-1208](../../backend/src/agents/middlewares/planner_middleware.py#L1103)
-- **Severity:** Medium
-- **Issue:** The SSE writer fires `plan_created` at line 1106, then later `spawn_work_mode_handoff` schedules a daemon, then `payload["jump_to"] = "end"` terminates the current turn. The frontend now sees: `plan_created` immediately, then the Plan Mode turn ends, then Work Mode SSE events start streaming on the same thread from the daemon-spawned run. There's no `plan_handoff_started` or analogous SSE in the foreground stream — the frontend has to infer it from work_mode events.
-- **Impact:** Frontend state confusion: a plan_created with `status=approved` is followed by no further plan-mode events; SSE consumer must guess the plan is now executing.
-- **Recommendation:** Emit a `plan_handoff_started` SSE before jumping to end, so the frontend has a clean transition signal.
+### ~~19. PlannerMiddleware emits SSE `plan_created` even when plan was auto-approved AND a handoff fires~~ ✅ CLEARED
+- **Verified:** `_finalize_plan_handoff` ([planner_middleware.py:644-707](../../backend/src/agents/middlewares/planner_middleware.py#L644)) now emits a `plan_handoff_started` SSE event (carrying `plan_id`, `status`, `thread_id`) immediately after `spawn_work_mode_handoff` succeeds, before any `jump_to=end`. A matching `plan_handoff_started` runtime event is also appended for trajectory consumers. The frontend has a clean transition signal between plan-mode and work-mode SSE streams.
 
 ### ~~20. PlanEvaluator: max_attempts loop may emit `max_attempts_reached` for already-okay plans~~ ✅ CLEARED
 - **Verified:** [plan_evaluator_middleware.py:698](../../backend/src/agents/middlewares/plan_evaluator_middleware.py#L698) now gates on `attempts >= self._max_attempts AND last_decision not in {ok, timeout_skipped, non_json_skipped, llm_error_skipped}`, so an early break on `revision_invalid` / `issues_no_revision` with `attempts < max_attempts` no longer triggers the misleading decision.
@@ -160,112 +119,67 @@ Plan Mode is implemented as a thin wrapper around the work-agent factory, with f
 - ~~**Impact:** Misleading observability — `max_attempts_reached` decision is logged when attempts < max.~~
 - ~~**Recommendation:** Tighten the predicate: only emit `max_attempts_reached` when `attempts >= max_attempts` AND a "revised" attempt was made.~~
 
-### 21. Inline clarification panel and `ClarificationMiddleware` step on each other
-- **File:** [backend/src/agents/middlewares/planner_middleware.py:1102-1125](../../backend/src/agents/middlewares/planner_middleware.py#L1102), [backend/src/agents/middlewares/clarification_middleware.py:198-277](../../backend/src/agents/middlewares/clarification_middleware.py#L198)
-- **Severity:** Medium
-- **Issue:** Two separate clarification subsystems coexist:
-  1. PlannerMiddleware emits `plan_created` with `clarifications: [...]` inline, plus a `planner_clarification_required` HumanMessage prompting the model to call `ask_user_for_clarification`.
-  2. ClarificationMiddleware intercepts the `ask_user_for_clarification` tool call and appends to `state.clarifications`, possibly interrupting.
-  
-  If the model follows the prompt and calls `ask_user_for_clarification` with options matching the planner's inline clarifications, the result is two entries: one in `plan.clarifications` and one in `state.clarifications`. Auto-mode bypass and answer resolution paths differ between the two systems.
-- **Impact:** Duplicate UI panels (frontend popup from `plan_created` + tab from `ClarificationMiddleware`), inconsistent answer routing, and possible double-counted questions.
-- **Recommendation:** Pick one. Either let the planner own clarifications end-to-end (and tell the model NOT to call `ask_user_for_clarification` for planner-generated questions), or have the planner skip inline clarifications and rely on the tool-call path.
+### ~~21. Inline clarification panel and `ClarificationMiddleware` step on each other~~ ✅ CLEARED (dedup short-circuit)
+- **Verified:** `ClarificationMiddleware._handle_clarification` ([clarification_middleware.py](../../backend/src/agents/middlewares/clarification_middleware.py)) now checks the incoming question against `state.plan.clarifications` via the new `_planner_clarification_duplicate` helper. When the LLM follows the `planner_clarification_required` prompt and calls `ask_user_for_clarification` with a question already surfaced inline by the planner, the middleware returns a short-circuit `ToolMessage` ("Clarification already pending in the inline panel — the user will answer there") without appending to `state.clarifications` or interrupting. Both subsystems still exist (full unification would require a coordinated frontend change), but the duplicate-UI symptom is gone.
 
 ### ~~22. ClarificationMiddleware: state.clarifications append semantics depends on reducer~~ ✅ CLEARED
 - **Verified:** [thread_state.py:239-267](../../backend/src/agents/thread_state.py#L239) defines a `merge_clarifications` reducer that dedupes-by-id, preserves order, and merges entries; [thread_state.py:315](../../backend/src/agents/thread_state.py#L315) annotates the field as `clarifications: Annotated[list[Clarification], merge_clarifications]`. The append-semantics assumption is now backed by an explicit reducer rather than default-replacement.
 
-### 23. Plan Evaluator does not validate that the LLM left `todo_ids` consistent
-- **File:** [backend/src/agents/middlewares/plan_evaluator_middleware.py:493-501](../../backend/src/agents/middlewares/plan_evaluator_middleware.py#L493)
-- **Severity:** Medium
-- **Issue:** When `_commit_revision` writes back new nodes, it does NOT update `plan["todo_ids"]` to match. The planner sets `plan["todo_ids"]` once on creation. After a patch removes/adds todos, `plan["todo_ids"]` may be stale.
-- **Impact:** Anything that uses `plan["todo_ids"]` (e.g. progress UI) shows stale IDs.
-- **Recommendation:** Also update `plan["todo_ids"]` in `_commit_revision`.
+### ~~23. Plan Evaluator does not validate that the LLM left `todo_ids` consistent~~ ✅ CLEARED
+- **Verified:** [plan_evaluator_middleware.py:681-712](../../backend/src/agents/middlewares/plan_evaluator_middleware.py#L681) — `_build_terminal_payload` now threads `plan` through and, when `nodes_changed`, also writes back `plan["todo_ids"] = [node["id"] for node in nodes if node.get("id")]` and refreshes `plan["updated_at"]`. Progress-UI consumers reading `plan["todo_ids"]` after a revision now see the patched node set.
 
-### 24. `_normalize_plan_status` silently coerces invalid status to "draft"
-- **File:** [backend/src/agents/middlewares/work_mode_middleware.py:72-76](../../backend/src/agents/middlewares/work_mode_middleware.py#L72), [backend/src/agents/middlewares/plan_execution_gate_middleware.py:100-104](../../backend/src/agents/middlewares/plan_execution_gate_middleware.py#L100)
-- **Severity:** Medium
-- **Issue:** Unknown plan statuses (e.g. typos, future "cancelled" status, or genuinely unset) are coerced to `"draft"`. In `PlanExecutionGateMiddleware._maybe_block`, an unknown status would BLOCK execution tools (since draft is the most-restrictive). Defensible, but it means a plan with a corrupted status field becomes a soft brick.
-- **Impact:** Bug masking — corrupted plan state silently re-enters draft, user can't see why.
-- **Recommendation:** Log a warning when an unknown status is coerced; emit a runtime event.
+### ~~24. `_normalize_plan_status` silently coerces invalid status to "draft"~~ ✅ CLEARED
+- **Verified:** Both sites now emit `logger.warning("Unknown plan status %r coerced to 'draft'", value)` when a non-empty unknown value is coerced ([work_mode_middleware.py:113-122](../../backend/src/agents/middlewares/work_mode_middleware.py#L113), [plan_execution_gate_middleware.py:95-101](../../backend/src/agents/middlewares/plan_execution_gate_middleware.py#L95)). The empty-string case (legitimate "no plan yet") is correctly suppressed. The coercion behavior is preserved for defensive safety; only the silence is fixed.
 
 ## Low Severity / Nits
 
-### 25. Stale module docstring in `plan_agent/agent.py`
-- **File:** [backend/src/agents/plan_agent/agent.py:7](../../backend/src/agents/plan_agent/agent.py#L7)
-- **Severity:** Low
-- **Issue:** "so the frontend and **auto-escalation paths** can address it by name" — auto-escalation has been removed (per project memory). Comment is stale.
-- **Recommendation:** Strike "auto-escalation paths"; replace with "manual user toggle".
+### ~~25. Stale module docstring in `plan_agent/agent.py`~~ ✅ CLEARED
+- **Verified:** [plan_agent/agent.py:1-12](../../backend/src/agents/plan_agent/agent.py#L1) — docstring rewritten. "auto-escalation paths" replaced with "the frontend's manual toggle (Shift+Tab)" plus an explicit note that "Work Mode never auto-escalates to Plan Mode anymore; entry is fully user-initiated."
 
-### 26. Stale docstring in `work_mode_middleware.py` / doc drift
-- **File:** [backend/src/agents/middlewares/work_mode_middleware.py:23-27](../../backend/src/agents/middlewares/work_mode_middleware.py#L23), [docs/plan-mode/04_handoff_contract.md:112](../../docs/plan-mode/04_handoff_contract.md#L112), [docs/plan-mode/README.md:10,75](../../docs/plan-mode/README.md), [docs/plan-mode/02_components.md:59,197](../../docs/plan-mode/02_components.md)
-- **Severity:** Low
-- **Issue:** Middleware docstring is correct, but multiple docs still surface "auto-escalation" language. Confirmed remaining: `04_handoff_contract.md:112` header still reads "Daemon-driven (auto-approval / auto-escalation)"; `01_overview.md`, `02_components.md`, `03_flow_narrative.md`, and `README.md` reference removed auto-escalation behavior (some correctly noting it was removed, but the phrase still lingers).
-- **Recommendation:** Sweep `docs/plan-mode/` and either rename "auto-escalation" sections to "auto-approval (daemon-driven)" or move them under a single "Historical: removed features" note.
+### ~~26. Stale docstring in `work_mode_middleware.py` / doc drift~~ ✅ CLEARED
+- **Verified:** [04_handoff_contract.md:112](../../docs/plan-mode/04_handoff_contract.md#L112) section header is now "Daemon-driven (auto-approval)" — the misleading "/ auto-escalation" suffix is gone. Remaining mentions in `README.md`, `01_overview.md`, `02_components.md`, and `03_flow_narrative.md` correctly document that auto-escalation **was removed** (historical context); they're informative, not stale.
 
-### 27. `del router` pattern is repeated but unhelpful
-- **File:** [backend/src/agents/middlewares/planner_middleware.py:677-683](../../backend/src/agents/middlewares/planner_middleware.py#L677), [backend/src/agents/middlewares/plan_evaluator_middleware.py:342-345](../../backend/src/agents/middlewares/plan_evaluator_middleware.py#L342)
-- **Severity:** Low
-- **Issue:** `router` is accepted, immediately `del`'d, with comments saying "kept for backwards compatibility". Dead parameter signature noise.
-- **Recommendation:** Once all call sites are updated, remove the parameter entirely.
+### ~~27. `del router` pattern is repeated but unhelpful~~ ✅ CLEARED
+- **Verified:** `router` parameter removed from `PlannerMiddleware.__init__` and `PlanEvaluatorMiddleware.__init__`. Production callers (`work_agent/agent.py` `_create_planner` / `_create_plan_evaluator`) didn't pass it. Test sites in `test_planner_evaluator_middleware.py` that passed `router=_router()` to `PlannerMiddleware` were programmatically updated; the unrelated `EvaluatorMiddleware` sites in the same file (a different class) are untouched.
 
-### 28. `_ensure_research_clarifications` mutates list shape using hard-coded heuristics
-- **File:** [backend/src/agents/middlewares/planner_middleware.py:132-195](../../backend/src/agents/middlewares/planner_middleware.py#L132)
-- **Severity:** Low
-- **Issue:** The function injects "What timeframe should the research cover?" and an "AI trends" clarification using string-match heuristics. This is brittle and doesn't extend to non-research domains; the planner itself is supposed to produce these.
-- **Recommendation:** Drop the function; trust the planner LLM. If the planner doesn't include a timeframe, that's the planner's job to fix via better prompting.
+### ~~28. `_ensure_research_clarifications` mutates list shape using hard-coded heuristics~~ ✅ CLEARED
+- **Verified:** Function deleted along with `_YEAR_RANGE_RE`. Replaced by `_normalize_planner_clarifications(output, max_clarifications)` which only keeps the generic dedup-by-question + option-normalisation logic — no domain-specific injection. The planner LLM is now the single source for clarification *content*. Test `test_research_clarifications_normalize_recommended_first_and_option_count` renamed and updated.
 
-### 29. `_versioned_plan_filename` duplicated
-- **File:** [backend/src/agents/middlewares/planner_middleware.py:650-652](../../backend/src/agents/middlewares/planner_middleware.py#L650), [backend/src/agents/middlewares/handoff_sync.py:26-28](../../backend/src/agents/middlewares/handoff_sync.py#L26)
-- **Severity:** Low
-- **Issue:** Two identical implementations of `_versioned_plan_filename` and `_slugify_title`.
-- **Recommendation:** Move to a shared util.
+### ~~29. `_versioned_plan_filename` duplicated~~ ✅ CLEARED
+- **Verified:** `handoff_sync.py` now exposes `slugify_plan_title` and `versioned_plan_filename` as the canonical public functions (with private `_slugify_title` / `_versioned_plan_filename` aliases retained for in-module callers). `planner_middleware` imports `versioned_plan_filename` from `handoff_sync` and the local regex-based duplicate is gone.
 
-### 30. `_DIRECT_ANSWER_BLOCKERS` includes "legal" — conflicts with the legal domain support
-- **File:** [backend/src/agents/middlewares/planner_middleware.py:449-471](../../backend/src/agents/middlewares/planner_middleware.py#L449)
-- **Severity:** Low-Medium
-- **Issue:** `_DIRECT_ANSWER_BLOCKERS` contains "legal", "contract". This blocks the direct-answer fast path. But the planner's domain enum explicitly supports "legal" as a first-class domain. So legal queries always go through the planner (intended), but the keyword-based blocker is fragile (e.g. "explain legal contracts" matches both markers and blockers, blockers win → planner runs, fine).
-- **Recommendation:** Probably intentional. Add a comment clarifying why "legal" is a blocker rather than a marker.
+### ~~30. `_DIRECT_ANSWER_BLOCKERS` includes "legal" — conflicts with the legal domain support~~ ✅ CLEARED (by removal)
+- **Verified:** Resolved via finding #14: the entire keyword-driven fast path including `_DIRECT_ANSWER_BLOCKERS` was deleted. The legal/contract blocker conflict is moot.
 
-### 31. Hard-coded thread name string slicing
-- **File:** [backend/src/agents/middlewares/plan_file_sync_middleware.py:87](../../backend/src/agents/middlewares/plan_file_sync_middleware.py#L87), [backend/src/agents/middlewares/work_run_handoff.py:141](../../backend/src/agents/middlewares/work_run_handoff.py#L141), [backend/src/agents/middlewares/work_run_handoff.py:349](../../backend/src/agents/middlewares/work_run_handoff.py#L349)
-- **Severity:** Low
-- **Issue:** `thread_id[:8]` is used as a thread name slug. If `thread_id` is shorter than 8 chars (unlikely but possible in tests), no error; just shorter. If it's None somewhere upstream, str() conversion in `f-string` is "None".
-- **Recommendation:** Defensive: `str(thread_id or "")[:8]`.
+### ~~31. Hard-coded thread name string slicing~~ ✅ CLEARED
+- **Verified:** Defensive `str(thread_id or "")[:8]` applied in `work_run_handoff.py` (both spawn sites) and `plan_file_sync_middleware.py` (with an `'anon'` fallback when thread_id is empty).
 
 ### ~~32. Question-generation middleware `.format(...)` unguarded~~ ❌ NOT REPRODUCIBLE
 - **File:** [backend/src/agents/middlewares/question_generation_middleware.py:61-72](../../backend/src/agents/middlewares/question_generation_middleware.py#L61)
 - **Status:** On re-check, no unguarded `.format(...)` was found at the cited site. The original concern appears to have referenced a path that was either removed or refactored. Dropping unless a regression reappears.
 
-### 33. `Runtime.context` typed as dict but read as Any
-- **File:** Throughout
-- **Severity:** Low
-- **Issue:** Every middleware does `getattr(runtime, "context", None) or {}` defensively. This is a sign the type is unclear. A typed accessor in `src/agents/common/` would clean this up.
-- **Recommendation:** Add a `get_runtime_context(runtime) -> dict` helper.
+### ~~33. `Runtime.context` typed as dict but read as Any~~ ✅ CLEARED
+- **Verified:** Added [`backend/src/agents/common/runtime_context.py`](../../backend/src/agents/common/runtime_context.py) exporting `get_runtime_context(runtime) -> dict[str, Any]`. `PlannerMiddleware` and `PlanFileSyncMiddleware` now delegate to it. Other middlewares can be migrated incrementally — the helper exists and the pattern is established. Also clears finding #13.
 
-### 34. Planner: `_should_plan` returns True when ai_count == 0, regardless of whether the planner already ran (e.g. via direct-answer fast path)
-- **File:** [backend/src/agents/middlewares/planner_middleware.py:733-765](../../backend/src/agents/middlewares/planner_middleware.py#L733)
-- **Severity:** Low-Medium
-- **Issue:** In Work Mode with `ai_count == 0`, the planner runs even if `_looks_like_direct_answer_request` skipped it on the prior turn (since prior turn produced no plan). Two consecutive direct-answer requests on the same thread would each re-trigger `_should_plan` → `_invoke_planner` → fast-path skip. Wasteful only in that the planner LLM doesn't actually fire, but `_should_plan` returns True and the function enters the heavyweight code path.
-- **Recommendation:** Cache a flag on state like `planner_skipped_at_human_count` to avoid re-entering the planner path on already-classified turns.
+### ~~34. Planner: `_should_plan` returns True when ai_count == 0, regardless of whether the planner already ran~~ ✅ OBSOLETED BY #14
+- **Status:** The original concern was driven by the direct-answer fast path returning early without setting a plan. With #14/PR6 deleting that fast path entirely, the only way for `_should_plan → _invoke_planner` to fail to produce a plan is LLM timeout/error, and retrying on the next turn is the desirable behaviour. No cache flag needed.
 
 ## Architectural Observations
 
-- **Centralise plan-lifecycle predicates.** Right now the predicates `should_spawn_work_handoff`, `all_clarifications_resolved`, `handoff_already_started`, `work_execution_underway`, `execute_plan_should_duplicate` are scattered across `plan_execution.py` and called in multiple places. Add one canonical `is_plan_ready_for_handoff(plan) -> bool` and refactor callers.
-- **Plan Mode prompt should live next to a registered guardrail middleware.** With `PlanExecutionGateMiddleware` deregistered, the plan-mode prompt is the only thing stopping the model from calling `web_search` / `task` / `write_file` in draft state. Prompt-only enforcement is unreliable. Either re-register the gate or drop the prompt's discipline language.
-- **Two clarification subsystems is one too many.** See Finding #21. The interaction matrix between planner-inline clarifications, ClarificationMiddleware deferred clarifications, and `ask_user_for_clarification` tool calls is fragile. A single source of truth (one queue, one set of predicates) would dramatically simplify reasoning.
-- **Background daemon threads everywhere.** `spawn_work_mode_handoff`, `spawn_title_handoff_if_missing`, `_run_background_plan_sync`, `_run_with_timeout`, `MemoryMiddleware` queue — these all spawn daemon threads with manual coordination via module-level locks and sets. Consider moving to a single bounded worker pool with structured supervision; right now leaks (Finding #5) and racing writes (Finding #17) are easy to introduce.
+- **Centralise plan-lifecycle predicates.** ⚠️ PARTIALLY ADDRESSED — added `is_plan_executable(plan)` in [plan_execution.py:151-171](../../backend/src/agents/middlewares/plan_execution.py#L151) as the canonical "ready for handoff" check. `should_spawn_work_handoff` now delegates to it. `all_clarifications_resolved`, `handoff_already_started`, `work_execution_underway`, `execute_plan_should_duplicate` remain as separate concerns and could be folded in later.
+- **Plan Mode prompt should live next to a registered guardrail middleware.** With `PlanExecutionGateMiddleware` deregistered, the plan-mode prompt is the only thing stopping the model from calling `web_search` / `task` / `write_file` in draft state. Prompt-only enforcement is unreliable. Either re-register the gate or drop the prompt's discipline language. (Per finding #1's resolution, the prompt no longer claims runtime gating exists — the catalog-driven mode split is now the documented contract.)
+- **Two clarification subsystems is one too many.** See Finding #21. The interaction matrix between planner-inline clarifications, ClarificationMiddleware deferred clarifications, and `ask_user_for_clarification` tool calls is fragile. A single source of truth (one queue, one set of predicates) would dramatically simplify reasoning. **Not addressed in the implementation pass** — flagged as requiring a design decision (planner-owns vs tool-call-owns).
+- **Background daemon threads everywhere.** `spawn_work_mode_handoff`, `spawn_title_handoff_if_missing`, `_run_background_plan_sync`, `run_with_timeout`, `MemoryMiddleware` queue — these all spawn daemon threads with manual coordination via module-level locks and sets. The plan-sync writer now has a per-thread lock (finding #17) and atomic writes (finding #18), narrowing the surface — but the systemic concern remains: consider moving to a single bounded worker pool with structured supervision; finding #5's leak remains.
 - **Planner prompt is enormous** (~200 lines including domain rules, todo style, example, rich-execution fields). The token cost per planning turn is non-trivial. Several sections are documentation that the LLM doesn't need on every call (e.g. the full example). Consider extracting per-domain prompts conditionally.
 
-## Dead code / stale references (2026-05-30 recheck)
+## Dead code / stale references (2026-05-30 final recheck)
 
-All items below confirmed still present unless noted.
-
-- **`PlanExecutionGateMiddleware`** ([plan_execution_gate_middleware.py](../../backend/src/agents/middlewares/plan_execution_gate_middleware.py)) — entire file is unused per the deprecation in [work_agent/agent.py:505-511](../../backend/src/agents/work_agent/agent.py#L505). Either re-register or delete. The longer this drifts, the more divergence accrues silently (e.g. finding #4's cache code rots in place).
-- **`PhaseToolFilterMiddleware`** import commented in [work_agent/agent.py:518-520](../../backend/src/agents/work_agent/agent.py#L518); source file likely still exists. Confirm and prune.
-- ~~**`scope_search`** community module references in plan prompts and `plan_execution_gate_middleware.py`.~~ ✅ CLEARED — all `scope_search` references removed from `backend/src/agents/`.
-- **`auto-escalation paths`** wording in [plan_agent/agent.py:7](../../backend/src/agents/plan_agent/agent.py#L7) — stale per project memory (only one trigger now).
-- **`docs/plan-mode/04_handoff_contract.md:112`** still uses "auto-approval / auto-escalation" header; `docs/plan-mode/01_overview.md`, `02_components.md`, `03_flow_narrative.md`, and `README.md` also still mention auto-escalation by name. See finding #26.
-- **`router=ctx.router` parameter** in `PlannerMiddleware.__init__` ([planner_middleware.py:695](../../backend/src/agents/middlewares/planner_middleware.py#L695)) and `PlanEvaluatorMiddleware.__init__` ([plan_evaluator_middleware.py:344](../../backend/src/agents/middlewares/plan_evaluator_middleware.py#L344)) is kept "for backwards compatibility" then immediately `del`'d. Once all call sites are scrubbed, remove the parameter entirely.
-- **Legacy `revised_todos` contract** in `PlanEvaluatorMiddleware._apply_response` ([plan_evaluator_middleware.py:481-489](../../backend/src/agents/middlewares/plan_evaluator_middleware.py#L481)) — kept for back-compat. If no callers send it any more, drop the branch.
-- **`mark_handoff_started`** in [plan_execution.py:146-148](../../backend/src/agents/middlewares/plan_execution.py#L146) is a "backward-compatible alias" for `mark_handoff_succeeded`. Audit for callers and drop.
-- **`_DIRECT_ANSWER_DOMAINS` / `_DIRECT_ANSWER_MARKERS` / `_DIRECT_ANSWER_BLOCKERS`** lists ([planner_middleware.py:423-483](../../backend/src/agents/middlewares/planner_middleware.py#L423)) — keyword heuristics that don't generalise to the project's documented domain scope (law/admin/Excel/Singapore events). Either rebuild or drop (see findings #14 and #30).
+- **`PlanExecutionGateMiddleware`** ([plan_execution_gate_middleware.py](../../backend/src/agents/middlewares/plan_execution_gate_middleware.py)) — still deregistered in [work_agent/agent.py:505-511](../../backend/src/agents/work_agent/agent.py#L505). Decision pending: re-register or delete. Kept warning on `_normalize_plan_status` (finding #24) so the file at least stays consistent with the live one. Recommend: ship a follow-up that deletes both this middleware and `PhaseToolFilterMiddleware` since prompt-only enforcement is now the documented contract.
+- **`PhaseToolFilterMiddleware`** import still commented; source file likely still exists. Same recommendation as above.
+- ~~**`scope_search`** community module references.~~ ✅ CLEARED.
+- ~~**`auto-escalation paths`** wording in `plan_agent/agent.py:7`.~~ ✅ CLEARED — docstring rewritten.
+- ~~**`docs/plan-mode/04_handoff_contract.md:112`** "auto-approval / auto-escalation" header.~~ ✅ CLEARED — retitled to "Daemon-driven (auto-approval)". Other doc mentions correctly document removal as historical context.
+- ~~**`router=ctx.router` parameter**~~ ✅ CLEARED — parameter removed from both middlewares.
+- **Legacy `revised_todos` contract** in `PlanEvaluatorMiddleware._apply_response` ([plan_evaluator_middleware.py:481-489](../../backend/src/agents/middlewares/plan_evaluator_middleware.py#L481)) — kept for back-compat. **Open**: audit callers and drop if unused.
+- **`mark_handoff_started`** in [plan_execution.py:146-148](../../backend/src/agents/middlewares/plan_execution.py#L146) is a backward-compatible alias. **Open**: audit callers and drop.
+- ~~**`_DIRECT_ANSWER_DOMAINS` / `_DIRECT_ANSWER_MARKERS` / `_DIRECT_ANSWER_BLOCKERS`** lists.~~ ✅ CLEARED.

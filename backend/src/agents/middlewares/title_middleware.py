@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from typing import Any, NotRequired, override
 
 from langchain.agents import AgentState
@@ -9,9 +10,14 @@ from langchain.agents.middleware import AgentMiddleware
 from langgraph.config import get_config, get_stream_writer
 from langgraph.runtime import Runtime
 
+from src.agents.middlewares.run_scoped import get_run_store
 from src.agents.middlewares.runtime_events import append_runtime_event
 from src.config.title_config import get_title_config
 from src.models import create_chat_model
+
+_UPLOAD_BLOCK_RE = re.compile(r"<uploaded_files>[\s\S]*?</uploaded_files>\n*", re.IGNORECASE)
+_TITLE_BG_TASK_KEY = "_title_middleware_bg_task"
+_TITLE_RESULT_KEY = "_title_middleware_result"
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +76,10 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
     def __init__(self, model_name: str | None = None):
         super().__init__()
         self._model_name = model_name
-        # Per-run state — keyed by run start time to prevent cross-run leakage.
-        self._generated_title: str | None = None
-        self._title_bg_task: asyncio.Task[None] | None = None
+        # Per-run state is stored via `run_scoped.get_run_store(runtime)` keyed
+        # by runtime identity — see `_TITLE_BG_TASK_KEY` / `_TITLE_RESULT_KEY`.
+        # No instance attributes: the middleware singleton is shared across
+        # concurrent runs and instance state would race.
 
     def _should_generate_title(self, state: TitleMiddlewareState) -> bool:
         config = get_title_config()
@@ -100,7 +107,9 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
 
         user_msg_content = next((m.content for m in messages if _is_real_human(m)), "")
         assistant_msg_content = next((m.content for m in messages if m.type == "ai"), "")
-        user_msg = _extract_text(user_msg_content)
+        # Strip the <uploaded_files> bookkeeping block (injected by UploadsMiddleware)
+        # so the generated/fallback title doesn't leak file-list metadata.
+        user_msg = _UPLOAD_BLOCK_RE.sub("", _extract_text(user_msg_content)).strip()
         assistant_msg = _extract_text(assistant_msg_content)
         prompt = config.prompt_template.format(
             max_words=config.max_words,
@@ -167,10 +176,6 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         if not self._should_generate_title(state):
             return None
 
-        # Reset per-run state so a previous run's title doesn't leak into this one.
-        self._generated_title = None
-        self._title_bg_task = None
-
         prompt, user_msg, _, max_chars = self._prepare_generation(state)
         fallback = self._fallback_title(user_msg, max_chars)
 
@@ -183,6 +188,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
             thread_id = None
 
         model_name = self._model_name
+        store = get_run_store(runtime)
 
         append_runtime_event(
             runtime,
@@ -201,8 +207,8 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
             if not title:
                 return
 
-            # Store for aafter_agent to persist via normal state return.
-            self._generated_title = title
+            # Store in run-scoped storage for aafter_agent to pick up.
+            store[_TITLE_RESULT_KEY] = title
 
             # Push live update to the open SSE stream (best-effort).
             try:
@@ -210,7 +216,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
             except Exception:
                 pass
 
-        self._title_bg_task = asyncio.create_task(_bg())
+        store[_TITLE_BG_TASK_KEY] = asyncio.create_task(_bg())
 
         # Return the fallback immediately so LangGraph checkpoints without delay.
         return {"title": fallback}
@@ -218,8 +224,9 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
     @override
     def after_agent(self, state: TitleMiddlewareState, runtime: Runtime) -> dict | None:
         """Sync fallback: return whatever title the background task stored (if done)."""
-        title = self._generated_title
-        if title:
+        store = get_run_store(runtime)
+        title = store.get(_TITLE_RESULT_KEY)
+        if isinstance(title, str) and title:
             return {"title": title}
         return None
 
@@ -229,19 +236,20 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         runs capture the real title before checkpointing.
         """
         config = get_title_config()
-        if self._title_bg_task and not self._title_bg_task.done():
+        store = get_run_store(runtime)
+        bg_task = store.get(_TITLE_BG_TASK_KEY)
+        if isinstance(bg_task, asyncio.Task) and not bg_task.done():
             if config.await_generated_title_timeout_seconds > 0:
                 try:
                     await asyncio.wait_for(
-                        asyncio.shield(self._title_bg_task),
+                        asyncio.shield(bg_task),
                         timeout=config.await_generated_title_timeout_seconds,
                     )
                 except (TimeoutError, Exception):
                     pass
 
-        title = self._generated_title
-        self._generated_title = None
-        self._title_bg_task = None
-        if title:
+        title = store.pop(_TITLE_RESULT_KEY, None)
+        store.pop(_TITLE_BG_TASK_KEY, None)
+        if isinstance(title, str) and title:
             return {"title": title}
         return None

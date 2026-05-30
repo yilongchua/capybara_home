@@ -34,17 +34,23 @@ from src.models import create_chat_model, resolve_model_name
 
 logger = logging.getLogger(__name__)
 
-_SUMMARY_PROMPT_TEMPLATE = """\
+# Placeholders are unambiguous sentinels (not `{...}`) so a search result body
+# or user query that happens to contain the literal text `{query}` or
+# `{raw_content}` can't influence subsequent substitutions and inject content
+# into the wrong prompt section.
+_QUERY_SENTINEL = "<<__CAPYHOME_WS_QUERY_SLOT__>>"
+_CONTENT_SENTINEL = "<<__CAPYHOME_WS_CONTENT_SLOT__>>"
+_SUMMARY_PROMPT_TEMPLATE = f"""\
 You are a research assistant. The following text is the raw result of a web search query.
 Summarize it into a concise, factual paragraph (max 250 words) that captures all key findings.
 Preserve: specific numbers, dates, names, URLs that are clearly important.
 Do NOT add commentary, opinions, or phrases like "The search results show...".
 Start directly with the key information.
 
-Search query: {query}
+Search query: {_QUERY_SENTINEL}
 
 Raw results:
-{raw_content}
+{_CONTENT_SENTINEL}
 """
 
 _SUMMARY_SUFFIX = "\n\n[Summarized by web_search_summary_middleware — original: {orig_chars} chars]"
@@ -127,7 +133,7 @@ class WebSearchSummaryMiddleware(AgentMiddleware[AgentState]):
         return lower in self._WEB_SEARCH_TOOL_NAMES or "web_search" in lower or "searx" in lower
 
     def _build_prompt_and_model(self, query: str, content: str) -> tuple[str, str]:
-        prompt = _SUMMARY_PROMPT_TEMPLATE.replace("{query}", query).replace("{raw_content}", content)
+        prompt = _SUMMARY_PROMPT_TEMPLATE.replace(_QUERY_SENTINEL, query).replace(_CONTENT_SENTINEL, content)
         # Single-model invariant: use the chat-selected model directly.
         model_name = resolve_model_name(self._requested_model)
         return prompt, model_name

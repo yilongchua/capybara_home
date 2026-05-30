@@ -224,6 +224,140 @@ def test_write_file_artifact_middleware_tracks_repair_passes_per_path(monkeypatc
     assert result.update["quality_gate"]["repair_passes_by_path"]["/mnt/user-data/workspace/report-b.md"] == 1
 
 
+def test_write_file_full_replace_blocks_before_handler_runs(monkeypatch):
+    """Pre-write gate must short-circuit the handler for full-replace write_file."""
+    monkeypatch.setattr(
+        "src.agents.middlewares.write_file_artifact_middleware.get_quality_gate_config",
+        lambda: QualityGateConfig(enabled=True, block_on_failure=True, max_repair_passes=3),
+    )
+    monkeypatch.setattr(
+        "src.agents.middlewares.write_file_artifact_middleware.check_report_quality",
+        lambda _path, _content: QualityCheckResult(ok=False, reasons=["duplicate rows"]),
+    )
+    middleware = WriteFileArtifactMiddleware()
+    request = _tool_call_request(
+        "/mnt/user-data/workspace/report.md",
+        args={"content": "bad report"},
+    )
+    called = False
+
+    async def handler(_request):
+        nonlocal called
+        called = True
+        return ToolMessage(content="OK", tool_call_id="tc-1", name="write_file")
+
+    result = asyncio.run(middleware.awrap_tool_call(request, handler))
+
+    assert called is False, "handler must not run when pre-write gate blocks"
+    assert isinstance(result, Command)
+    assert result.update["quality_gate"]["status"] == "failed"
+    # Pre-write message wording: tells agent to retry write_file with a fixed report.
+    msg = result.update["messages"][0]
+    assert "QUALITY_GATE_FAILED" in msg.content
+    assert "retry write_file" in msg.content
+    assert "POSTWRITE" not in msg.content
+
+
+def test_str_replace_postwrite_failure_uses_distinct_message(tmp_path, monkeypatch):
+    """str_replace lands on disk before the gate can see final content; gate must
+    warn with corrective-edit wording, not the pre-write 'retry write_file' wording."""
+    monkeypatch.setattr(
+        "src.agents.middlewares.write_file_artifact_middleware.get_quality_gate_config",
+        lambda: QualityGateConfig(enabled=True, block_on_failure=True, max_repair_passes=3),
+    )
+    monkeypatch.setattr(
+        "src.agents.middlewares.write_file_artifact_middleware.check_report_quality",
+        lambda _path, _content: QualityCheckResult(ok=False, reasons=["heading numbering"]),
+    )
+    report = tmp_path / "report.md"
+    report.write_text("post-edit content with bad heading", encoding="utf-8")
+    middleware = WriteFileArtifactMiddleware()
+    request = _tool_call_request(
+        "/mnt/user-data/workspace/report.md",
+        tool_name="str_replace",
+        args={"old_str": "old", "new_str": "new"},
+        state={"thread_data": {"workspace_path": str(tmp_path)}},
+    )
+    called = False
+
+    async def handler(_request):
+        nonlocal called
+        called = True
+        return ToolMessage(content="OK", tool_call_id="tc-1", name="str_replace")
+
+    result = asyncio.run(middleware.awrap_tool_call(request, handler))
+
+    assert called is True, "str_replace must run; gate is post-write only"
+    assert isinstance(result, Command)
+    assert result.update["quality_gate"]["status"] == "failed"
+    # Last message is the postwrite warning; preceding messages include the original ToolMessage.
+    postwrite_msgs = [m for m in result.update["messages"] if "QUALITY_GATE_POSTWRITE_FAILED" in getattr(m, "content", "")]
+    assert len(postwrite_msgs) == 1
+    text = postwrite_msgs[0].content
+    assert "corrective edit" in text
+    assert "already been applied" in text
+    assert "retry write_file" not in text
+
+
+def test_write_file_append_uses_postwrite_message(tmp_path, monkeypatch):
+    """write_file with append=True is post-write too — same wording as str_replace."""
+    monkeypatch.setattr(
+        "src.agents.middlewares.write_file_artifact_middleware.get_quality_gate_config",
+        lambda: QualityGateConfig(enabled=True, block_on_failure=True, max_repair_passes=3),
+    )
+    monkeypatch.setattr(
+        "src.agents.middlewares.write_file_artifact_middleware.check_report_quality",
+        lambda _path, _content: QualityCheckResult(ok=False, reasons=["duplicate rows"]),
+    )
+    report = tmp_path / "report.md"
+    report.write_text("existing\nappended bad chunk", encoding="utf-8")
+    middleware = WriteFileArtifactMiddleware()
+    request = _tool_call_request(
+        "/mnt/user-data/workspace/report.md",
+        args={"content": "appended bad chunk", "append": True},
+        state={"thread_data": {"workspace_path": str(tmp_path)}},
+    )
+
+    async def handler(_request):
+        return ToolMessage(content="OK", tool_call_id="tc-1", name="write_file")
+
+    result = asyncio.run(middleware.awrap_tool_call(request, handler))
+
+    assert isinstance(result, Command)
+    postwrite_msgs = [m for m in result.update["messages"] if "QUALITY_GATE_POSTWRITE_FAILED" in getattr(m, "content", "")]
+    assert len(postwrite_msgs) == 1
+
+
+def test_full_replace_write_file_does_not_double_check(monkeypatch):
+    """A passing pre-check must not trigger an additional post-check."""
+    monkeypatch.setattr(
+        "src.agents.middlewares.write_file_artifact_middleware.get_quality_gate_config",
+        lambda: QualityGateConfig(enabled=True, block_on_failure=True, max_repair_passes=3),
+    )
+    call_count = {"checks": 0}
+
+    def fake_check(_path, _content):
+        call_count["checks"] += 1
+        return QualityCheckResult(ok=True, reasons=[])
+
+    monkeypatch.setattr(
+        "src.agents.middlewares.write_file_artifact_middleware.check_report_quality",
+        fake_check,
+    )
+    middleware = WriteFileArtifactMiddleware()
+    request = _tool_call_request(
+        "/mnt/user-data/workspace/report.md",
+        args={"content": "good report"},
+    )
+
+    async def handler(_request):
+        return ToolMessage(content="OK", tool_call_id="tc-1", name="write_file")
+
+    asyncio.run(middleware.awrap_tool_call(request, handler))
+
+    assert call_count["checks"] == 1, "full-replace write_file should run only the pre-check"
+
+
 def test_model_factory_strips_endpoints_kwarg_before_model_ctor(monkeypatch):
     class _FakeModelConfig:
         use = "langchain_openai:ChatOpenAI"

@@ -1,13 +1,18 @@
 """Middleware for injecting image details into conversation before LLM call."""
 
+import logging
 from typing import NotRequired, override
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langgraph.runtime import Runtime
 
 from src.agents.thread_state import ViewedImageData
+
+logger = logging.getLogger(__name__)
+
+_DISCLOSURE_MESSAGE_NAME = "viewed_images_disclosure"
 
 
 class ViewImageMiddlewareState(AgentState):
@@ -151,15 +156,14 @@ class ViewImageMiddleware(AgentMiddleware[ViewImageMiddlewareState]):
         if not self._all_tools_completed(messages, last_assistant_msg):
             return False
 
-        # Check if we've already added an image details message (now injected as
-        # SystemMessage to avoid polluting the human/AI conversation history).
+        # Check if we've already injected for this turn. Match by message name
+        # (set at injection time) rather than substring-scanning content — the
+        # injected SystemMessage carries multi-MB base64 image data, so naive
+        # content scans become prohibitively expensive in long sessions.
         assistant_idx = messages.index(last_assistant_msg)
         for msg in messages[assistant_idx + 1 :]:
-            if isinstance(msg, (HumanMessage, SystemMessage)):
-                content_str = str(msg.content)
-                if "Here are the images you've viewed" in content_str or "Here are the details of the images you've viewed" in content_str:
-                    # Already added, don't add again
-                    return False
+            if getattr(msg, "name", None) == _DISCLOSURE_MESSAGE_NAME:
+                return False
 
         return True
 
@@ -181,9 +185,10 @@ class ViewImageMiddleware(AgentMiddleware[ViewImageMiddlewareState]):
         # Inject as SystemMessage so the image context is clearly system-originated.
         # Using HumanMessage would make it appear as a user turn in the conversation
         # history, corrupting memory filtering and conversation summarisation.
-        system_msg = SystemMessage(content=image_content)
+        # `name` is the dedup marker — see `_should_inject_image_message`.
+        system_msg = SystemMessage(content=image_content, name=_DISCLOSURE_MESSAGE_NAME)
 
-        print("[ViewImageMiddleware] Injecting image details message with images before LLM call")
+        logger.debug("Injecting image details message with images before LLM call")
 
         # Return state update with the new message
         return {"messages": [system_msg]}

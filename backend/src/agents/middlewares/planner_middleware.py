@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-import re
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -22,7 +22,9 @@ from langgraph.config import get_stream_writer
 from langgraph.runtime import Runtime
 
 from src.agents.common.handoff import serialize_plan_md
-from src.agents.middlewares.handoff_sync import render_plan_md
+from src.agents.common.runtime_context import get_runtime_context
+from src.agents.middlewares._fs_utils import atomic_write_text
+from src.agents.middlewares.handoff_sync import render_plan_md, versioned_plan_filename
 from src.agents.middlewares.message_selection import extract_text, original_user_prompt
 from src.agents.middlewares.plan_execution import (
     apply_clarification_progress,
@@ -69,10 +71,7 @@ def _emit_planning_failed(runtime: Runtime, *, reason: str) -> None:
 
 
 def _runtime_context(runtime: Runtime) -> dict[str, Any]:
-    context = getattr(runtime, "context", None)
-    if isinstance(context, dict):
-        return context
-    return {}
+    return get_runtime_context(runtime)
 
 
 def _plan_behavior(runtime: Runtime) -> str:
@@ -119,9 +118,6 @@ class PlannerOutput:
     parse_ok: bool = True
 
 
-_YEAR_RANGE_RE = re.compile(r"\b(19|20)\d{2}\b")
-
-
 def _ordered_clarification_options(options: list[ClarificationOption]) -> list[ClarificationOption]:
     recommended = [option for option in options if option.recommended]
     non_recommended = [option for option in options if not option.recommended]
@@ -141,58 +137,16 @@ def _normalize_clarification_options(options: list[ClarificationOption]) -> list
     return normalized[:4]
 
 
-def _ensure_research_clarifications(user_prompt: str, output: PlannerOutput, max_clarifications: int = 5) -> list[PlannerClarification]:
-    clarifications: list[PlannerClarification] = list(output.clarifications)
-    text = user_prompt.lower()
-    if output.domain != "research":
-        return clarifications
+def _normalize_planner_clarifications(output: PlannerOutput, max_clarifications: int = 5) -> list[PlannerClarification]:
+    """Dedupe by question text and normalize options on each clarification.
 
-    has_timeframe = bool(_YEAR_RANGE_RE.search(user_prompt)) or any(token in text for token in ("today", "latest", "recent", "last ", "this year", "past ", "since "))
-    has_scope = any(
-        token in text
-        for token in (
-            "in healthcare",
-            "in finance",
-            "in education",
-            "for enterprise",
-            "for startups",
-            "consumer",
-            "global",
-            "us",
-            "asia",
-            "europe",
-            "industry",
-            "sector",
-        )
-    )
-
-    if not has_timeframe:
-        clarifications.append(
-            PlannerClarification(
-                question="What timeframe should the research cover?",
-                options=[
-                    ClarificationOption(label="Last 12 months", recommended=True, description="Balances recency with enough signal."),
-                    ClarificationOption(label="Last 3 years", recommended=False, description="Captures medium-term shifts and trend continuity."),
-                    ClarificationOption(label="Since 2020", recommended=False, description="Gives broad post-pandemic context."),
-                ],
-            )
-        )
-
-    if ("ai trend" in text or "ai trends" in text) and not has_scope:
-        clarifications.append(
-            PlannerClarification(
-                question="Which AI trend scope should be prioritized?",
-                options=[
-                    ClarificationOption(label="Cross-industry global trends", recommended=True, description="Best default for a broad strategy brief."),
-                    ClarificationOption(label="Industry-specific trends", recommended=False, description="Focuses depth on one sector."),
-                    ClarificationOption(label="Regional policy and market trends", recommended=False, description="Emphasizes geography and regulation."),
-                ],
-            )
-        )
-
+    Hard-coded domain heuristics (timeframe / AI-trends injection) were removed —
+    the planner LLM is responsible for surfacing missing-detail questions itself,
+    and the prior heuristics didn't generalise beyond the research domain.
+    """
     deduped: list[PlannerClarification] = []
     seen_questions: set[str] = set()
-    for clarification in clarifications:
+    for clarification in output.clarifications:
         question = clarification.question.strip()
         if not question:
             continue
@@ -417,89 +371,6 @@ EXAMPLE rich todo for "Find 10 well-reviewed restaurants matching my criteria":
 
 
 # ---------------------------------------------------------------------------
-# Direct-answer fast path
-# ---------------------------------------------------------------------------
-
-_DIRECT_ANSWER_MARKERS = (
-    "checklist",
-    "routine",
-    "learning plan",
-    "beginner",
-    "compare",
-    "pros",
-    "cons",
-    "explain",
-    "guide",
-    "summary",
-    "summarize",
-    "summarise",
-)
-
-_DIRECT_ANSWER_DOMAINS = (
-    "coffee",
-    "espresso",
-    "aeropress",
-    "moka",
-    "pour-over",
-    "standing desk",
-    "emergency kit",
-    "sleep",
-    "phone scrolling",
-    "weight loss",
-    "whole foods",
-    "intermittent fasting",
-    "calorie counting",
-    "learning plan",
-    "machine learning",
-    "creatine",
-    "investing",
-    "index funds",
-    "bonds",
-    "beginner",
-)
-
-_DIRECT_ANSWER_BLOCKERS = (
-    "codebase",
-    "repository",
-    "repo",
-    "implement",
-    "refactor",
-    "migrate",
-    "architecture",
-    "audit",
-    "security",
-    "legal",
-    "contract",
-    "multiple documents",
-    "all files",
-    "write files",
-    "save as",
-    "deep dive",
-    "serious research",
-    "current state",
-    "right now",
-    "latest",
-    "real-time",
-)
-
-def _looks_like_direct_answer_request(user_prompt: str) -> bool:
-    text = " ".join(user_prompt.lower().split())
-    if len(text) > 600:
-        return False
-    if any(blocker in text for blocker in _DIRECT_ANSWER_BLOCKERS):
-        return False
-    has_direct_marker = any(marker in text for marker in _DIRECT_ANSWER_MARKERS)
-    has_direct_domain = any(domain in text for domain in _DIRECT_ANSWER_DOMAINS)
-    if "compare" in text and has_direct_domain:
-        return True
-    if ("checklist" in text or "routine" in text or "learning plan" in text) and has_direct_marker:
-        return True
-    if has_direct_marker and has_direct_domain:
-        return True
-    return False
-
-
-# ---------------------------------------------------------------------------
 # Plan parsing
 # ---------------------------------------------------------------------------
 
@@ -650,23 +521,13 @@ def _parse_plan_response(raw: str, max_steps: int) -> PlannerOutput:
 
 
 # ---------------------------------------------------------------------------
-# Plan file naming
+# Plan file naming — `versioned_plan_filename` lives in `handoff_sync` (single
+# source of truth, finding #29).
 # ---------------------------------------------------------------------------
 
 
-def _slugify_title(title: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
-    return slug[:48] or "execution-plan"
-
-
-def _versioned_plan_filename(title: str, created_at: datetime) -> str:
-    stamp = created_at.strftime("%Y%m%d-%H%M%S")
-    return f"plan-{stamp}-{_slugify_title(title)}.md"
-
-
 def _write_file(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    atomic_write_text(path, content)
 
 
 class PlannerMiddleware(AgentMiddleware[PlannerState]):
@@ -686,13 +547,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         research_fanout: bool = False,
         research_fanout_min_todos: int = 2,
         timeout_seconds: float = 120.0,
-        router: Any = None,  # noqa: ARG002
     ):
-        # ``router`` is accepted for backwards compatibility with the
-        # ``router=ctx.router`` call sites that pre-date the single-model
-        # invariant. The middleware now uses ``resolve_model_name`` directly
-        # and the router argument is ignored.
-        del router
         super().__init__()
         self._requested_model = requested_model
         self._max_plan_steps = max_plan_steps
@@ -703,6 +558,74 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         self._research_fanout = bool(research_fanout)
         self._research_fanout_min_todos = max(2, int(research_fanout_min_todos))
         self._timeout_seconds = float(timeout_seconds)
+
+    def _finalize_plan_handoff(
+        self,
+        *,
+        payload: dict[str, Any],
+        plan_dict: dict[str, Any],
+        runtime: Runtime,
+        auto_mode: bool,
+        user_prompt: str | None,
+        thread_name_suffix: str,
+        clarification_pending: bool,
+    ) -> dict[str, Any]:
+        """Spawn a work-mode handoff and (conditionally) end the planning turn.
+
+        Centralises the gating that used to live duplicated in `before_model`
+        at two sites. Rules:
+
+        * `jump_to=end` only fires when ALL of:
+          - we have a real `thread_id` (otherwise nothing will spawn),
+          - the plan has no pending clarifications,
+          - `plan_behavior == "plan_foreground"`.
+
+          This prevents the embedded-client path (no thread_id) from ending
+          the planning turn with an un-handed-off plan.
+        * On a successful spawn we emit a `plan_handoff_started` SSE so the
+          frontend has a clean transition signal between plan-mode and
+          work-mode event streams.
+        """
+        plan_behavior = _plan_behavior(runtime)
+        runtime_context = _runtime_context(runtime)
+        thread_id = runtime_context.get("thread_id")
+
+        handoff_spawned = False
+        if isinstance(thread_id, str) and thread_id:
+            requested_model_name = runtime_context.get("model_name")
+            plan_dict = mark_handoff_requested(plan_dict)
+            payload["plan"] = plan_dict
+            spawn_work_mode_handoff(
+                thread_id=thread_id,
+                requested_model_name=requested_model_name if isinstance(requested_model_name, str) else None,
+                auto_mode=auto_mode,
+                original_user_request=user_prompt or None,
+                thread_name_suffix=thread_name_suffix,
+            )
+            handoff_spawned = True
+            try:
+                writer = get_stream_writer()
+                writer({
+                    "type": "plan_handoff_started",
+                    "source": "planner_middleware",
+                    "plan_id": plan_dict.get("plan_id"),
+                    "status": plan_dict.get("status"),
+                    "thread_id": thread_id,
+                })
+            except Exception:
+                logger.exception("Failed to emit plan_handoff_started SSE")
+            append_runtime_event(
+                runtime,
+                {
+                    "source": "planner_middleware",
+                    "event": "plan_handoff_started",
+                    "plan_id": plan_dict.get("plan_id"),
+                },
+            )
+
+        if handoff_spawned and not clarification_pending and plan_behavior == "plan_foreground":
+            payload["jump_to"] = "end"
+        return payload
 
     def _with_ephemeral_planner_context(self, request: ModelRequest) -> ModelRequest:
         runtime_state = request.state if isinstance(getattr(request, "state", None), dict) else {}
@@ -784,14 +707,19 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
 
         We compare HumanMessage count against the recorded baseline at plan
         creation time. If we don't have a baseline yet (legacy plans), allow
-        a single revision when at least two human messages exist (initial +
-        edit). The baseline is set in ``before_model`` after a successful plan.
+        a single revision when at least two human messages exist AND there is
+        no clarification pending — otherwise we'd treat a clarification answer
+        as a re-plan trigger. The baseline is set in ``before_model`` after a
+        successful plan.
         """
         baseline_raw = plan.get("human_messages_at_plan")
         baseline = int(baseline_raw) if isinstance(baseline_raw, int) else None
         messages = state.get("messages") or []
         human_count = sum(1 for msg in messages if getattr(msg, "type", None) == "human")
         if baseline is None:
+            # Avoid mistaking a clarification answer for a re-plan trigger.
+            if bool(plan.get("clarification_pending")):
+                return False
             return human_count >= 2
         return human_count > baseline
 
@@ -873,27 +801,22 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                     return payload
 
                 plan_status = str(resolved_plan.get("status") or "").strip().lower()
+                clarification_pending = bool(resolved_plan.get("clarification_pending"))
                 if should_spawn_work_handoff(
                     resolved_plan,
                     plan_behavior=_plan_behavior(runtime),
                     plan_status=plan_status,
                 ):
-                    runtime_context = _runtime_context(runtime)
-                    thread_id = runtime_context.get("thread_id")
-                    if isinstance(thread_id, str) and thread_id:
-                        user_prompt = original_user_prompt(messages) or ""
-                        requested_model_name = runtime_context.get("model_name")
-                        resolved_plan = mark_handoff_requested(resolved_plan)
-                        spawn_work_mode_handoff(
-                            thread_id=thread_id,
-                            requested_model_name=requested_model_name if isinstance(requested_model_name, str) else None,
-                            auto_mode=auto_mode,
-                            original_user_request=user_prompt or None,
-                            thread_name_suffix="-planner-clarification-auto",
-                        )
-                        payload["plan"] = resolved_plan
-                    if _plan_behavior(runtime) == "plan_foreground":
-                        payload["jump_to"] = "end"
+                    user_prompt = original_user_prompt(messages) or ""
+                    payload = self._finalize_plan_handoff(
+                        payload=payload,
+                        plan_dict=resolved_plan,
+                        runtime=runtime,
+                        auto_mode=auto_mode,
+                        user_prompt=user_prompt,
+                        thread_name_suffix="-planner-clarification-auto",
+                        clarification_pending=clarification_pending,
+                    )
                 return payload
 
         if not self._should_plan(state, runtime):
@@ -907,12 +830,6 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
                 return None
             user_prompt = extract_text(getattr(latest_user, "content", ""))
         if not user_prompt.strip():
-            return None
-
-        # Direct-answer fast path: skip the planner LLM entirely for queries that
-        # are well-served by a single-shot response (comparisons, checklists, etc.).
-        if _looks_like_direct_answer_request(user_prompt):
-            append_runtime_event(runtime, {"source": "planner_middleware", "decision": "skipped_direct_answer", "prompt_chars": len(user_prompt)})
             return None
 
         # Emit planning_started immediately — fires within ~100ms of request arrival
@@ -954,7 +871,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         from src.agents.middlewares.todo_dag_middleware import _materialize_ready_ids
 
         ready_ids = _materialize_ready_ids(nodes)
-        clarifications = _ensure_research_clarifications(user_prompt, plan_output, max_clarifications=self._max_clarifications)
+        clarifications = _normalize_planner_clarifications(plan_output, max_clarifications=self._max_clarifications)
         clarification_pending = len(clarifications) > 0
         primary_clarification = clarifications[0] if clarifications else None
 
@@ -1045,7 +962,7 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
         # Write versioned plan file + latest alias.
         if plan_root:
             plans_dir = Path(plan_root) / "plans"
-            versioned_plan_file = plans_dir / _versioned_plan_filename(plan_output.title, created_at_dt)
+            versioned_plan_file = plans_dir / versioned_plan_filename(plan_output.title, created_at_dt)
             latest_plan_alias_file = Path(plan_root) / "plan.md"
             try:
                 _write_file(versioned_plan_file, plan_md_content)
@@ -1248,28 +1165,32 @@ class PlannerMiddleware(AgentMiddleware[PlannerState]):
             "planner_ephemeral_clarification": clarification_prompt_message.content if clarification_prompt_message is not None else None,
         }
 
-        pause_after_plan = not clarification_pending and _plan_behavior(runtime) == "plan_foreground"
         if should_spawn_work_handoff(plan_dict, plan_behavior=_plan_behavior(runtime), plan_status=plan_status):
-            runtime_context = _runtime_context(runtime)
-            thread_id = runtime_context.get("thread_id")
-            if isinstance(thread_id, str) and thread_id:
-                requested_model_name = runtime_context.get("model_name")
-                plan_dict = mark_handoff_requested(plan_dict)
-                payload["plan"] = plan_dict
-                spawn_work_mode_handoff(
-                    thread_id=thread_id,
-                    requested_model_name=requested_model_name if isinstance(requested_model_name, str) else None,
-                    auto_mode=auto_mode,
-                    original_user_request=user_prompt,
-                    thread_name_suffix="-planner-auto",
-                )
-        if pause_after_plan:
+            payload = self._finalize_plan_handoff(
+                payload=payload,
+                plan_dict=plan_dict,
+                runtime=runtime,
+                auto_mode=auto_mode,
+                user_prompt=user_prompt,
+                thread_name_suffix="-planner-auto",
+                clarification_pending=clarification_pending,
+            )
+        # Fresh-plan semantics: in plan_foreground mode, always halt the
+        # planning turn after producing a plan so the user can review (even
+        # for draft plans where no handoff fires). Skip the halt when a
+        # clarification is pending because the planner explicitly wants the
+        # next turn to surface the clarification prompt.
+        if not clarification_pending and _plan_behavior(runtime) == "plan_foreground":
             payload["jump_to"] = "end"
         return payload
 
     @override
     async def abefore_model(self, state: PlannerState, runtime: Runtime) -> dict | None:
-        return self.before_model(state, runtime)
+        # Run the sync `before_model` in a worker thread so the LangGraph Server
+        # event loop stays free while the planner LLM runs. Without this, a slow
+        # planner blocks SSE writers, healthchecks, and other coroutines on the
+        # same loop worker for the duration of the planning turn.
+        return await asyncio.to_thread(self.before_model, state, runtime)
 
 # End the planning turn before the lead model runs while the plan is still draft.
 PlannerMiddleware.before_model.__can_jump_to__ = ["end"]  # type: ignore[attr-defined]

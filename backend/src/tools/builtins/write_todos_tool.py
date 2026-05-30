@@ -85,9 +85,25 @@ def _materialize_ready_ids(nodes: list[dict[str, Any]]) -> list[str]:
     return ready
 
 
+def _clone_existing_node(node: dict[str, Any]) -> dict[str, Any]:
+    """Shallow-copy a node and detach its `steps` list-of-dicts from the source.
+
+    Planner-written nodes carry a `steps` list that is *not* touched by this
+    tool's `_patch_existing`. Without this defensive copy, the returned merged
+    nodes alias the source list/dicts and downstream mutations bleed across
+    state snapshots. The tool itself never writes `steps`, but planner-set
+    values must round-trip safely.
+    """
+    cloned = dict(node)
+    steps = node.get("steps")
+    if isinstance(steps, list):
+        cloned["steps"] = [dict(step) if isinstance(step, dict) else step for step in steps]
+    return cloned
+
+
 def merge_todo_nodes(existing_nodes: list[dict[str, Any]], raw_updates: list[TodoNodeInput]) -> list[dict[str, Any]]:
     """Patch todo graph by id and append unseen ids as new nodes."""
-    merged: list[dict[str, Any]] = [dict(node) for node in existing_nodes if isinstance(node, dict) and str(node.get("id") or "").strip()]
+    merged: list[dict[str, Any]] = [_clone_existing_node(node) for node in existing_nodes if isinstance(node, dict) and str(node.get("id") or "").strip()]
     by_id = {str(node["id"]): idx for idx, node in enumerate(merged)}
 
     def _valid_status(value: Any) -> str | None:

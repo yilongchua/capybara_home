@@ -201,7 +201,37 @@ class TestCreateFilesMessage:
 # ---------------------------------------------------------------------------
 
 
+class _FakeRequest:
+    """Minimal stand-in for ModelRequest that supports `.override(messages=...)`."""
+
+    def __init__(self, messages, runtime):
+        self.messages = list(messages)
+        self.runtime = runtime
+        self.state = {}
+
+    def override(self, messages=None, **_):
+        new = _FakeRequest(messages if messages is not None else self.messages, self.runtime)
+        new.state = self.state
+        return new
+
+
+def _run_wrap_model_call(mw, msg, runtime):
+    """Helper: invoke wrap_model_call and return the messages the handler saw."""
+    request = _FakeRequest([msg], runtime)
+    captured: dict = {}
+
+    def handler(req):
+        captured["messages"] = list(req.messages)
+        return "ok"
+
+    mw.wrap_model_call(request, handler)
+    return captured["messages"]
+
+
 class TestBeforeAgent:
+    """`before_agent` now ONLY records uploads in state — message mutation moved
+    to `wrap_model_call` (#20 — ephemeral injection)."""
+
     def _state(self, *messages):
         return {"messages": list(messages)}
 
@@ -226,21 +256,43 @@ class TestBeforeAgent:
         state = self._state(msg)
         assert mw.before_agent(state, _runtime()) is None
 
+    def test_records_new_files_in_state_only(self, tmp_path):
+        """`before_agent` does NOT mutate messages — only stores uploads in state."""
+        mw = _middleware(tmp_path)
+        uploads_dir = _uploads_dir(tmp_path)
+        (uploads_dir / "report.pdf").write_bytes(b"pdf")
+
+        msg = _human("please analyse", files=[{"filename": "report.pdf", "size": 3, "path": "/mnt/user-data/workspace/uploads/report.pdf"}])
+        result = mw.before_agent(self._state(msg), _runtime())
+
+        assert result is not None
+        assert "messages" not in result, "before_agent must not return a messages update"
+        assert result["uploaded_files"] == [
+            {
+                "filename": "report.pdf",
+                "size": 3,
+                "path": "/mnt/user-data/workspace/uploads/report.pdf",
+                "extension": ".pdf",
+            }
+        ]
+
+
+class TestEphemeralInjection:
+    """The `<uploaded_files>` block is injected per-LLM-call via wrap_model_call
+    and never persisted into thread state."""
+
     def test_injects_uploaded_files_tag_into_string_content(self, tmp_path):
         mw = _middleware(tmp_path)
         uploads_dir = _uploads_dir(tmp_path)
         (uploads_dir / "report.pdf").write_bytes(b"pdf")
 
         msg = _human("please analyse", files=[{"filename": "report.pdf", "size": 3, "path": "/mnt/user-data/workspace/uploads/report.pdf"}])
-        state = self._state(msg)
-        result = mw.before_agent(state, _runtime())
-
-        assert result is not None
-        updated_msg = result["messages"][-1]
-        assert isinstance(updated_msg.content, str)
-        assert "<uploaded_files>" in updated_msg.content
-        assert "report.pdf" in updated_msg.content
-        assert "please analyse" in updated_msg.content
+        messages = _run_wrap_model_call(mw, msg, _runtime())
+        injected = messages[-1]
+        assert isinstance(injected.content, str)
+        assert "<uploaded_files>" in injected.content
+        assert "report.pdf" in injected.content
+        assert "please analyse" in injected.content
 
     def test_injects_uploaded_files_tag_into_list_content(self, tmp_path):
         mw = _middleware(tmp_path)
@@ -251,46 +303,34 @@ class TestBeforeAgent:
             [{"type": "text", "text": "analyse this"}],
             files=[{"filename": "data.csv", "size": 3, "path": "/mnt/user-data/workspace/uploads/data.csv"}],
         )
-        state = self._state(msg)
-        result = mw.before_agent(state, _runtime())
+        messages = _run_wrap_model_call(mw, msg, _runtime())
+        injected = messages[-1]
+        assert "<uploaded_files>" in injected.content
+        assert "analyse this" in injected.content
 
-        assert result is not None
-        updated_msg = result["messages"][-1]
-        assert "<uploaded_files>" in updated_msg.content
-        assert "analyse this" in updated_msg.content
-
-    def test_preserves_additional_kwargs_on_updated_message(self, tmp_path):
+    def test_preserves_additional_kwargs_on_injected_message(self, tmp_path):
         mw = _middleware(tmp_path)
         uploads_dir = _uploads_dir(tmp_path)
         (uploads_dir / "img.png").write_bytes(b"png")
 
         files_meta = [{"filename": "img.png", "size": 3, "path": "/mnt/user-data/workspace/uploads/img.png", "status": "uploaded"}]
         msg = _human("check image", files=files_meta, element="task")
-        state = self._state(msg)
-        result = mw.before_agent(state, _runtime())
+        messages = _run_wrap_model_call(mw, msg, _runtime())
+        injected_kwargs = messages[-1].additional_kwargs
+        assert injected_kwargs.get("files") == files_meta
+        assert injected_kwargs.get("element") == "task"
 
-        assert result is not None
-        updated_kwargs = result["messages"][-1].additional_kwargs
-        assert updated_kwargs.get("files") == files_meta
-        assert updated_kwargs.get("element") == "task"
-
-    def test_uploaded_files_returned_in_state_update(self, tmp_path):
+    def test_does_not_mutate_original_message(self, tmp_path):
+        """Ephemeral means ephemeral: the message object in `state` (and the
+        request.messages list passed in) must not be mutated."""
         mw = _middleware(tmp_path)
         uploads_dir = _uploads_dir(tmp_path)
-        (uploads_dir / "notes.txt").write_bytes(b"hello")
+        (uploads_dir / "x.txt").write_bytes(b"x")
 
-        msg = _human("review", files=[{"filename": "notes.txt", "size": 5, "path": "/mnt/user-data/workspace/uploads/notes.txt"}])
-        result = mw.before_agent(self._state(msg), _runtime())
-
-        assert result is not None
-        assert result["uploaded_files"] == [
-            {
-                "filename": "notes.txt",
-                "size": 5,
-                "path": "/mnt/user-data/workspace/uploads/notes.txt",
-                "extension": ".txt",
-            }
-        ]
+        msg = _human("user question", files=[{"filename": "x.txt", "size": 1, "path": "/mnt/user-data/workspace/uploads/x.txt"}])
+        original_content = msg.content
+        _run_wrap_model_call(mw, msg, _runtime())
+        assert msg.content == original_content, "the original HumanMessage must not be mutated"
 
     def test_historical_files_from_uploads_dir_excluding_new(self, tmp_path):
         mw = _middleware(tmp_path)
@@ -299,10 +339,8 @@ class TestBeforeAgent:
         (uploads_dir / "new.txt").write_bytes(b"new")
 
         msg = _human("go", files=[{"filename": "new.txt", "size": 3, "path": "/mnt/user-data/workspace/uploads/new.txt"}])
-        result = mw.before_agent(self._state(msg), _runtime())
-
-        assert result is not None
-        content = result["messages"][-1].content
+        messages = _run_wrap_model_call(mw, msg, _runtime())
+        content = messages[-1].content
         assert "uploaded in this message" in content
         assert "new.txt" in content
         assert "previous messages" in content
@@ -314,28 +352,37 @@ class TestBeforeAgent:
         (uploads_dir / "only.txt").write_bytes(b"x")
 
         msg = _human("go", files=[{"filename": "only.txt", "size": 1, "path": "/mnt/user-data/workspace/uploads/only.txt"}])
-        result = mw.before_agent(self._state(msg), _runtime())
-
-        content = result["messages"][-1].content
+        messages = _run_wrap_model_call(mw, msg, _runtime())
+        content = messages[-1].content
         assert "previous messages" not in content
 
     def test_no_historical_scan_when_thread_id_is_none(self, tmp_path):
         mw = _middleware(tmp_path)
         msg = _human("go", files=[{"filename": "f.txt", "size": 1, "path": "/mnt/user-data/workspace/uploads/f.txt"}])
-        # thread_id=None → _files_from_kwargs skips existence check, no dir scan
-        result = mw.before_agent(self._state(msg), _runtime(thread_id=None))
-        # With no existence check, the file passes through and injection happens
-        assert result is not None
-        content = result["messages"][-1].content
+        messages = _run_wrap_model_call(mw, msg, _runtime(thread_id=None))
+        content = messages[-1].content
         assert "previous messages" not in content
 
-    def test_message_id_preserved_on_updated_message(self, tmp_path):
+    def test_message_id_preserved_on_injected_message(self, tmp_path):
         mw = _middleware(tmp_path)
         uploads_dir = _uploads_dir(tmp_path)
         (uploads_dir / "f.txt").write_bytes(b"x")
 
         msg = _human("go", files=[{"filename": "f.txt", "size": 1, "path": "/mnt/user-data/workspace/uploads/f.txt"}])
         msg.id = "original-id-42"
-        result = mw.before_agent(self._state(msg), _runtime())
+        messages = _run_wrap_model_call(mw, msg, _runtime())
+        assert messages[-1].id == "original-id-42"
 
-        assert result["messages"][-1].id == "original-id-42"
+    def test_no_double_injection_when_block_already_present(self, tmp_path):
+        """Legacy threads where the old in-place mutation already baked the
+        block into thread state must not get double-injected on top."""
+        mw = _middleware(tmp_path)
+        uploads_dir = _uploads_dir(tmp_path)
+        (uploads_dir / "f.txt").write_bytes(b"x")
+
+        msg = _human(
+            "<uploaded_files>\nlegacy\n</uploaded_files>\n\nreal user text",
+            files=[{"filename": "f.txt", "size": 1, "path": "/mnt/user-data/workspace/uploads/f.txt"}],
+        )
+        messages = _run_wrap_model_call(mw, msg, _runtime())
+        assert messages[-1].content.count("<uploaded_files>") == 1

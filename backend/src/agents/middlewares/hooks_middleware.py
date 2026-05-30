@@ -63,9 +63,16 @@ class HooksMiddleware(AgentMiddleware[HooksMiddlewareState]):
                 thread_data = td
         workspace_path = thread_data.get("workspace_path") if isinstance(thread_data, dict) else None
         cwd = Path(workspace_path) if isinstance(workspace_path, str) and workspace_path else None
+        # `shell=True` is intentional: hook commands are authored by the
+        # operator in `config.yaml`/extensions and routinely use shell
+        # features (pipes, `&&`, variable expansion). The risk surface here
+        # is config-trust: the config source MUST remain operator-owned
+        # (not editable via unauthenticated Gateway endpoints). If config
+        # ingestion ever broadens, switch this to `shlex.split` + shell=False
+        # for commands that don't need a shell.
         completed = subprocess.run(
             hook.command,
-            shell=True,
+            shell=True,  # noqa: S602 — see comment above; config is operator-trusted
             cwd=str(cwd) if cwd else None,
             capture_output=True,
             text=True,
@@ -161,16 +168,25 @@ class HooksMiddleware(AgentMiddleware[HooksMiddlewareState]):
 
     @override
     def after_model(self, state: HooksMiddlewareState, runtime: Runtime) -> dict | None:
-        if not self._config.FileChanged:
+        # Skip entirely when neither file-event hook is configured.
+        if not self._config.FileChanged and not self._config.FileRemoved:
             return None
         hooks_state = dict(state.get("hooks_state") or {})
         observed_files = set(hooks_state.get("observed_files") or [])
         current_files = set((state.get("artifacts") or []) + (state.get("handoff_artifacts") or []))
-        added = sorted(current_files - observed_files)
-        for path in added:
-            self._run_event(runtime, self._config.FileChanged, "FileChanged", path, state=state)
-        if not added and current_files == observed_files:
+
+        # Skip checkpoint write when nothing actually changed.
+        if current_files == observed_files:
             return None
+
+        added = sorted(current_files - observed_files)
+        removed = sorted(observed_files - current_files)
+        for path in added:
+            if self._config.FileChanged:
+                self._run_event(runtime, self._config.FileChanged, "FileChanged", path, state=state)
+        for path in removed:
+            if self._config.FileRemoved:
+                self._run_event(runtime, self._config.FileRemoved, "FileRemoved", path, state=state)
         return {"hooks_state": {"observed_files": sorted(current_files)}}
 
     @override

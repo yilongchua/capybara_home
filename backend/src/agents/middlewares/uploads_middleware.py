@@ -1,11 +1,22 @@
-"""Middleware to inject uploaded files information into agent context."""
+"""Middleware to inject uploaded files information into agent context.
+
+The ``<uploaded_files>`` block is injected **ephemerally** via
+``wrap_model_call`` (per LLM call) rather than written into the canonical
+message history. This is critical: the original implementation rewrote the
+last ``HumanMessage`` content in place, so once a user uploaded a file the
+upload bookkeeping would persist forever in thread state — every future
+summarization snapshot would reference the upload, even if the user later
+deleted the file. The ephemeral pattern mirrors ``MountFolderMiddleware``.
+"""
 
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import NotRequired, override
+from typing import Any, NotRequired, override
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware.types import ModelCallResult, ModelRequest, ModelResponse
 from langchain_core.messages import HumanMessage
 from langgraph.runtime import Runtime
 
@@ -116,43 +127,20 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
             )
         return files if files else None
 
-    @override
-    def before_agent(self, state: dict, runtime: Runtime) -> dict | None:
-        """Inject uploaded files information before agent execution.
+    def _scan_uploaded_files(self, runtime: Runtime, last_message: HumanMessage | None) -> tuple[list[dict], list[dict]]:
+        """Compute (new_files, historical_files) for ephemeral injection.
 
-        New files come from the current message's additional_kwargs.files.
-        Historical files are scanned from the thread's uploads directory,
-        excluding the new ones.
-
-        Prepends <uploaded_files> context to the last human message content.
-        The original additional_kwargs (including files metadata) is preserved
-        on the updated message so the frontend can read it from the stream.
-
-        Args:
-            state: Current agent state.
-            runtime: Runtime context containing thread_id.
-
-        Returns:
-            State updates including uploaded files list.
+        Pure computation — never mutates state.
         """
-        messages = list(state.get("messages", []))
-        if not messages:
-            return None
-
-        last_message_index = len(messages) - 1
-        last_message = messages[last_message_index]
-
-        if not isinstance(last_message, HumanMessage):
-            return None
-
-        # Resolve uploads directory for existence checks
-        thread_id = (getattr(runtime, "context", None) or {}).get("thread_id")
+        thread_id = (getattr(runtime, "context", None) or {}).get("thread_id") if runtime else None
         uploads_dir = self._paths.sandbox_uploads_dir(thread_id) if thread_id else None
 
-        # Get newly uploaded files from the current message's additional_kwargs.files
-        new_files = self._files_from_kwargs(last_message, uploads_dir) or []
+        new_files: list[dict] = (
+            self._files_from_kwargs(last_message, uploads_dir) or []
+            if isinstance(last_message, HumanMessage)
+            else []
+        )
 
-        # Collect historical files from the uploads directory (all except the new ones)
         new_filenames = {f["filename"] for f in new_files}
         historical_files: list[dict] = []
         if uploads_dir and uploads_dir.exists():
@@ -167,38 +155,91 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                             "extension": file_path.suffix,
                         }
                     )
+        return new_files, historical_files
 
-        if not new_files and not historical_files:
+    @staticmethod
+    def _extract_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(str(block.get("text", "")))
+            return "\n".join(parts)
+        return str(content)
+
+    @override
+    def before_agent(self, state: dict, runtime: Runtime) -> dict | None:
+        """Record newly-uploaded files in state for downstream consumers (frontend
+        stream, memory filter). Does NOT mutate message content — the
+        ``<uploaded_files>`` block is injected ephemerally in
+        ``wrap_model_call``.
+        """
+        messages = state.get("messages", [])
+        if not messages:
+            return None
+        last_message = messages[-1]
+        if not isinstance(last_message, HumanMessage):
             return None
 
-        logger.debug(f"New files: {[f['filename'] for f in new_files]}, historical: {[f['filename'] for f in historical_files]}")
+        thread_id = (getattr(runtime, "context", None) or {}).get("thread_id")
+        uploads_dir = self._paths.sandbox_uploads_dir(thread_id) if thread_id else None
+        new_files = self._files_from_kwargs(last_message, uploads_dir) or []
+        if not new_files:
+            return None
 
-        # Create files message and prepend to the last human message content
+        logger.debug("Recorded new uploads: %s", [f["filename"] for f in new_files])
+        return {"uploaded_files": new_files}
+
+    def _inject_uploads_ephemerally(self, request: ModelRequest) -> ModelRequest:
+        runtime = getattr(request, "runtime", None)
+        messages = list(getattr(request, "messages", []) or [])
+        if not messages:
+            return request
+
+        # Find the last HumanMessage in the model request.
+        last_human_idx: int | None = None
+        for i in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[i], HumanMessage):
+                last_human_idx = i
+                break
+        if last_human_idx is None:
+            return request
+
+        last_human = messages[last_human_idx]
+
+        # If the prompt already contains the block (e.g. legacy thread state
+        # written by the old in-place mutation), don't double-inject.
+        original_content = self._extract_text(last_human.content)
+        if "<uploaded_files>" in original_content:
+            return request
+
+        new_files, historical_files = self._scan_uploaded_files(runtime, last_human)
+        if not new_files and not historical_files:
+            return request
+
         files_message = self._create_files_message(new_files, historical_files)
-
-        # Extract original content - handle both string and list formats
-        original_content = ""
-        if isinstance(last_message.content, str):
-            original_content = last_message.content
-        elif isinstance(last_message.content, list):
-            text_parts = []
-            for block in last_message.content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
-            original_content = "\n".join(text_parts)
-
-        # Create new message with combined content.
-        # Preserve additional_kwargs (including files metadata) so the frontend
-        # can read structured file info from the streamed message.
-        updated_message = HumanMessage(
+        injected = HumanMessage(
             content=f"{files_message}\n\n{original_content}",
-            id=last_message.id,
-            additional_kwargs=last_message.additional_kwargs,
+            id=last_human.id,
+            additional_kwargs=last_human.additional_kwargs,
         )
+        messages[last_human_idx] = injected
+        return request.override(messages=messages)
 
-        messages[last_message_index] = updated_message
+    @override
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelCallResult:
+        return handler(self._inject_uploads_ephemerally(request))
 
-        return {
-            "uploaded_files": new_files,
-            "messages": messages,
-        }
+    @override
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelCallResult:
+        return await handler(self._inject_uploads_ephemerally(request))

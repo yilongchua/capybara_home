@@ -171,17 +171,25 @@ class TestTitleMiddlewareCoreLogic:
         assert asyncio.run(middleware.aafter_model(state, runtime=MagicMock())) is None
 
     def test_after_agent_returns_generated_title_when_background_task_completed(self):
-        """after_agent must return the LLM title once the background task has stored it."""
+        """after_agent must return the LLM title once the background task has stored it.
+
+        State now lives in run-scoped storage (keyed off the runtime object) so
+        the singleton middleware instance doesn't leak titles across concurrent
+        runs. The test pokes the storage directly.
+        """
+        from src.agents.middlewares.run_scoped import get_run_store
+        from src.agents.middlewares.title_middleware import _TITLE_RESULT_KEY
+
         middleware = TitleMiddleware()
-        middleware._generated_title = "LLM Generated Title"
+        runtime = MagicMock()
+        get_run_store(runtime)[_TITLE_RESULT_KEY] = "LLM Generated Title"
 
-        result = middleware.after_agent({}, runtime=MagicMock())
-
+        result = middleware.after_agent({}, runtime=runtime)
         assert result == {"title": "LLM Generated Title"}
 
     def test_after_agent_returns_none_when_background_task_not_yet_done(self):
         middleware = TitleMiddleware()
-        assert middleware._generated_title is None
+        # Fresh runtime → run-scoped store has no result key.
         assert middleware.after_agent({}, runtime=MagicMock()) is None
 
     def test_should_generate_title_with_synthetic_human_messages(self):
@@ -304,18 +312,26 @@ class TestTitleMiddlewareCoreLogic:
             lambda *a, **kw: None,
         )
 
+        from src.agents.middlewares.run_scoped import get_run_store
+        from src.agents.middlewares.title_middleware import _TITLE_RESULT_KEY
+
         state = {
             "messages": [
                 HumanMessage(content="test"),
                 AIMessage(content="answer"),
             ]
         }
-        asyncio.run(middleware.aafter_model(state, runtime=MagicMock()))
+        runtime = MagicMock()
+        asyncio.run(middleware.aafter_model(state, runtime=runtime))
 
         assert call_count == 1, "_generate_title should not retry after timeout"
-        assert middleware._generated_title is None
+        # Title state lives in the run-scoped store keyed off `runtime`.
+        assert get_run_store(runtime).get(_TITLE_RESULT_KEY) is None
 
     def test_aafter_agent_does_not_wait_when_title_await_timeout_is_zero(self):
+        from src.agents.middlewares.run_scoped import get_run_store
+        from src.agents.middlewares.title_middleware import _TITLE_BG_TASK_KEY
+
         _set_test_title_config(await_generated_title_timeout_seconds=0)
         middleware = TitleMiddleware()
 
@@ -323,9 +339,11 @@ class TestTitleMiddlewareCoreLogic:
             await asyncio.sleep(10)
 
         async def _run():
-            middleware._title_bg_task = asyncio.create_task(_slow_task())
-            result = await middleware.aafter_agent({}, runtime=MagicMock())
+            runtime = MagicMock()
+            store = get_run_store(runtime)
+            store[_TITLE_BG_TASK_KEY] = asyncio.create_task(_slow_task())
+            result = await middleware.aafter_agent({}, runtime=runtime)
             assert result is None
-            assert middleware._title_bg_task is None
+            assert store.get(_TITLE_BG_TASK_KEY) is None
 
         asyncio.run(_run())

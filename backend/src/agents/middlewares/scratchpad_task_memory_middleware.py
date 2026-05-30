@@ -10,6 +10,7 @@ from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
 from langgraph.runtime import Runtime
 
+from src.agents.middlewares._fs_utils import write_if_changed
 from src.config.handoffs_config import get_handoffs_config
 from src.config.scratchpad_config import ScratchpadConfig, get_scratchpad_config
 from src.config.task_memory_config import TaskMemoryConfig, get_task_memory_config
@@ -97,7 +98,7 @@ class ScratchpadTaskMemoryMiddleware(AgentMiddleware[ScratchpadTaskMemoryState])
             text = str(entry.get("text") or "")
             lines.append(f"- [{ts}] ({source}) {text}")
         lines.append("")
-        path.write_text("\n".join(lines), encoding="utf-8")
+        write_if_changed(path, "\n".join(lines))
         return str(path)
 
     @override

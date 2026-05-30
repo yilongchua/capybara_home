@@ -148,21 +148,48 @@ def mark_handoff_started(plan: dict[str, Any]) -> dict[str, Any]:
     return mark_handoff_succeeded(plan)
 
 
-def should_spawn_work_handoff(
-    plan: dict[str, Any],
-    *,
-    plan_behavior: str,
-    plan_status: str,
-) -> bool:
-    if plan_behavior != "plan_foreground":
-        return False
-    if plan_status not in {"approved"}:
+def is_plan_executable(plan: dict[str, Any]) -> bool:
+    """Single source of truth: is `plan` ready to be handed off to Work Mode?
+
+    A plan is executable iff:
+      * status is "approved" (draft or executing are not handoff targets),
+      * the handoff has not already started for this plan,
+      * all clarifications are resolved (no pending questions remain).
+
+    Plan-behavior (foreground vs background) is *not* checked here — that's
+    a separate concern about UX flow, not plan state. Callers that need
+    `plan_behavior == "plan_foreground"` should check it themselves.
+    """
+    status = str(plan.get("status") or "").strip().lower()
+    if status != "approved":
         return False
     if handoff_already_started(plan):
         return False
     if bool(plan.get("clarification_pending")) and not all_clarifications_resolved(plan):
         return False
     return True
+
+
+def should_spawn_work_handoff(
+    plan: dict[str, Any],
+    *,
+    plan_behavior: str,
+    plan_status: str,
+) -> bool:
+    """Convenience wrapper combining executability with foreground gating.
+
+    Kept as a separate entry point because some call sites care about the
+    plan_behavior dimension and others (e.g. observability) only care
+    whether the plan itself is in a runnable shape — those should call
+    `is_plan_executable` directly.
+    """
+    if plan_behavior != "plan_foreground":
+        return False
+    # Trust the caller's plan_status if provided (avoids double-normalising),
+    # otherwise fall back to the predicate.
+    if plan_status and plan_status != "approved":
+        return False
+    return is_plan_executable(plan)
 
 
 def _option_labels(clarification: dict[str, Any]) -> list[str]:

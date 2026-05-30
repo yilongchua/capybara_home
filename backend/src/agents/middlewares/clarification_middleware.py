@@ -36,7 +36,52 @@ from src.agents.middlewares.todo_dag_middleware import compute_effective_ready_i
 
 logger = logging.getLogger(__name__)
 
-_AUTO_MODE_CTX_KEY = "_clarification_auto_mode"
+
+def _resolve_auto_mode(runtime: Runtime, state: dict[str, Any]) -> bool:
+    """Resolve auto_mode with precedence: configurable > runtime.context > state.
+
+    Mirrors the pre-refactor precedence so an explicit
+    `configurable["auto_mode"]=False` from the frontend still overrides a
+    stale `state["auto_mode"]=True`. We use explicit `in` checks (not `.get`)
+    so a present-but-falsy value is honored.
+    """
+    config = getattr(runtime, "config", None)
+    configurable = config.get("configurable") if isinstance(config, dict) else None
+    if isinstance(configurable, dict) and "auto_mode" in configurable:
+        return bool(configurable["auto_mode"])
+    runtime_ctx = getattr(runtime, "context", None)
+    if isinstance(runtime_ctx, dict) and "auto_mode" in runtime_ctx:
+        return bool(runtime_ctx["auto_mode"])
+    return bool(state.get("auto_mode", False))
+
+
+def _normalize_question(text: Any) -> str:
+    return " ".join(str(text or "").lower().split())
+
+
+def _planner_clarification_duplicate(question: str, plan: Any) -> bool:
+    """True iff `question` matches a clarification already surfaced inline by the planner.
+
+    The planner emits `plan_created` with `clarifications: [...]` inline AND a
+    `planner_clarification_required` HumanMessage telling the model to call
+    `ask_user_for_clarification`. When the model follows that prompt it would
+    otherwise create a duplicate entry in `state.clarifications`, surfacing two
+    UI panels for the same question. This check lets `wrap_tool_call` short-circuit.
+    """
+    if not isinstance(plan, dict):
+        return False
+    candidates = plan.get("clarifications")
+    if not isinstance(candidates, list):
+        return False
+    needle = _normalize_question(question)
+    if not needle:
+        return False
+    for entry in candidates:
+        if not isinstance(entry, dict):
+            continue
+        if _normalize_question(entry.get("question")) == needle:
+            return True
+    return False
 
 
 class ClarificationMiddlewareState(AgentState):
@@ -118,23 +163,13 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
 
     @override
     def before_model(self, state: ClarificationMiddlewareState, runtime: Runtime) -> dict | None:
-        """Cache auto_mode flag in runtime context so wrap_tool_call can read it."""
-        runtime_config = getattr(runtime, "config", None)
-        configurable = (runtime_config or {}).get("configurable") or {} if runtime_config else {}
-        ctx = getattr(runtime, "context", None)
-        auto_mode = bool(
-            configurable.get(
-                "auto_mode",
-                (ctx or {}).get("auto_mode", state.get("auto_mode", False)),
-            )
-        )
-        if ctx is not None:
-            ctx[_AUTO_MODE_CTX_KEY] = auto_mode
+        # auto_mode is now resolved on-demand inside wrap_tool_call via
+        # _resolve_auto_mode(runtime, request.state). No side-effects on ctx.
         return None
 
     @override
     async def abefore_model(self, state: ClarificationMiddlewareState, runtime: Runtime) -> dict | None:
-        return self.before_model(state, runtime)
+        return None
 
     def _build_entry(self, args: dict, tool_call_id: str) -> dict[str, Any]:
         """Coerce tool args into a Clarification record."""
@@ -203,8 +238,29 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
     ) -> Command:
         args = request.tool_call.get("args", {}) or {}
         tool_call_id = request.tool_call.get("id", "") or ""
-        context = getattr(request.runtime, "context", None) or {}
-        auto_mode = bool(context.get(_AUTO_MODE_CTX_KEY, False))
+        state = getattr(request, "state", None) or {}
+        auto_mode = _resolve_auto_mode(request.runtime, state)
+
+        question_text = str(args.get("question") or "").strip()
+        if _planner_clarification_duplicate(question_text, state.get("plan")):
+            logger.info(
+                "Skipping duplicate clarification '%s' — already surfaced inline by planner",
+                question_text,
+            )
+            return Command(
+                update={
+                    "messages": [
+                        ToolMessage(
+                            content=(
+                                "Clarification already pending in the inline panel — "
+                                "the user will answer there. Continue with other ready work."
+                            ),
+                            tool_call_id=tool_call_id,
+                            name="ask_user_for_clarification",
+                        )
+                    ],
+                }
+            )
 
         entry = self._build_entry(args, tool_call_id)
 

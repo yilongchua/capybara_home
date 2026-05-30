@@ -38,6 +38,37 @@ def test_scratchpad_and_task_memory_updates_and_writes_artifact(monkeypatch, tmp
     assert "todo-1" in artifact.read_text(encoding="utf-8")
 
 
+def test_write_scratchpad_artifact_skips_no_op_writes(monkeypatch, tmp_path: Path):
+    """#22: repeated calls with identical entries should not rewrite the file."""
+    monkeypatch.setattr(
+        "src.agents.middlewares.scratchpad_task_memory_middleware.get_handoffs_config",
+        lambda: HandoffsConfig(enabled=True, dir=".runtime"),
+    )
+    middleware = ScratchpadTaskMemoryMiddleware(
+        scratchpad_config=ScratchpadConfig(enabled=True, max_entries=10, max_chars_per_entry=120, artifact_file="scratchpad.md"),
+        task_memory_config=TaskMemoryConfig(enabled=False),
+    )
+    state = {
+        "scratchpad": [{"ts": "2026-01-01T00:00:00Z", "source": "assistant", "text": "note"}],
+        "thread_data": {"workspace_path": str(tmp_path)},
+    }
+    entries = list(state["scratchpad"])
+
+    first_path = middleware._write_scratchpad_artifact(state, entries)
+    assert first_path is not None
+    artifact = Path(first_path)
+    mtime_after_first = artifact.stat().st_mtime_ns
+
+    # Second call with identical content must not rewrite the file.
+    middleware._write_scratchpad_artifact(state, entries)
+    assert artifact.stat().st_mtime_ns == mtime_after_first
+
+    # Mutating the content must trigger a rewrite.
+    changed_entries = [{"ts": "2026-01-01T00:00:00Z", "source": "assistant", "text": "different"}]
+    middleware._write_scratchpad_artifact(state, changed_entries)
+    assert artifact.stat().st_mtime_ns != mtime_after_first
+
+
 def test_scratchpad_compacts_entries(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(
         "src.agents.middlewares.scratchpad_task_memory_middleware.get_handoffs_config",

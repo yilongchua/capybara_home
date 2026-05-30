@@ -109,7 +109,7 @@ The endpoint:
 This path is **synchronous** from the user's perspective and used by the
 manual approval flow.
 
-### B. Daemon-driven (auto-approval / auto-escalation)
+### B. Daemon-driven (auto-approval)
 
 Path: `PlannerMiddleware.before_model` →
 [`spawn_work_mode_handoff`](../../backend/src/agents/middlewares/work_run_handoff.py#L317).

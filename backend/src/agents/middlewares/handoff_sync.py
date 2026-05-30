@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from src.agents.middlewares._fs_utils import write_if_changed
 from src.sandbox.path_mapping import replace_virtual_path, to_virtual_path
 
 _DEFAULT_PLAN_SUMMARY = "Living execution record for the current thread."
@@ -17,15 +18,26 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _slugify_title(title: str) -> str:
+def slugify_plan_title(title: str) -> str:
+    """Single source of truth for plan-title slugification.
+
+    Used by both `handoff_sync` (canonical plan.md path) and `planner_middleware`
+    (versioned plan-N.md path). The planner site previously had a regex-based
+    duplicate; collapsed here.
+    """
     cleaned = "".join(ch.lower() if ch.isalnum() else "-" for ch in title)
     collapsed = "-".join(part for part in cleaned.split("-") if part)
     return collapsed[:48] or "execution-plan"
 
 
-def _versioned_plan_filename(title: str, created_at: datetime) -> str:
+def versioned_plan_filename(title: str, created_at: datetime) -> str:
     stamp = created_at.strftime("%Y%m%d-%H%M%S")
-    return f"plan-{stamp}-{_slugify_title(title)}.md"
+    return f"plan-{stamp}-{slugify_plan_title(title)}.md"
+
+
+# Backwards-compatible private aliases for in-module callers.
+_slugify_title = slugify_plan_title
+_versioned_plan_filename = versioned_plan_filename
 
 
 def _message_type(message: Any) -> str:
@@ -478,13 +490,10 @@ def render_plan_md(
 
 
 def _write_if_changed(path: str, content: str) -> bool:
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    existing = target.read_text(encoding="utf-8") if target.exists() else None
-    if existing == content:
-        return False
-    target.write_text(content, encoding="utf-8")
-    return True
+    """Deprecated alias for `_fs_utils.write_if_changed`. Kept so external
+    callers in this module remain unchanged while the helper lives in
+    `_fs_utils`."""
+    return write_if_changed(path, content)
 
 
 def _can_resolve_write_path(path: str, thread_data: dict[str, Any] | None) -> bool:

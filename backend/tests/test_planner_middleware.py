@@ -11,7 +11,7 @@ from src.agents.middlewares.planner_middleware import (
     PlannerClarification,
     PlannerMiddleware,
     PlannerOutput,
-    _ensure_research_clarifications,
+    _normalize_planner_clarifications,
 )
 
 
@@ -54,10 +54,6 @@ def _planner(monkeypatch) -> PlannerMiddleware:
         )
 
     monkeypatch.setattr(middleware, "_invoke_planner", _fake_invoke)
-    monkeypatch.setattr(
-        "src.agents.middlewares.planner_middleware._looks_like_direct_answer_request",
-        lambda _prompt: False,
-    )
     return middleware
 
 
@@ -81,7 +77,7 @@ def test_auto_mode_approves_plan_and_still_pauses_before_execution(monkeypatch) 
     assert update["plan"].get("approved_at")
 
 
-def test_research_clarifications_normalize_recommended_first_and_option_count() -> None:
+def test_planner_clarifications_normalize_recommended_first_and_option_count() -> None:
     output = PlannerOutput(
         domain="research",
         clarifications=[
@@ -98,7 +94,7 @@ def test_research_clarifications_normalize_recommended_first_and_option_count() 
         ],
     )
 
-    clarifications = _ensure_research_clarifications("Research AI trends", output)
+    clarifications = _normalize_planner_clarifications(output)
 
     assert len(clarifications) >= 1
     options = clarifications[0].options

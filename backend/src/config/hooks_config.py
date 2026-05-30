@@ -26,6 +26,7 @@ class HooksConfig(BaseModel):
     PreToolUse: list[HookCommandConfig] = Field(default_factory=list)
     PostToolUse: list[HookCommandConfig] = Field(default_factory=list)
     FileChanged: list[HookCommandConfig] = Field(default_factory=list)
+    FileRemoved: list[HookCommandConfig] = Field(default_factory=list)
 
 
 _hooks_config: HooksConfig = HooksConfig()

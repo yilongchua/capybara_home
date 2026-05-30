@@ -3,9 +3,10 @@
 The plan_agent owns the planning turn: scope discovery, plan drafting, and
 producing the canonical ``plan.md`` that the work_agent later parses on
 handoff. It shares all infrastructure (sandbox, memory, model factory, tool
-loader) with work_agent, but is invoked as a distinct LangGraph entry point so
-the frontend and auto-escalation paths can address it by name (graph id
-``plan_agent``).
+loader) with work_agent, but is invoked as a distinct LangGraph entry point
+(graph id ``plan_agent``) so the frontend's manual toggle (Shift+Tab) can
+route there directly. Work Mode never auto-escalates to Plan Mode anymore;
+entry is fully user-initiated.
 
 Today this is a thin wrapper around :func:`src.agents.work_agent.make_work_agent`
 that forces ``current_mode='plan'`` in the configurable. The middleware

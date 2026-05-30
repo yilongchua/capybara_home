@@ -89,10 +89,15 @@ class MetricsMiddleware(AgentMiddleware[AgentState]):
 
     @staticmethod
     def _base_labels(runtime: Runtime) -> dict[str, Any]:
-        context = getattr(runtime, "context", None) or {}
+        # `thread_id` is intentionally NOT included as a counter label: every
+        # distinct thread would mint a new label key for every metric × tool ×
+        # endpoint combination, with no eviction. Long-running deployments
+        # accumulate one bucket per thread forever (classic Prometheus
+        # high-cardinality anti-pattern). If per-thread metrics are needed
+        # downstream, expose them via a separate per-run scratchpad cleared in
+        # `after_agent`, not as a global counter label.
         return {
             "endpoint": MetricsMiddleware._endpoint(runtime),
-            "thread_id": context.get("thread_id") or "unknown",
         }
 
     @override

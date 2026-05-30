@@ -33,6 +33,29 @@ from src.agents.middlewares.runtime_events import append_runtime_event, drain_ru
 _TOOL_INPUT_BY_TASK_ID_KEY = "_activity_tool_input_by_task_id"
 _TOOL_INPUT_MAX_ENTRIES = 128
 _TOOL_INPUT_TTL_SECONDS = 10 * 60
+
+# Modules whose runtime events should produce a generic "working on the next
+# step..." line when no specific event_type render rule matches. New emitters
+# must be added here to surface in the activity timeline. Keep alphabetised.
+_ACTIVITY_FALLBACK_SOURCES = frozenset({
+    "activity_timeline_middleware",
+    "autoresearch_middleware",
+    "dangling_tool_call_middleware",
+    "execution_trace_middleware",
+    "loop_detection_middleware",
+    "model_timeout_middleware",
+    "plan_evaluator",
+    "planner_middleware",
+    "quality_gate_middleware",
+    "summarization_middleware",
+    "task_tool",
+    "thread_data_middleware",
+    "title_middleware",
+    "todo_failure_retry_middleware",
+    "web_search_summary",
+    "work_mode_middleware",
+    "write_todos_tool",
+})
 _LONG_RUNNING_TOOL_NAMES = frozenset(
     {
         "bash",
@@ -280,8 +303,6 @@ def _to_activity_event(runtime: Runtime, runtime_event: dict[str, Any]) -> Activ
     elif event_type == "plan_created":
         todo_count = payload.get("todo_count")
         line = f"Plan created with {todo_count} todo(s)" if isinstance(todo_count, int) else "Plan created"
-    elif event_type == "skipped_direct_answer":
-        line = "Planner will answer directly without a separate plan"
     elif event_type == "parse_failed_fallback":
         line = "Planner is using a fallback plan structure"
     elif event_type == "plan_auto_approved":
@@ -335,18 +356,10 @@ def _to_activity_event(runtime: Runtime, runtime_event: dict[str, Any]) -> Activ
 
     if line is None:
         # Best-effort fallback only for harness/runtime events we still want visible.
-        if source in {
-            "planner_middleware",
-            "plan_evaluator",
-            "task_tool",
-            "execution_trace_middleware",
-            "activity_timeline_middleware",
-            "write_todos_tool",
-            "todo_failure_retry_middleware",
-            "dangling_tool_call_middleware",
-            "work_mode_middleware",
-            "title_middleware",
-        }:
+        # TODO(activity-timeline): replace this string-coupled allow-list with a
+        # decorator-based registry so renaming a middleware doesn't silently
+        # drop its events from the timeline.
+        if source in _ACTIVITY_FALLBACK_SOURCES:
             line = "CapyHome is working on the next step..."
         else:
             return None

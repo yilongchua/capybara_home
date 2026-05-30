@@ -49,6 +49,9 @@ logger = logging.getLogger(__name__)
 _WORK_MODE_REPEAT_THRESHOLD = 5
 _IN_PROGRESS_SELF_HEAL_GRACE_SECONDS = 60
 _INSTRUCTION_FIELD_MAX_CHARS = 4000
+# Cap the SSE replay buffer so a persistently flaky stream writer can't blow
+# up state. Oldest events are dropped first.
+_MAX_SSE_BUFFER = 50
 
 
 def _utc_now_iso() -> str:
@@ -110,10 +113,15 @@ class WorkModeMiddlewareState(AgentState):
     deferred_task_calls: NotRequired[list[dict] | None]
 
 
+_KNOWN_PLAN_STATUSES = {"draft", "approved", "executing", "completed"}
+
+
 def _normalize_plan_status(raw: Any) -> str:
     value = str(raw or "").strip().lower()
-    if value in {"draft", "approved", "executing", "completed"}:
+    if value in _KNOWN_PLAN_STATUSES:
         return value
+    if value:
+        logger.warning("Unknown plan status %r coerced to 'draft'", value)
     return "draft"
 
 
@@ -271,7 +279,36 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
             completed_before = current_completed
         newly_completed = current_completed - completed_before
 
-        writer = get_stream_writer()
+        # SSE replay buffer (#21): emit failures keep events queued in
+        # `phase_execution.pending_sse_events` so a flaky stream writer can't
+        # permanently desync the UI from server state. We flush backlog before
+        # sending new events; once an emit fails this cycle, remaining events
+        # for this cycle go straight to the buffer (no retry storm).
+        sse_pending_in = list(existing_pe.get("pending_sse_events") or [])
+        sse_buffer: list[dict] = list(sse_pending_in)
+        sse_emit_disabled = False
+
+        def _safe_emit(event: dict) -> None:
+            nonlocal sse_emit_disabled, sse_buffer
+            if sse_emit_disabled:
+                sse_buffer.append(event)
+                return
+            try:
+                writer = get_stream_writer()
+                while sse_buffer:
+                    writer(sse_buffer[0])
+                    sse_buffer.pop(0)
+                writer(event)
+            except Exception:
+                logger.exception("SSE emit failed for %s; buffering", event.get("type"))
+                sse_emit_disabled = True
+                sse_buffer.append(event)
+
+        def _finalize_sse_buffer() -> list[dict]:
+            return sse_buffer[-_MAX_SSE_BUFFER:]
+
+        def _sse_state_changed() -> bool:
+            return sse_buffer != sse_pending_in
 
         if newly_completed:
             node_by_id = {n["id"]: n for n in nodes}
@@ -280,17 +317,14 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
                 if node is None:
                     continue
                 phase_index = next((i for i, n in enumerate(nodes) if n["id"] == todo_id), 0)
-                try:
-                    writer({
-                        "type": "phase_completed",
-                        "source": "work_mode_middleware",
-                        "todo_id": todo_id,
-                        "content": node.get("content", ""),
-                        "phase_index": phase_index,
-                        "completed_at": _utc_now_iso(),
-                    })
-                except Exception:
-                    logger.exception("Failed to emit phase_completed SSE for %s", todo_id)
+                _safe_emit({
+                    "type": "phase_completed",
+                    "source": "work_mode_middleware",
+                    "todo_id": todo_id,
+                    "content": node.get("content", ""),
+                    "phase_index": phase_index,
+                    "completed_at": _utc_now_iso(),
+                })
 
         # ── Find next ready todo ───────────────────────────────────────────────
         ready_ids = _materialize_ready_ids(nodes)
@@ -315,6 +349,8 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
                 state=state,
                 nodes=nodes,
                 pending_nodes=pending_nodes,
+                safe_emit=_safe_emit,
+                finalize_sse_buffer=_finalize_sse_buffer,
             )
         if not pending_ready and has_in_progress:
             if existing_pe.get("ephemeral_instruction_text"):
@@ -324,6 +360,14 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
                         "completed_snapshot_ids": sorted(current_completed),
                         "ephemeral_instruction_text": "",
                         "ephemeral_instruction_todo_id": "",
+                        "pending_sse_events": _finalize_sse_buffer(),
+                    }
+                }
+            if _sse_state_changed():
+                return {
+                    "phase_execution": {
+                        **existing_pe,
+                        "pending_sse_events": _finalize_sse_buffer(),
                     }
                 }
             return None
@@ -344,6 +388,7 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
                         "completed_snapshot_ids": sorted(current_completed),
                         "ephemeral_instruction_text": "",
                         "ephemeral_instruction_todo_id": "",
+                        "pending_sse_events": _finalize_sse_buffer(),
                     },
                 }
                 if graph_update is not None:
@@ -356,6 +401,14 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
                         "completed_snapshot_ids": sorted(current_completed),
                         "ephemeral_instruction_text": "",
                         "ephemeral_instruction_todo_id": "",
+                        "pending_sse_events": _finalize_sse_buffer(),
+                    }
+                }
+            if _sse_state_changed():
+                return {
+                    "phase_execution": {
+                        **existing_pe,
+                        "pending_sse_events": _finalize_sse_buffer(),
                     }
                 }
             return None
@@ -366,19 +419,16 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
         phase_index = next((i for i, n in enumerate(nodes) if n["id"] == next_todo["id"]), 0)
         total_phases = len(nodes)
 
-        try:
-            safe_phase_content = _instruction_text(next_todo.get("content", ""))
-            writer({
-                "type": "phase_started",
-                "source": "work_mode_middleware",
-                "todo_id": next_todo["id"],
-                "content": safe_phase_content,
-                "subagent_type": next_todo.get("subagent_type"),
-                "phase_index": phase_index,
-                "total_phases": total_phases,
-            })
-        except Exception:
-            logger.exception("Failed to emit phase_started SSE for %s", next_todo["id"])
+        safe_phase_content = _instruction_text(next_todo.get("content", ""))
+        _safe_emit({
+            "type": "phase_started",
+            "source": "work_mode_middleware",
+            "todo_id": next_todo["id"],
+            "content": safe_phase_content,
+            "subagent_type": next_todo.get("subagent_type"),
+            "phase_index": phase_index,
+            "total_phases": total_phases,
+        })
 
         raw_todo_content = next_todo.get("content", "")
         todo_content = _instruction_text(raw_todo_content)
@@ -516,6 +566,7 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
                 "current_phase": phase_index,
                 "total_phases": total_phases,
                 "phase_results": phase_results,
+                "pending_sse_events": _finalize_sse_buffer(),
                 "repeat_counts": repeat_counts,
                 "forced_reconcile_done": forced_reconcile_done,
                 "in_progress_started_at": in_progress_started_at,
@@ -545,21 +596,34 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
         state: WorkModeMiddlewareState,
         nodes: list[dict],
         pending_nodes: list[dict],
+        safe_emit: Callable[[dict], None] | None = None,
+        finalize_sse_buffer: Callable[[], list[dict]] | None = None,
     ) -> dict[str, Any] | None:
         """Emit a plan_adapted SSE so the UI can surface the stall.
 
         Work Mode does not auto-respawn Plan Mode — the user decides whether to
-        switch into Plan Mode to revise the plan. The adaptation_attempts counter
-        is kept as a diagnostic so repeated stalls are visible in state.
+        switch into Plan Mode to revise the plan. The SSE is emitted once per
+        distinct stall topology: the (blocked_ids, pending_ids) signature is
+        stored in state and the event only re-fires when the user changes the
+        plan enough to alter that signature. `adaptation_attempts` only advances
+        when a new SSE actually fires, so it stays meaningful as "times the UI
+        was told."
+
+        The ``safe_emit`` / ``finalize_sse_buffer`` callbacks integrate with the
+        cycle-level replay buffer (#21) so a failed plan_adapted emit is
+        re-tried on the next cycle instead of being lost.
         """
         existing_pe: dict = dict(state.get("phase_execution") or {})
         current_attempts: int = int(existing_pe.get("adaptation_attempts") or 0)
 
-        blocked_ids = [n["id"] for n in nodes if n.get("status") == "blocked"]
+        blocked_ids = sorted(n["id"] for n in nodes if n.get("status") == "blocked")
+        pending_ids = sorted(n["id"] for n in pending_nodes)
+        stall_signature = [blocked_ids, pending_ids]
+        last_signature = existing_pe.get("plan_adapted_stall_signature")
+        should_emit = stall_signature != last_signature
 
-        try:
-            writer = get_stream_writer()
-            writer({
+        if should_emit:
+            event = {
                 "type": "plan_adapted",
                 "source": "work_mode_middleware",
                 "blocked_ids": blocked_ids,
@@ -568,20 +632,29 @@ class WorkModeMiddleware(AgentMiddleware[WorkModeMiddlewareState]):
                     "Switch to Plan Mode to revise the plan."
                 ),
                 "adaptation_attempt": current_attempts + 1,
-            })
-        except Exception:
-            logger.exception("Failed to emit plan_adapted SSE")
+            }
+            if safe_emit is not None:
+                safe_emit(event)
+            else:
+                # Standalone caller (no cycle-level buffer). Best-effort emit.
+                try:
+                    get_stream_writer()(event)
+                except Exception:
+                    logger.exception("Failed to emit plan_adapted SSE")
 
-        return {
-            "phase_execution": {
-                **existing_pe,
-                "plan_adapted": True,
-                "adaptation_notes": f"Blocked todos: {blocked_ids}",
-                "adaptation_attempts": current_attempts + 1,
-                "ephemeral_instruction_text": "",
-                "ephemeral_instruction_todo_id": "",
-            },
+        phase_execution_update: dict[str, Any] = {
+            **existing_pe,
+            "plan_adapted": True,
+            "adaptation_notes": f"Blocked todos: {blocked_ids}",
+            "adaptation_attempts": current_attempts + (1 if should_emit else 0),
+            "plan_adapted_stall_signature": stall_signature,
+            "ephemeral_instruction_text": "",
+            "ephemeral_instruction_todo_id": "",
         }
+        if finalize_sse_buffer is not None:
+            phase_execution_update["pending_sse_events"] = finalize_sse_buffer()
+
+        return {"phase_execution": phase_execution_update}
 
 
 def _create_work_mode(ctx: Any) -> WorkModeMiddleware | None:

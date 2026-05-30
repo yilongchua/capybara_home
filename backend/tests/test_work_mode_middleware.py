@@ -427,6 +427,62 @@ class TestPlanAdaptation:
         assert result is not None
         assert result["phase_execution"]["adaptation_attempts"] == 2
 
+    def test_plan_adapted_sse_emits_once_per_unchanged_stall(self):
+        """#18: repeated cycles with the same stall topology emit only one SSE."""
+        mw = WorkModeMiddleware()
+        nodes = [_node("t1", "Blocked", status="blocked"), _node("t2", "Pending")]
+        emitted: list[dict] = []
+
+        def _writer(event):
+            emitted.append(event)
+
+        with patch(
+            "src.agents.middlewares.work_mode_middleware.get_stream_writer",
+            return_value=_writer,
+        ), patch(
+            "src.agents.middlewares.work_mode_middleware._materialize_ready_ids",
+            return_value=[],
+        ):
+            # First cycle: signature absent → emit.
+            first = mw.before_model(_state(nodes=nodes), _runtime())
+            assert first is not None
+            first_pe = first["phase_execution"]
+            # Second cycle: same stall topology, signature already stored → no emit.
+            second = mw.before_model(_state(nodes=nodes, phase_execution=first_pe), _runtime())
+
+        adapted = [e for e in emitted if e.get("type") == "plan_adapted"]
+        assert len(adapted) == 1
+        assert second is not None
+        assert second["phase_execution"]["adaptation_attempts"] == first_pe["adaptation_attempts"]
+
+    def test_plan_adapted_sse_re_arms_when_topology_changes(self):
+        """#18: when the user edits the plan and stall topology changes, the SSE fires again."""
+        mw = WorkModeMiddleware()
+        emitted: list[dict] = []
+
+        def _writer(event):
+            emitted.append(event)
+
+        with patch(
+            "src.agents.middlewares.work_mode_middleware.get_stream_writer",
+            return_value=_writer,
+        ), patch(
+            "src.agents.middlewares.work_mode_middleware._materialize_ready_ids",
+            return_value=[],
+        ):
+            initial_nodes = [_node("t1", status="blocked")]
+            first = mw.before_model(_state(nodes=initial_nodes), _runtime())
+            # User added a new blocked node → different signature → re-arm.
+            changed_nodes = [_node("t1", status="blocked"), _node("t2", status="blocked")]
+            second = mw.before_model(
+                _state(nodes=changed_nodes, phase_execution=first["phase_execution"]),
+                _runtime(),
+            )
+
+        adapted = [e for e in emitted if e.get("type") == "plan_adapted"]
+        assert len(adapted) == 2
+        assert second["phase_execution"]["adaptation_attempts"] == 2
+
     def test_no_auto_respawn_even_in_auto_mode(self):
         """Auto mode used to spawn Plan Mode re-runs; that path has been removed.
 
@@ -457,6 +513,94 @@ class TestPlanAdaptation:
 
         assert result is not None
         assert result["phase_execution"]["adaptation_attempts"] == 1
+
+
+# ---------------------------------------------------------------------------
+# #21: SSE replay buffer
+# ---------------------------------------------------------------------------
+
+class TestSSEReplayBuffer:
+    def test_failed_emit_is_buffered_in_phase_execution(self):
+        """#21: when get_stream_writer raises, the event must land in pending_sse_events."""
+        mw = WorkModeMiddleware()
+        nodes = [_node("t1", "Task", status="blocked")]
+
+        def _raising_writer():
+            raise RuntimeError("stream closed")
+
+        with patch(
+            "src.agents.middlewares.work_mode_middleware.get_stream_writer",
+            _raising_writer,
+        ), patch(
+            "src.agents.middlewares.work_mode_middleware._materialize_ready_ids",
+            return_value=[],
+        ):
+            result = mw.before_model(_state(nodes=nodes), _runtime())
+
+        assert result is not None
+        buffered = result["phase_execution"].get("pending_sse_events") or []
+        assert len(buffered) == 1
+        assert buffered[0]["type"] == "plan_adapted"
+
+    def test_next_cycle_drains_backlog_then_emits_new_event(self):
+        """#21: a successful writer on the next cycle drains the backlog before
+        the current event."""
+        mw = WorkModeMiddleware()
+        # Pretend a prior cycle buffered one event. Use a blocked-only stall so
+        # we hit _handle_plan_adapted; combine with a topology change so the
+        # plan_adapted event re-arms and a new emit is attempted.
+        nodes = [_node("t1", status="blocked"), _node("t2", status="blocked")]
+        prior_pe = {
+            "pending_sse_events": [
+                {"type": "phase_completed", "todo_id": "old", "phase_index": 0},
+            ],
+            "plan_adapted_stall_signature": [["t1"], ["t1"]],  # different from current
+        }
+        emitted: list[dict] = []
+
+        with patch(
+            "src.agents.middlewares.work_mode_middleware.get_stream_writer",
+            return_value=lambda e: emitted.append(e),
+        ), patch(
+            "src.agents.middlewares.work_mode_middleware._materialize_ready_ids",
+            return_value=[],
+        ):
+            result = mw.before_model(
+                _state(nodes=nodes, phase_execution=prior_pe),
+                _runtime(),
+            )
+
+        # Old event drained first, new plan_adapted second.
+        types_emitted = [e["type"] for e in emitted]
+        assert types_emitted == ["phase_completed", "plan_adapted"]
+        # Buffer cleared.
+        assert result is not None
+        assert result["phase_execution"].get("pending_sse_events") == []
+
+    def test_buffer_is_bounded(self):
+        """#21: buffer is capped so a persistently flaky writer can't blow up state."""
+        from src.agents.middlewares.work_mode_middleware import _MAX_SSE_BUFFER
+
+        mw = WorkModeMiddleware()
+        nodes = [_node("t1", status="blocked")]
+        # Seed with a backlog larger than the cap; ensure final buffer is bounded.
+        oversized = [{"type": "phase_completed", "todo_id": f"old-{i}", "phase_index": i} for i in range(_MAX_SSE_BUFFER + 25)]
+        prior_pe = {"pending_sse_events": oversized}
+
+        def _raising_writer():
+            raise RuntimeError("stream closed")
+
+        with patch(
+            "src.agents.middlewares.work_mode_middleware.get_stream_writer",
+            _raising_writer,
+        ), patch(
+            "src.agents.middlewares.work_mode_middleware._materialize_ready_ids",
+            return_value=[],
+        ):
+            result = mw.before_model(_state(nodes=nodes, phase_execution=prior_pe), _runtime())
+
+        buffered = result["phase_execution"]["pending_sse_events"]
+        assert len(buffered) == _MAX_SSE_BUFFER
 
 
 # ---------------------------------------------------------------------------

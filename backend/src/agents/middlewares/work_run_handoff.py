@@ -19,8 +19,27 @@ from src.sandbox.path_mapping import replace_virtual_path
 logger = logging.getLogger(__name__)
 
 _HANDOFF_GUARD = threading.Lock()
-_IN_FLIGHT_HANDOFFS: set[str] = set()
+# Maps thread_id → monotonic timestamp when the handoff was started. We use
+# a dict (not a set) so a poisoned thread_id can't permanently block re-handoffs
+# if the daemon dies before its `finally` cleanup runs (process restart,
+# SIGKILL, blocking import). Entries older than `_IN_FLIGHT_HANDOFF_TTL_SECONDS`
+# are treated as stale and overwritten on a fresh spawn attempt.
+_IN_FLIGHT_HANDOFFS: dict[str, float] = {}
+_IN_FLIGHT_HANDOFF_TTL_SECONDS = 300.0  # 5 minutes
 _VALID_TARGET_ENDPOINTS = {"primary", "helper"}
+
+
+def _in_flight_handoff_present(thread_id: str, *, now: float | None = None) -> bool:
+    """Caller must hold `_HANDOFF_GUARD`."""
+    started_at = _IN_FLIGHT_HANDOFFS.get(thread_id)
+    if started_at is None:
+        return False
+    current = now if now is not None else time.monotonic()
+    if current - started_at >= _IN_FLIGHT_HANDOFF_TTL_SECONDS:
+        # Stale entry — assume the prior daemon died and let a fresh spawn through.
+        _IN_FLIGHT_HANDOFFS.pop(thread_id, None)
+        return False
+    return True
 
 
 def _run_awaitable_in_worker(value: Any, loop: asyncio.AbstractEventLoop | None) -> Any:
@@ -154,13 +173,23 @@ def _run_title_handoff_if_missing(*, thread_id: str, delay_seconds: float) -> No
             return
         fallback_title = _derive_title_from_state(values if isinstance(values, dict) else {})
         # Thread may still be near a checkpoint boundary; retry briefly on conflict.
-        for _ in range(4):
+        # CONTRACT (see code-review #15): this writer touches ONLY the top-level
+        # `title` state key. The work-handoff writer touches ONLY the `plan` key.
+        # Disjoint keys → no collision even when both run concurrently. Do NOT
+        # add `plan` or other keys to this payload without revisiting the race.
+        # Exponential backoff (Handoff #6): the original fixed 0.4s sleep kept
+        # hammering the SDK on throttle. 0.4s → 0.8s → 1.6s spaces retries out.
+        backoff_seconds = 0.4
+        for attempt in range(4):
             try:
                 result = client.threads.update_state(thread_id, {"title": fallback_title})
                 _run_awaitable_in_worker(result, loop)
                 return
             except Exception:
-                time.sleep(0.4)
+                if attempt == 3:
+                    raise
+                time.sleep(backoff_seconds)
+                backoff_seconds *= 2
     except Exception:
         logger.exception("Automatic title handoff failed for thread %s", thread_id)
     finally:
@@ -171,7 +200,7 @@ def spawn_title_handoff_if_missing(*, thread_id: str, delay_seconds: float = 0.6
     worker = threading.Thread(
         target=_run_title_handoff_if_missing,
         kwargs={"thread_id": thread_id, "delay_seconds": delay_seconds},
-        name=f"title-handoff-{thread_id[:8]}{thread_name_suffix}",
+        name=f"title-handoff-{str(thread_id or '')[:8]}{thread_name_suffix}",
         daemon=True,
     )
     worker.start()
@@ -303,6 +332,12 @@ def _run_work_mode_handoff(
                     latest_values = values
                 plan = latest_values.get("plan") if isinstance(latest_values, dict) else None
                 if isinstance(plan, dict):
+                    # CONTRACT (see code-review #15): payload contains ONLY the
+                    # top-level `plan` key. The title-handoff writer touches
+                    # ONLY `title`. Disjoint keys → no collision. plan.md is
+                    # rendered from `plan["title"]` (planner-set), not the
+                    # top-level `state["title"]`, so the title handoff has no
+                    # influence on plan.md output.
                     try:
                         result = lg_client.threads.update_state(thread_id, {"plan": mark_handoff_succeeded(plan)})
                         _run_awaitable_in_worker(result, loop)
@@ -360,10 +395,10 @@ def spawn_work_mode_handoff(
     """Spawn a daemon that starts a fresh Work Mode run on the same thread."""
 
     with _HANDOFF_GUARD:
-        if thread_id in _IN_FLIGHT_HANDOFFS:
+        if _in_flight_handoff_present(thread_id):
             logger.info("Skipping duplicate work-mode handoff for thread %s", thread_id)
             return
-        _IN_FLIGHT_HANDOFFS.add(thread_id)
+        _IN_FLIGHT_HANDOFFS[thread_id] = time.monotonic()
 
     def _run_with_cleanup() -> None:
         try:
@@ -376,13 +411,14 @@ def spawn_work_mode_handoff(
             )
         finally:
             with _HANDOFF_GUARD:
-                _IN_FLIGHT_HANDOFFS.discard(thread_id)
+                _IN_FLIGHT_HANDOFFS.pop(thread_id, None)
 
+    safe_thread_id = str(thread_id or "")[:8]
     submitted = submit_background_task(
-        f"work-mode-handoff-{thread_id[:8]}{thread_name_suffix}",
+        f"work-mode-handoff-{safe_thread_id}{thread_name_suffix}",
         _run_with_cleanup,
     )
     if not submitted:
         with _HANDOFF_GUARD:
-            _IN_FLIGHT_HANDOFFS.discard(thread_id)
+            _IN_FLIGHT_HANDOFFS.pop(thread_id, None)
         logger.warning("Could not submit work-mode handoff for thread %s; background executor is full", thread_id)

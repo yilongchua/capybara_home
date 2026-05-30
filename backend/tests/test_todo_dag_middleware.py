@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import HumanMessage
 
-from src.agents.middlewares.todo_dag_middleware import TodoDagMiddleware, _is_acyclic, find_dangling_deps, normalize_todo_nodes
+from src.agents.middlewares.todo_dag_middleware import TodoDagMiddleware, _is_acyclic, find_dangling_deps, merge_todo_nodes, normalize_todo_nodes
 from src.tools.builtins.write_todos_tool import write_todos_tool
 
 
@@ -27,6 +27,72 @@ def test_normalize_todos_rejects_cycles():
                 {"id": "b", "content": "B", "depends_on": ["a"]},
             ]
         )
+
+
+def test_merge_todo_nodes_does_not_alias_steps_from_source():
+    """#20: merged nodes must not share their `steps` dicts with the input payload."""
+    source_step = {"description": "original", "completion_requirement": "done"}
+    existing = [
+        {
+            "id": "a",
+            "content": "A",
+            "status": "pending",
+            "depends_on": [],
+            "steps": [source_step],
+        }
+    ]
+    merged = merge_todo_nodes(existing, [])
+
+    # Mutating the source must not bleed into the merged copy.
+    source_step["description"] = "mutated"
+    assert merged[0]["steps"][0]["description"] == "original"
+
+    # Replacing steps via merge must also detach from the raw payload.
+    new_step = {"description": "patched", "completion_requirement": "done"}
+    patched = merge_todo_nodes(existing, [{"id": "a", "steps": [new_step]}])
+    new_step["description"] = "mutated-again"
+    assert patched[0]["steps"][0]["description"] == "patched"
+
+
+def test_merge_todo_nodes_appended_new_node_detaches_steps():
+    """#20: the new-node branch of merge_todo_nodes must also detach `steps`."""
+    new_step = {"description": "original", "completion_requirement": "done"}
+    merged = merge_todo_nodes([], [{"id": "fresh", "content": "Fresh", "steps": [new_step]}])
+    new_step["description"] = "mutated"
+    assert merged[0]["steps"][0]["description"] == "original"
+
+
+def test_normalize_todo_nodes_detaches_steps_from_source():
+    """#20: normalize_todo_nodes is the planner entry point — must not alias steps."""
+    source_step = {"description": "original", "completion_requirement": "done"}
+    normalized = normalize_todo_nodes(
+        [{"id": "a", "content": "A", "steps": [source_step]}]
+    )
+    source_step["description"] = "mutated"
+    assert normalized[0]["steps"][0]["description"] == "original"
+
+
+def test_write_todos_tool_merge_passes_through_steps_without_aliasing():
+    """#20: the write_todos_tool's local merge_todo_nodes also defends against aliasing.
+
+    The tool itself never writes `steps`, but planner-set values pass through it
+    when the LLM patches other fields on the same todo.
+    """
+    from src.tools.builtins.write_todos_tool import merge_todo_nodes as tool_merge
+
+    planner_step = {"description": "original", "completion_requirement": "done"}
+    existing = [
+        {
+            "id": "a",
+            "content": "A",
+            "status": "pending",
+            "depends_on": [],
+            "steps": [planner_step],
+        }
+    ]
+    merged = tool_merge(existing, [{"id": "a", "status": "in_progress"}])
+    planner_step["description"] = "mutated"
+    assert merged[0]["steps"][0]["description"] == "original"
 
 
 def test_cycle_check_is_separate_from_dangling_dependency_detection():
@@ -257,7 +323,7 @@ def test_before_model_injects_reminder_when_write_todos_scrolled_out():
     }
     update = middleware.before_model(state, _runtime())
     assert update is not None
-    assert "todo_reminder" == update["messages"][0].name
+    assert "todo_dag_reminder" == update["messages"][0].name
 
 
 # ── P4 reminder-deduplication tests ──────────────────────────────────────────
@@ -270,7 +336,7 @@ def test_before_model_skips_reminder_when_recent_reminder_present():
     state = {
         "messages": [
             HumanMessage(content="user question"),
-            HumanMessage(name="todo_reminder", content="<system_reminder>...</system_reminder>"),
+            HumanMessage(name="todo_dag_reminder", content="<system_reminder>...</system_reminder>"),
             AIMessage(content="model response"),
         ],
         "todo_graph": {
@@ -291,7 +357,7 @@ def test_before_model_allows_reminder_when_no_recent_reminder():
     # 7 messages; the reminder was injected earlier and is outside the 6-message window.
     state = {
         "messages": [
-            HumanMessage(name="todo_reminder", content="<system_reminder>old</system_reminder>"),
+            HumanMessage(name="todo_dag_reminder", content="<system_reminder>old</system_reminder>"),
             HumanMessage(content="q1"),
             AIMessage(content="a1"),
             HumanMessage(content="q2"),
@@ -307,4 +373,26 @@ def test_before_model_allows_reminder_when_no_recent_reminder():
     }
     update = middleware.before_model(state, _runtime())
     assert update is not None, "Reminder should be injected when none is within the last 6 messages"
-    assert update["messages"][0].name == "todo_reminder"
+    assert update["messages"][0].name == "todo_dag_reminder"
+
+
+def test_dag_reminder_skipped_when_list_mode_reminder_recently_injected():
+    """#17: DAG guard recognizes a legacy `todo_reminder` so a config-flip
+    from list mode to DAG mode mid-thread doesn't stack reminders."""
+    from langchain_core.messages import AIMessage
+
+    middleware = TodoDagMiddleware()
+    state = {
+        "messages": [
+            HumanMessage(content="q"),
+            HumanMessage(name="todo_reminder", content="<system_reminder>legacy</system_reminder>"),
+            AIMessage(content="a"),
+        ],
+        "todo_graph": {
+            "nodes": [{"id": "a", "content": "Task", "status": "pending", "depends_on": []}],
+            "ready_ids": ["a"],
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    }
+    update = middleware.before_model(state, _runtime())
+    assert update is None

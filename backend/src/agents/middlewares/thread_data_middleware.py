@@ -78,16 +78,38 @@ class ThreadDataMiddleware(AgentMiddleware[ThreadDataMiddlewareState]):
     def before_agent(self, state: ThreadDataMiddlewareState, runtime: Runtime) -> dict | None:
         thread_id = (getattr(runtime, "context", None) or {}).get("thread_id") if runtime else None
         if thread_id is None:
-            # Fallback to UUID for local test scripts that omit context
+            # Gate the UUID fallback behind an explicit test-mode env var so a
+            # production misconfiguration that drops thread_id fails loudly
+            # (instead of silently creating disposable per-turn threads, which
+            # looks like "state isn't persisting" and is very hard to debug).
+            if not os.environ.get("CAPYHOME_TEST_MODE"):
+                raise RuntimeError(
+                    "ThreadDataMiddleware: thread_id is missing from runtime.context. "
+                    "Set CAPYHOME_TEST_MODE=1 to enable the disposable-UUID fallback "
+                    "intended for local test scripts only."
+                )
             import uuid
             thread_id = "test-" + str(uuid.uuid4())
-            
+            logger.warning(
+                "ThreadDataMiddleware: thread_id missing — using disposable test thread %s "
+                "(CAPYHOME_TEST_MODE is set; do not use in production)",
+                thread_id,
+            )
+
         if self._lazy_init:
             paths = self._get_thread_paths(thread_id)
         else:
             paths = self._create_thread_directories(thread_id)
 
-        self._probe_writability(paths, runtime)
+        # `_probe_writability` creates directories via os.makedirs regardless of
+        # `_lazy_init`. That's intentional: probing without ensuring the path
+        # exists would always fail in lazy mode. Run the probe only when we're
+        # not in lazy mode (eager path already created them) OR when we created
+        # them just above — i.e., always when `paths` came from
+        # `_create_thread_directories`. When `_lazy_init=True`, defer the probe
+        # entirely so the flag actually defers directory I/O.
+        if not self._lazy_init:
+            self._probe_writability(paths, runtime)
 
         return {
             "thread_data": {

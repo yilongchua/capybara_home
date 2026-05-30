@@ -45,8 +45,7 @@ class MountFolderMiddleware(AgentMiddleware[MountFolderState]):
     def _mount_block(self, mounted_path_str: str) -> str:
         lines = [
             "<mounted_folder>",
-            f"A local folder is mounted and accessible at"
-            f"virtual path: {VIRTUAL_MOUNT_PATH}",
+            f"A local folder is mounted and accessible at virtual path: {VIRTUAL_MOUNT_PATH}",
             f"Real path on host: {mounted_path_str}",
             f"Derived analysis artifacts such as 'repo_overview.md', 'failed_files.md', and 'file_catalog.md' are stored in {VIRTUAL_ANALYSE_PATH}.",
             f"Use {VIRTUAL_MOUNT_PATH}/<filename> with read_file, write_file, str_replace, bash, and ls.",
@@ -58,7 +57,6 @@ class MountFolderMiddleware(AgentMiddleware[MountFolderState]):
     @override
     def before_agent(self, state: MountFolderState, runtime: Runtime) -> dict | None:
         context = runtime.context if isinstance(runtime.context, dict) else {}
-        mode = str(context.get("mode") or "").strip().lower() or "work"
         thread_id = context.get("thread_id")
         if not thread_id:
             return None
@@ -87,9 +85,6 @@ class MountFolderMiddleware(AgentMiddleware[MountFolderState]):
         # /mnt/user-data/mounted/* → <real folder path>/*
         existing_thread_data: ThreadDataState = state.get("thread_data") or {}
         updated_thread_data: ThreadDataState = {**existing_thread_data, "mounted_path": mounted_path_str}
-
-        if mode == "plan":
-            return {"thread_data": updated_thread_data}
 
         return {"thread_data": updated_thread_data}
 

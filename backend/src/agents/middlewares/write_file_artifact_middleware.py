@@ -7,13 +7,25 @@ file path into thread_state.artifacts via the merge_artifacts reducer.
 Without this, the file appears in the sidebar only while the tool call is
 streaming (via message-group.tsx auto-select) but is lost from the artifacts
 list on page refresh because thread.values.artifacts is never populated.
+
+Quality-gate contract
+---------------------
+``block_on_failure`` is honest only for **full-replace ``write_file``** calls
+where the final file content is known up-front from ``args["content"]``. The
+deterministic check runs *before* the handler in that case, so a blocking
+failure can prevent the write entirely.
+
+For ``str_replace`` and ``write_file`` with ``append=True``, the final file
+content depends on the existing file state and is only knowable *after* the
+handler has already mutated the file. The post-write gate emits a warning
+ToolMessage asking the agent to perform a corrective edit; it cannot roll
+the write back. ``block_on_failure`` is effectively advisory on these paths.
 """
 
 from __future__ import annotations
 
 from fnmatch import fnmatch
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, override
 
 from langchain.agents import AgentState
@@ -78,6 +90,14 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
         return False
 
     def _quality_gate_precheck(self, request: ToolCallRequest) -> tuple[Command | None, bool]:
+        """Pre-write deterministic check.
+
+        Runs only for full-replace ``write_file`` calls where ``content`` is
+        the final file content. Returns ``(None, False)`` for ``str_replace``
+        and ``write_file append=True`` — those flow through
+        :meth:`_run_postwrite_gate` after the handler executes, because the
+        final file content depends on existing disk state.
+        """
         cfg = get_quality_gate_config()
         if not cfg.enabled:
             return None, False
@@ -181,6 +201,90 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
             }
         ), False
 
+    def _run_postwrite_gate(
+        self,
+        request: ToolCallRequest,
+        path: str,
+        final_content: str,
+    ) -> Command | None:
+        """Post-write deterministic check for edit-style tools.
+
+        For ``str_replace`` and ``write_file append=True`` the edit has
+        already landed on disk by the time we can read the final content.
+        This method cannot roll the write back: on failure it emits a
+        warning ToolMessage asking for a focused corrective edit, distinct
+        from the pre-write "retry write_file" wording so the agent
+        understands the original tool call has already taken effect.
+
+        The repair-pass counter still increments so subsequent pre-write
+        attempts on the same path inherit the count.
+        """
+        cfg = get_quality_gate_config()
+        if not cfg.enabled:
+            return None
+
+        check = check_report_quality(path, final_content)
+
+        state = request.state or {}
+        qg_state = (state.get("quality_gate") or {}) if isinstance(state, dict) else {}
+        repair_by_path = qg_state.get("repair_passes_by_path") if isinstance(qg_state, dict) else None
+        if not isinstance(repair_by_path, dict):
+            repair_by_path = {}
+
+        if check.ok:
+            return Command(
+                update={
+                    "quality_gate": {
+                        "status": "passed",
+                        "fail_reasons": [],
+                        "checked_path": path,
+                    },
+                }
+            )
+
+        current_passes = int(repair_by_path.get(path) or 0)
+        next_passes = current_passes + 1
+        next_repair_by_path = {**repair_by_path, path: next_passes}
+
+        append_runtime_event(
+            getattr(request, "runtime", None),
+            {
+                "source": "quality_gate_middleware",
+                "quality_gate_status": "failed",
+                "quality_gate_fail_reasons": check.reasons,
+                "repair_passes": next_passes,
+                "phase": "postwrite",
+            },
+        )
+
+        tool_name = str(request.tool_call.get("name") or "")
+        message_text = (
+            "QUALITY_GATE_POSTWRITE_FAILED: The edit completed but the resulting file failed deterministic checks. "
+            f"Reasons={check.reasons}. "
+            f"Repair pass {next_passes}/{cfg.max_repair_passes}. "
+            f"Perform a focused corrective edit (using {tool_name} or write_file) to address the listed reasons. "
+            "Do NOT simply retry the original call — the edit has already been applied. "
+            "Work section-by-section to minimize churn."
+        )
+
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content=message_text,
+                        tool_call_id=str(request.tool_call.get("id") or ""),
+                    )
+                ],
+                "quality_gate": {
+                    "status": "failed",
+                    "fail_reasons": check.reasons,
+                    "repair_passes": next_passes,
+                    "repair_passes_by_path": next_repair_by_path,
+                    "checked_path": path,
+                },
+            }
+        )
+
     def _promote_result(
         self,
         request: ToolCallRequest,
@@ -212,24 +316,13 @@ class WriteFileArtifactMiddleware(AgentMiddleware[AgentState]):
             precheck_messages = list(precheck.update.get("messages") or [])
 
         if not quality_update and get_quality_gate_config().enabled:
-            should_postcheck = tool_name == "str_replace" or (tool_name == "write_file" and bool(args.get("append")) if isinstance(args, dict) else False)
+            should_postcheck = tool_name == "str_replace" or (
+                tool_name == "write_file" and isinstance(args, dict) and bool(args.get("append"))
+            )
             if should_postcheck:
                 final_content = self._read_workspace_file(request, path)
                 if final_content is not None:
-                    postcheck_request = SimpleNamespace(
-                        tool_call={
-                            **request.tool_call,
-                            "args": {
-                                **args,
-                                "path": path,
-                                "content": final_content,
-                                "append": False,
-                            },
-                        },
-                        state=request.state,
-                        runtime=getattr(request, "runtime", None),
-                    )
-                    postcheck, _ = self._quality_gate_precheck(postcheck_request)  # type: ignore[arg-type]
+                    postcheck = self._run_postwrite_gate(request, path, final_content)
                     if isinstance(postcheck, Command) and postcheck.update:
                         quality_update = postcheck.update.get("quality_gate") or {}
                         precheck_messages.extend(postcheck.update.get("messages") or [])

@@ -12,10 +12,42 @@ from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
 from langgraph.runtime import Runtime
 
+from src.agents.common.runtime_context import get_runtime_context
 from src.agents.middlewares.handoff_sync import ensure_plan_state, sync_handoff_files_from_state
 from src.agents.middlewares.runtime_events import append_runtime_event
 
 logger = logging.getLogger(__name__)
+
+# Per-thread lock to serialize concurrent plan.md writes. Two background workers
+# for the same thread can otherwise race (e.g. when a quick second turn fires
+# before the first 1s settle delay elapses).
+_THREAD_SYNC_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_REGISTRY_LOCK = threading.Lock()
+
+
+def _get_thread_lock(thread_id: str) -> threading.Lock:
+    with _LOCKS_REGISTRY_LOCK:
+        lock = _THREAD_SYNC_LOCKS.get(thread_id)
+        if lock is None:
+            lock = threading.Lock()
+            _THREAD_SYNC_LOCKS[thread_id] = lock
+        return lock
+
+
+# Fields that the handoff sync helpers actually read. Snapshotting these
+# narrowly skips heavy unused state (viewed_images, uploaded_files, scratchpad,
+# etc.). `messages` and `todos` are needed because handoff_sync uses them for
+# title fallback and execution-notes rendering; we shallow-copy messages since
+# BaseMessage instances are effectively immutable for our purposes.
+_DEEP_COPY_FIELDS = (
+    "plan",
+    "todo_graph",
+    "artifacts",
+    "handoff_artifacts",
+    "thread_data",
+    "todos",
+)
+_SHALLOW_COPY_FIELDS = ("messages",)
 
 
 class PlanFileSyncState(AgentState):
@@ -40,11 +72,18 @@ def _extract_text(content: Any) -> str:
     return str(content)
 
 
-def _run_background_plan_sync(snapshot: dict[str, Any]) -> None:
+def _run_background_plan_sync(snapshot: dict[str, Any], thread_id: str) -> None:
+    # Brief settle delay so the foreground turn's state has propagated.
     time.sleep(1.0)
+    lock = _get_thread_lock(thread_id) if thread_id else None
     try:
-        ensure_plan_state(snapshot)
-        sync_handoff_files_from_state(snapshot)
+        if lock is not None:
+            with lock:
+                ensure_plan_state(snapshot)
+                sync_handoff_files_from_state(snapshot)
+        else:
+            ensure_plan_state(snapshot)
+            sync_handoff_files_from_state(snapshot)
     except Exception:
         logger.exception("Background plan file sync failed")
 
@@ -67,7 +106,7 @@ class PlanFileSyncMiddleware(AgentMiddleware[PlanFileSyncState]):
 
     @override
     def after_model(self, state: PlanFileSyncState, runtime: Runtime) -> dict | None:
-        runtime_context = getattr(runtime, "context", None) or {}
+        runtime_context = get_runtime_context(runtime)
         if bool(runtime_context.get("background_followup")):
             return None
         if not state.get("todo_graph") and not state.get("plan"):
@@ -79,12 +118,21 @@ class PlanFileSyncMiddleware(AgentMiddleware[PlanFileSyncState]):
         if not self._is_terminal_ai_response(state):
             return {"plan": ensured_plan} if not state.get("plan") else None
 
-        snapshot = copy.deepcopy(dict(state))
+        snapshot: dict[str, Any] = {}
+        for field in _DEEP_COPY_FIELDS:
+            value = state.get(field)
+            if value is not None:
+                snapshot[field] = copy.deepcopy(value)
+        for field in _SHALLOW_COPY_FIELDS:
+            value = state.get(field)
+            if value is not None:
+                snapshot[field] = list(value) if isinstance(value, list) else value
         snapshot["plan"] = ensured_plan
+        thread_id = str(runtime_context.get("thread_id") or "")
         worker = threading.Thread(
             target=_run_background_plan_sync,
-            kwargs={"snapshot": snapshot},
-            name=f"plan-file-sync-{str(runtime_context.get('thread_id') or '')[:8]}",
+            kwargs={"snapshot": snapshot, "thread_id": thread_id},
+            name=f"plan-file-sync-{thread_id[:8] if thread_id else 'anon'}",
             daemon=True,
         )
         worker.start()

@@ -158,6 +158,151 @@ class TestSkillRescue:
 
 
 # ---------------------------------------------------------------------------
+# Tool-call ↔ tool-result pair rescue (#29)
+# ---------------------------------------------------------------------------
+
+
+class TestToolCallPairRescue:
+    """Anthropic rejects context where a tool_use block has no matching
+    tool_result block. The pair-rescue step must drag matching counterparts
+    across the compaction boundary so the rebuilt thread stays valid."""
+
+    def test_orphan_tool_result_drags_parent_ai_message_into_preserved(self):
+        """ToolMessage stays in preserved but its parent AIMessage was being
+        summarized — pair rescue must drag the AIMessage back."""
+        mw = _make_mw()
+        ai_with_tc, tool_result = _ai_tool("/tmp/a.txt")
+        new_user = _human("follow-up question")
+        msgs = [ai_with_tc, tool_result, new_user]
+        for i, m in enumerate(msgs):
+            m.id = f"m-{i}"
+
+        # Cutoff at 1: AIMessage with tool_calls goes to_summarize,
+        # ToolMessage + new_user are preserved. ToolMessage is now an
+        # orphan tool_result — its parent tool_use is gone.
+        to_summarize, preserved = mw._partition_with_skill_rescue(msgs, cutoff_index=1)
+
+        assert ai_with_tc in preserved, "parent AIMessage must be rescued so tool_result is matched"
+        assert tool_result in preserved
+        assert ai_with_tc not in to_summarize
+
+    def test_orphan_tool_use_case_is_not_auto_rescued(self, caplog):
+        """The mirror case (AI with tool_calls in preserved, ToolMessage in
+        remaining) cannot arise from normal partition flow — TMs always
+        follow their parent AI in the original sequence, so if AI is
+        at/after cutoff, TM is too. Auto-rescuing the TM by prepending
+        would produce [TM, ..., AI] which violates Anthropic's invariant.
+
+        We deliberately do NOT rescue in this direction; the coherence
+        assertion logs a WARNING so any upstream bug producing this state
+        is surfaced rather than silently masked with wrong ordering.
+        """
+        mw = _make_mw()
+        caplog.set_level("WARNING")
+        ai_with_tc, tool_result = _ai_tool("/tmp/b.txt")
+        old_human = _human("earlier turn")
+        new_user = _human("new turn")
+
+        remaining = [old_human, tool_result]
+        preserved = [ai_with_tc, new_user]
+
+        new_remaining, rescued_preserved = mw._rescue_tool_call_pairs(remaining, preserved)
+
+        # Asymmetric: the orphan_tool_use direction is a no-op rescue.
+        assert rescued_preserved == [], (
+            "auto-rescuing this direction would produce [TM, AI] — wrong order for Anthropic"
+        )
+        assert new_remaining == remaining
+
+        # Coherence assertion should warn so the impossible-but-defensive case is loud.
+        mw._assert_tool_pair_coherence(preserved)
+        assert "orphan tool_call pairs" in caplog.text
+
+    def test_pair_rescue_noop_when_already_coherent(self):
+        """No mismatches → return ([], remaining/preserved unchanged sentinel)."""
+        mw = _make_mw()
+        ai_with_tc, tool_result = _ai_tool("/tmp/c.txt")
+        old_human = _human("a")
+        remaining = [old_human]
+        preserved = [ai_with_tc, tool_result]
+
+        new_remaining, rescued_preserved = mw._rescue_tool_call_pairs(remaining, preserved)
+
+        # Sentinel: empty rescued_preserved signals "no change needed".
+        assert rescued_preserved == []
+        assert new_remaining == remaining
+
+    def test_multi_tool_call_ai_rescued_when_both_tool_messages_orphan(self):
+        """Realistic scenario: AIMessage(tool_calls=[X, Y]) is in remaining (to
+        summarize), both TM(X) and TM(Y) are in preserved. The single AI must
+        be rescued — one rescue covers both orphan tool_results."""
+        mw = _make_mw()
+        ai = AIMessage(content="")
+        ai.tool_calls = [
+            {"name": "read_file", "args": {"path": "/x"}, "id": "tc-x"},
+            {"name": "read_file", "args": {"path": "/y"}, "id": "tc-y"},
+        ]
+        tm_x = ToolMessage(content="x contents", tool_call_id="tc-x")
+        tm_y = ToolMessage(content="y contents", tool_call_id="tc-y")
+        new_user = _human("next turn")
+        for i, m in enumerate([ai, tm_x, tm_y, new_user]):
+            m.id = f"m-{i}"
+
+        remaining = [ai]
+        preserved = [tm_x, tm_y, new_user]
+
+        new_remaining, rescued_preserved = mw._rescue_tool_call_pairs(remaining, preserved)
+
+        assert ai in rescued_preserved
+        assert ai not in new_remaining
+        # AI must precede both ToolMessages for Anthropic.
+        assert rescued_preserved.index(ai) < rescued_preserved.index(tm_x)
+        assert rescued_preserved.index(ai) < rescued_preserved.index(tm_y)
+
+    def test_coherence_warning_logged_when_orphan_cannot_be_rescued(self, caplog):
+        """If the matching counterpart is in neither remaining nor preserved
+        (e.g. it was never recorded), _assert_tool_pair_coherence logs a
+        WARNING. The list is not modified — strip is left to a follow-up."""
+        mw = _make_mw()
+        caplog.set_level("WARNING")
+        ai_orphan = AIMessage(content="")
+        ai_orphan.tool_calls = [{"name": "read_file", "args": {"path": "/z"}, "id": "tc-ghost"}]
+        ai_orphan.id = "ai-orphan"
+        plain = _human("ok")
+        plain.id = "plain"
+
+        mw._assert_tool_pair_coherence([ai_orphan, plain])
+
+        assert "orphan tool_call pairs" in caplog.text
+        assert "tc-ghost" in caplog.text
+
+    def test_partition_with_skill_rescue_keeps_pairs_coherent(self):
+        """End-to-end through _partition_with_skill_rescue: a tool_use/tool_result
+        split across cutoff must come out paired."""
+        mw = _make_mw()
+        ai_with_tc, tool_result = _ai_tool("/tmp/d.txt")
+        final_ai = AIMessage(content="done")
+        msgs = [ai_with_tc, tool_result, final_ai]
+        for i, m in enumerate(msgs):
+            m.id = f"m-{i}"
+
+        # Cutoff at 1 → tool_use goes to summarize, tool_result stays preserved.
+        to_summarize, preserved = mw._partition_with_skill_rescue(msgs, cutoff_index=1)
+
+        preserved_call_ids = mw._tool_call_ids(ai_with_tc) if ai_with_tc in preserved else set()
+        preserved_result_ids = {
+            getattr(m, "tool_call_id", None)
+            for m in preserved
+            if isinstance(m, ToolMessage)
+        } - {None}
+
+        # After rescue, every preserved tool_result must have a matching tool_use.
+        assert preserved_result_ids.issubset(preserved_call_ids), (
+            f"Orphan tool_result remains: preserved={preserved}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Hook dispatch
 # ---------------------------------------------------------------------------
 

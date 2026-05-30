@@ -7,8 +7,6 @@ from langchain_core.runnables import RunnableConfig
 
 from src.agents.common.middleware_registry import MiddlewareSpec, topological_sort_middleware_specs
 from src.agents.common.mode import normalize_runtime_mode, resolve_current_mode
-from src.agents.work_agent.prompt import apply_prompt_template
-from src.agents.work_agent.todo_prompts import TODO_LIST_SYSTEM_PROMPT, TODO_LIST_TOOL_DESCRIPTION
 from src.agents.memory.summarization_hook import memory_flush_hook
 from src.agents.middlewares.activity_timeline_middleware import ActivityTimelineMiddleware
 from src.agents.middlewares.autoresearch_middleware import AutoresearchMiddleware
@@ -23,11 +21,13 @@ from src.agents.middlewares.metrics_middleware import MetricsMiddleware
 from src.agents.middlewares.model_timeout_middleware import ModelTimeoutMiddleware
 from src.agents.middlewares.mount_folder_middleware import MountFolderMiddleware
 from src.agents.middlewares.permission_middleware import PermissionMiddleware
+
 # DEPRECATED: PhaseToolFilter and PlanExecutionGate middlewares are no longer
 # registered. web_search is now exposed in Plan Mode directly. Imports are kept
 # commented for reference; the middleware source files remain on disk.
 # from src.agents.middlewares.phase_tool_filter_middleware import PhaseToolFilterMiddleware
 from src.agents.middlewares.plan_evaluator_middleware import PlanEvaluatorMiddleware
+
 # from src.agents.middlewares.plan_execution_gate_middleware import PlanExecutionGateMiddleware
 from src.agents.middlewares.plan_file_sync_middleware import PlanFileSyncMiddleware
 from src.agents.middlewares.planner_middleware import PlannerMiddleware
@@ -56,6 +56,8 @@ from src.agents.middlewares.web_search_summary_middleware import WebSearchSummar
 from src.agents.middlewares.work_mode_middleware import _create_work_mode
 from src.agents.middlewares.write_file_artifact_middleware import WriteFileArtifactMiddleware
 from src.agents.thread_state import ThreadState
+from src.agents.work_agent.prompt import apply_prompt_template
+from src.agents.work_agent.todo_prompts import TODO_LIST_SYSTEM_PROMPT, TODO_LIST_TOOL_DESCRIPTION
 from src.config.agents_config import load_agent_config
 from src.config.app_config import get_app_config
 from src.config.evaluator_config import get_evaluator_config
@@ -65,6 +67,7 @@ from src.config.harness_config import get_harness_config
 from src.config.hooks_config import get_hooks_config
 from src.config.loop_detection_config import get_loop_detection_config
 from src.config.memory_config import get_memory_config
+from src.config.model_config import ModelConfig
 from src.config.planner_config import get_planner_config
 from src.config.recursion_pivot_config import get_recursion_pivot_config
 from src.config.resume_config import get_resume_config
@@ -126,6 +129,9 @@ def _model_config_context_tokens(model_name: str) -> int | None:
     return _positive_int(model_config.model_extra.get("context_window")) or _positive_int(model_config.model_extra.get("max_input_tokens"))
 
 
+_COMPACTION_FALLBACK_WARNED: set[str] = set()
+
+
 def _resolve_compaction_context_tokens(
     *,
     model: object,
@@ -144,10 +150,15 @@ def _resolve_compaction_context_tokens(
     if model_config_tokens is not None:
         return model_config_tokens
 
-    logger.warning(
-        "Summarization token-pressure trigger could not resolve model context size; falling back to %s tokens.",
-        _DEFAULT_COMPACTION_CONTEXT_TOKENS,
-    )
+    # Log the fallback once per model name to keep production logs quiet on
+    # cold-start of agents whose model has no resolvable context size.
+    if model_name not in _COMPACTION_FALLBACK_WARNED:
+        _COMPACTION_FALLBACK_WARNED.add(model_name)
+        logger.warning(
+            "Summarization token-pressure trigger could not resolve context size for model %r; falling back to %s tokens.",
+            model_name,
+            _DEFAULT_COMPACTION_CONTEXT_TOKENS,
+        )
     return _DEFAULT_COMPACTION_CONTEXT_TOKENS
 
 
@@ -200,6 +211,13 @@ def _normalize_token_only_keep(keep: tuple, context_tokens: int) -> tuple:
     if kind == "messages":
         logger.warning(
             "Replacing deprecated summarization message-count keep policy %r with keep=('tokens', %s).",
+            keep,
+            _DEFAULT_COMPACTION_KEEP_TOKENS,
+        )
+    else:
+        logger.warning(
+            "Unknown summarization keep policy kind %r in %r; falling back to keep=('tokens', %s).",
+            kind,
             keep,
             _DEFAULT_COMPACTION_KEEP_TOKENS,
         )
@@ -276,8 +294,10 @@ def _create_todo_list_middleware(is_plan_mode: bool) -> TodoMiddleware | None:
     )
 
 
-# Backwards-compat alias — tests still call ``_topological_sort_middleware_specs``.
-_topological_sort_middleware_specs = topological_sort_middleware_specs
+# Alias removed — call ``topological_sort_middleware_specs`` from
+# ``src.agents.common.middleware_registry`` directly. The leading-underscore
+# alias used to ease an in-progress rename of the public helper; tests have
+# been migrated to the public name.
 
 
 @dataclass
@@ -296,7 +316,7 @@ class _RegistryContext:
     max_primary_per_turn: int
     model_name: str | None
     agent_name: str | None
-    model_config: object | None
+    model_config: ModelConfig | None
     router: ModelRouter
 
 
@@ -446,6 +466,12 @@ def _create_todo_failure_retry(ctx: _RegistryContext) -> AgentMiddleware | None:
     return TodoFailureRetryMiddleware()
 
 
+def _create_plan_followup(ctx: _RegistryContext) -> AgentMiddleware | None:
+    if not ctx.is_plan_mode:
+        return None
+    return PlanFollowupMiddleware()
+
+
 def _create_title(ctx: _RegistryContext) -> AgentMiddleware | None:
     # Single-model invariant: title generation runs on the chat-selected model.
     return TitleMiddleware(model_name=resolve_model_name(ctx.model_name))
@@ -538,7 +564,7 @@ def _build_middleware_registry(
         MiddlewareSpec("scratchpad_task_memory", bind(_create_scratchpad_task_memory), after={"todo_failure_retry"}),
         MiddlewareSpec("plan_file_sync", lambda: PlanFileSyncMiddleware(), after={"scratchpad_task_memory"}),
         MiddlewareSpec("resume_state", bind(_create_resume_state), after={"plan_file_sync"}),
-        MiddlewareSpec("plan_followup", lambda: PlanFollowupMiddleware(), after={"resume_state", "evaluator"}),
+        MiddlewareSpec("plan_followup", bind(_create_plan_followup), after={"resume_state", "evaluator"}),
         # LoopDetectionMiddleware detects repetitive inputs (identical call-pattern hashes
         # and per-tool-type frequency saturation).
         MiddlewareSpec("loop_detection", bind(_create_loop_detection), after={"plan_followup"}),
@@ -598,7 +624,7 @@ def _build_middlewares(
         List of middleware instances.
     """
     specs = _build_middleware_registry(config, model_name=model_name, agent_name=agent_name, model_router=model_router)
-    ordered_specs = _topological_sort_middleware_specs(specs)
+    ordered_specs = topological_sort_middleware_specs(specs)
 
     middlewares: list[AgentMiddleware] = []
     for spec in ordered_specs:

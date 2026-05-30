@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Any, Literal, NotRequired, TypedDict, cast, override
@@ -11,6 +12,8 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelCallResult, ModelRequest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.runtime import Runtime
+
+logger = logging.getLogger(__name__)
 
 
 class TodoDagState(AgentState):
@@ -186,7 +189,7 @@ def normalize_todo_nodes(raw_todos: list[TodoNodeInput]) -> list[dict[str, Any]]
             node["completion_requirement"] = completion_requirement
         steps = raw.get("steps")
         if isinstance(steps, list) and steps:
-            node["steps"] = steps
+            node["steps"] = [dict(step) if isinstance(step, dict) else step for step in steps]
         nodes.append(node)
 
     ids = {node["id"] for node in nodes}
@@ -197,9 +200,17 @@ def normalize_todo_nodes(raw_todos: list[TodoNodeInput]) -> list[dict[str, Any]]
     return nodes
 
 
+def _clone_todo_node(node: dict[str, Any]) -> dict[str, Any]:
+    cloned = dict(node)
+    steps = node.get("steps")
+    if isinstance(steps, list):
+        cloned["steps"] = [dict(step) if isinstance(step, dict) else step for step in steps]
+    return cloned
+
+
 def merge_todo_nodes(existing_nodes: list[dict[str, Any]], raw_updates: list[TodoNodeInput]) -> list[dict[str, Any]]:
     """Patch todo graph by id and append unseen ids as new nodes."""
-    merged: list[dict[str, Any]] = [dict(node) for node in existing_nodes if isinstance(node, dict) and str(node.get("id") or "").strip()]
+    merged: list[dict[str, Any]] = [_clone_todo_node(node) for node in existing_nodes if isinstance(node, dict) and str(node.get("id") or "").strip()]
     by_id = {str(node["id"]): idx for idx, node in enumerate(merged)}
 
     def _valid_status(value: Any) -> str | None:
@@ -236,7 +247,7 @@ def merge_todo_nodes(existing_nodes: list[dict[str, Any]], raw_updates: list[Tod
         if "steps" in raw:
             steps = raw.get("steps")
             if isinstance(steps, list) and steps:
-                target["steps"] = steps
+                target["steps"] = [dict(step) if isinstance(step, dict) else step for step in steps]
             else:
                 target.pop("steps", None)
 
@@ -278,7 +289,7 @@ def merge_todo_nodes(existing_nodes: list[dict[str, Any]], raw_updates: list[Tod
             candidate["completion_requirement"] = completion_requirement
         steps = raw.get("steps")
         if isinstance(steps, list) and steps:
-            candidate["steps"] = steps
+            candidate["steps"] = [dict(step) if isinstance(step, dict) else step for step in steps]
         base_id = str(raw_id or candidate["id"])
         next_id = base_id
         suffix = 2
@@ -286,6 +297,13 @@ def merge_todo_nodes(existing_nodes: list[dict[str, Any]], raw_updates: list[Tod
             next_id = f"{base_id}-{suffix}"
             suffix += 1
         candidate["id"] = next_id
+        if next_id != base_id:
+            logger.debug(
+                "merge_todo_nodes: id collision on %r → %r (content=%r). Two distinct todos share a slug — consider re-titling one.",
+                base_id,
+                next_id,
+                content[:80],
+            )
         if not raw_id and next_id.startswith("todo-"):
             candidate["id"] = _slugify(content, len(merged) + idx)
             dedup_base = candidate["id"]
@@ -363,8 +381,10 @@ class TodoDagMiddleware(AgentMiddleware[TodoDagState]):
         if _todos_in_messages(messages):
             return None
         # Don't stack reminders: skip if one was already injected in the last ~3 turns.
+        # Check both names so that a config-flip from DAG to list mode (or back)
+        # mid-thread doesn't cause both middlewares to inject simultaneously.
         recent = messages[-6:] if len(messages) >= 6 else messages
-        if any(isinstance(m, HumanMessage) and getattr(m, "name", None) == "todo_reminder" for m in recent):
+        if any(isinstance(m, HumanMessage) and getattr(m, "name", None) in {"todo_reminder", "todo_dag_reminder"} for m in recent):
             return None
         # Surface clarification-gated todos so the agent sees why some todos
         # are not ready even though their deps are satisfied.
@@ -373,7 +393,7 @@ class TodoDagMiddleware(AgentMiddleware[TodoDagState]):
         if blocked_by_clarif:
             clarif_note = f"\nBlocked by pending clarifications: {sorted(blocked_by_clarif)}"
         return HumanMessage(
-            name="todo_reminder",
+            name="todo_dag_reminder",
             content=(
                 "<system_reminder>\n"
                 "Todo DAG remains active. Keep statuses current using `write_todos`.\n"

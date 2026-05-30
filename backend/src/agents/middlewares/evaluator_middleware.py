@@ -66,6 +66,24 @@ def _message_name(message: Any) -> str:
     return ""
 
 
+def _latest_real_ai_answer(messages: list[Any]) -> str:
+    """Walk backwards to the most recent genuine AI response, skipping synthetic
+    HumanMessages injected by the evaluator/planner pipeline.
+
+    ``messages[-1]`` is unreliable: on retry turns it's typically a
+    ``HumanMessage(name="evaluator_feedback", ...)`` from the prior cycle, and
+    using that content as the "latest answer" lets evaluator critique trigger
+    on its own echo (e.g. the 400-char draft-mode guard at line ~165).
+    """
+    for message in reversed(messages):
+        if _message_type(message) != "ai":
+            continue
+        text = _extract_text(getattr(message, "content", ""))
+        if text.strip():
+            return text
+    return ""
+
+
 def _has_successful_research_tool_use(messages: list[Any]) -> bool:
     for message in messages:
         if _message_type(message) != "tool":
@@ -160,7 +178,7 @@ class EvaluatorMiddleware(AgentMiddleware[EvaluatorState]):
         plan = state.get("plan") or {}
         plan_status = str(plan.get("status") or "draft").strip().lower()
         messages = state.get("messages", []) or []
-        latest_ai = _extract_text(getattr(messages[-1], "content", "")) if messages else ""
+        latest_ai = _latest_real_ai_answer(messages)
 
         if plan_status == "draft" and len(latest_ai.strip()) > 400:
             failures.append(
@@ -220,7 +238,7 @@ class EvaluatorMiddleware(AgentMiddleware[EvaluatorState]):
     def _evaluate_llm(self, state: EvaluatorState) -> tuple[bool, str]:
         messages = state.get("messages", []) or []
         plan = state.get("plan") or {}
-        latest_ai = _extract_text(getattr(messages[-1], "content", "")) if messages else ""
+        latest_ai = _latest_real_ai_answer(messages)
         model_name = self._router.resolve("evaluator", requested_model=self._requested_model)
         model = create_chat_model(name=model_name, thinking_enabled=False)
         prompt = _EVALUATOR_PROMPT_TEMPLATE.format(
@@ -235,9 +253,12 @@ class EvaluatorMiddleware(AgentMiddleware[EvaluatorState]):
         for line in text.splitlines():
             upper = line.strip().upper()
             if upper.startswith("VERDICT:"):
-                verdict = upper.split(":", 1)[1].strip().split()[0] if ":" in upper else None
+                tail = upper.split(":", 1)[1].strip().split() if ":" in upper else []
+                verdict = tail[0] if tail else None
                 break
-        if verdict is None:
+        # Treat empty `VERDICT:` (no value after the colon) the same as missing —
+        # otherwise `passed = "" == "PASS"` silently downgrades to FAIL.
+        if not verdict:
             first_line = text.splitlines()[0].strip().upper() if text else ""
             if first_line in {"PASS", "FAIL"}:
                 verdict = first_line

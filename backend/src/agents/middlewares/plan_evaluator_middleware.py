@@ -339,9 +339,7 @@ class PlanEvaluatorMiddleware(AgentMiddleware[PlanEvaluatorState]):
         requested_model: str | None,
         timeout_seconds: float | None = None,
         max_attempts: int | None = None,
-        router: Any = None,
-    ):  # noqa: ARG002
-        del router
+    ):
         super().__init__()
         cfg = get_evaluator_config()
         self._requested_model = requested_model
@@ -610,7 +608,7 @@ class PlanEvaluatorMiddleware(AgentMiddleware[PlanEvaluatorState]):
                 continue
             break
 
-        return self._build_terminal_payload(nodes, nodes_changed, attempts, last_decision, accumulated_issues, last_advice, runtime, model_name)
+        return self._build_terminal_payload(nodes, nodes_changed, attempts, last_decision, accumulated_issues, last_advice, runtime, model_name, plan=plan)
 
     @override
     async def abefore_model(self, state: PlanEvaluatorState, runtime: Runtime) -> dict | None:
@@ -676,7 +674,7 @@ class PlanEvaluatorMiddleware(AgentMiddleware[PlanEvaluatorState]):
                 continue
             break
 
-        return self._build_terminal_payload(nodes, nodes_changed, attempts, last_decision, accumulated_issues, last_advice, runtime, model_name)
+        return self._build_terminal_payload(nodes, nodes_changed, attempts, last_decision, accumulated_issues, last_advice, runtime, model_name, plan=plan)
 
     def _build_terminal_payload(
         self,
@@ -688,12 +686,21 @@ class PlanEvaluatorMiddleware(AgentMiddleware[PlanEvaluatorState]):
         last_advice: str,
         runtime: Runtime,
         model_name: str,
+        plan: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"plan_evaluated": True}
         if attempts:
             payload["plan_eval_attempts"] = attempts
         if nodes_changed:
             payload.update(self._commit_revision(nodes))
+            # Keep plan.todo_ids in sync with the patched node set so downstream
+            # consumers (progress UI, handoff serializers) don't read stale IDs.
+            if isinstance(plan, dict):
+                payload["plan"] = {
+                    **plan,
+                    "todo_ids": [str(node.get("id") or "").strip() for node in nodes if node.get("id")],
+                    "updated_at": _utc_now_iso(),
+                }
 
         if attempts >= self._max_attempts and last_decision not in {"ok", "timeout_skipped", "non_json_skipped", "llm_error_skipped"}:
             self._record_decision(

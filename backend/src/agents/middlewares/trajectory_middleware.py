@@ -75,14 +75,23 @@ class TrajectoryMiddleware(AgentMiddleware[TrajectoryMiddlewareState]):
 
     state_schema = TrajectoryMiddlewareState
 
+    _MAX_TRUNCATE_DEPTH = 10
+
     @staticmethod
-    def _truncate(value: Any, max_chars: int) -> Any:
+    def _truncate(value: Any, max_chars: int, _depth: int = 0) -> Any:
+        # Cap recursion: deeply-nested or self-referential payloads would
+        # otherwise blow the stack and the trajectory write would silently fail.
+        if _depth >= TrajectoryMiddleware._MAX_TRUNCATE_DEPTH:
+            text = str(value)
+            if len(text) > max_chars:
+                return text[: max_chars - 3] + "..."
+            return text
         if isinstance(value, str) and len(value) > max_chars:
             return value[: max_chars - 3] + "..."
         if isinstance(value, dict):
-            return {k: TrajectoryMiddleware._truncate(v, max_chars) for k, v in value.items()}
+            return {k: TrajectoryMiddleware._truncate(v, max_chars, _depth + 1) for k, v in value.items()}
         if isinstance(value, list):
-            return [TrajectoryMiddleware._truncate(v, max_chars) for v in value]
+            return [TrajectoryMiddleware._truncate(v, max_chars, _depth + 1) for v in value]
         return value
 
     def _resolve_trace_file(self, state: TrajectoryMiddlewareState, runtime: Runtime) -> tuple[str, Path]:

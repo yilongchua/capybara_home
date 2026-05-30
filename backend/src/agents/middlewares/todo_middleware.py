@@ -37,9 +37,16 @@ def _todos_in_messages(messages: list[Any]) -> bool:
 
 
 def _reminder_in_messages(messages: list[Any]) -> bool:
-    """Return True if a todo_reminder HumanMessage is already present in *messages*."""
+    """Return True if any todo reminder is already present in *messages*.
+
+    Recognizes both the legacy `todo_reminder` name (used by this list-mode
+    middleware) and `todo_dag_reminder` (used by `TodoDagMiddleware`) so that
+    a config-flip from one middleware to the other mid-thread doesn't stack
+    duplicate reminders.
+    """
+    reminder_names = {"todo_reminder", "todo_dag_reminder"}
     for msg in messages:
-        if isinstance(msg, HumanMessage) and getattr(msg, "name", None) == "todo_reminder":
+        if isinstance(msg, HumanMessage) and getattr(msg, "name", None) in reminder_names:
             return True
     return False
 

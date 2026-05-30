@@ -26,7 +26,13 @@ _EVENTS_LOCK = Lock()
 
 
 def append_runtime_event(runtime: Runtime, event: dict[str, Any]) -> None:
-    """Append a structured runtime event for other middlewares to consume."""
+    """Append a structured runtime event for other middlewares to consume.
+
+    The event is deep-copied so producers can mutate their local dict after
+    append without affecting consumers. This is conservative; callers that
+    promise not to mutate post-append could drop the deepcopy for hot paths,
+    but doing so requires verifying every emitter in the codebase first.
+    """
     store = get_run_store(runtime)
     with _EVENTS_LOCK:
         events = store.get(RUNTIME_EVENTS_KEY)

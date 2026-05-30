@@ -31,7 +31,7 @@ from typing import Protocol, runtime_checkable
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import SummarizationMiddleware
-from langchain_core.messages import AnyMessage, HumanMessage, RemoveMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.config import get_config
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.runtime import Runtime
@@ -50,6 +50,7 @@ _OPERATIONAL_MESSAGE_NAMES = {
     "task_deferred",
     "todo_failure_recovery",
     "todo_reminder",
+    "todo_dag_reminder",
     "todo_incomplete_reminder",
     "permission_ask",
     "steering_reminder",
@@ -461,11 +462,21 @@ class CapyHomeSummarizationMiddleware(SummarizationMiddleware):
         ]
 
         # ── Files Referenced ────────────────────────────────────────
+        # Intersect regex matches with the canonical artifacts registry so
+        # stale paths from old tool errors or transient logs aren't elevated.
+        # Falls back to all matches only when no artifacts are recorded yet.
+        canonical_artifacts = set()
+        if isinstance(state, dict):
+            artifacts_raw = state.get("artifacts")
+            if isinstance(artifacts_raw, list):
+                canonical_artifacts = {str(p) for p in artifacts_raw if isinstance(p, str)}
         file_set: set[str] = set()
         for msg in messages:
             content = str(getattr(msg, "content", "") or "")
             for m in re.finditer(r"/mnt/user-data/[^\s)`'\"]+", content):
                 file_set.add(m.group())
+        if canonical_artifacts:
+            file_set = file_set & canonical_artifacts
         if file_set:
             parts.append("## Files Referenced")
             for f in sorted(file_set)[:15]:
@@ -624,10 +635,120 @@ class CapyHomeSummarizationMiddleware(SummarizationMiddleware):
             anchors = []
 
         rescue_bundle = [*anchors, *operational, *rescued]
-        if not rescue_bundle:
+
+        try:
+            remaining, pair_rescued = self._rescue_tool_call_pairs(remaining, rescue_bundle + preserved)
+        except Exception:
+            logger.exception("Tool-call pair rescue during summarization failed; using best-effort partition")
+            pair_rescued = []
+
+        if not rescue_bundle and not pair_rescued:
             return to_summarize, preserved
 
-        return remaining, rescue_bundle + preserved
+        # pair_rescued already has rescue_bundle + preserved baked in when non-empty;
+        # otherwise rebuild from rescue_bundle + preserved.
+        final_preserved = pair_rescued if pair_rescued else (rescue_bundle + preserved)
+        self._assert_tool_pair_coherence(final_preserved)
+        return remaining, final_preserved
+
+    @staticmethod
+    def _tool_call_ids(msg: AnyMessage) -> set[str]:
+        """Extract tool_call ids from an AIMessage, tolerating both dict- and
+        object-shaped tool_calls (different model providers normalize differently)."""
+        if not isinstance(msg, AIMessage):
+            return set()
+        calls = getattr(msg, "tool_calls", None) or []
+        ids: set[str] = set()
+        for call in calls:
+            if isinstance(call, dict):
+                tid = call.get("id")
+            else:
+                tid = getattr(call, "id", None)
+            if isinstance(tid, str) and tid:
+                ids.add(tid)
+        return ids
+
+    def _rescue_tool_call_pairs(
+        self,
+        remaining: list[AnyMessage],
+        preserved: list[AnyMessage],
+    ) -> tuple[list[AnyMessage], list[AnyMessage]]:
+        """Drag parent AIMessages of orphan ToolMessages from the to-summarize
+        set into the preserved set so Anthropic's tool_use/tool_result pairing
+        invariant holds.
+
+        Anthropic rejects context where a ``tool_result`` has no preceding
+        ``tool_use``. This typically happens when the base partition cuts
+        between an AIMessage and the ToolMessages that respond to it — the AI
+        ends up in to_summarize, the ToolMessages stay in preserved. We
+        rescue the AI; prepending it to preserved keeps chronological order
+        because everything in ``remaining`` comes from before the cutoff and
+        everything in ``preserved`` from at/after it.
+
+        The mirror case (AI with ``tool_calls`` preserved, ToolMessage in
+        ``remaining``) cannot arise from normal partition flow — a
+        ToolMessage always follows its parent AIMessage in the original
+        message list, so if the AI is at/after the cutoff, the ToolMessage
+        is too. If it ever does arise (via some upstream bug or future
+        rescue step that grabs AIMessages), auto-rescuing the ToolMessage by
+        prepending would produce ``[TM, ..., AI]`` order — wrong direction
+        for Anthropic. We leave that case to :meth:`_assert_tool_pair_coherence`
+        to log so the upstream bug is surfaced rather than silently masked.
+
+        Returns ``(remaining, [])`` (empty rescued list) when no rescue is
+        applied — the caller treats empty as "no change needed".
+        """
+        preserved_ai_ids: set[str] = set()
+        preserved_tool_ids: set[str] = set()
+        for msg in preserved:
+            if isinstance(msg, AIMessage):
+                preserved_ai_ids |= self._tool_call_ids(msg)
+            elif isinstance(msg, ToolMessage):
+                tid = getattr(msg, "tool_call_id", None)
+                if isinstance(tid, str):
+                    preserved_tool_ids.add(tid)
+
+        missing_tool_uses = preserved_tool_ids - preserved_ai_ids
+        if not missing_tool_uses:
+            return remaining, []
+
+        rescued: list[AnyMessage] = []
+        new_remaining: list[AnyMessage] = []
+        for msg in remaining:
+            if isinstance(msg, AIMessage) and self._tool_call_ids(msg) & missing_tool_uses:
+                rescued.append(msg)
+            else:
+                new_remaining.append(msg)
+
+        if not rescued:
+            return remaining, []
+
+        # Rescued AIMessages came from earlier in the original sequence than
+        # everything in `preserved` (which is at/after the cutoff), so
+        # prepending preserves tool_use-before-tool_result order.
+        return new_remaining, rescued + preserved
+
+    def _assert_tool_pair_coherence(self, preserved: list[AnyMessage]) -> None:
+        """Warn if preserved still contains dangling tool_use or tool_result blocks
+        after pair rescue. Does not modify the list — stripping is left to a
+        follow-up so first-line behavior is observable in logs."""
+        call_ids: set[str] = set()
+        result_ids: set[str] = set()
+        for msg in preserved:
+            if isinstance(msg, AIMessage):
+                call_ids |= self._tool_call_ids(msg)
+            elif isinstance(msg, ToolMessage):
+                tid = getattr(msg, "tool_call_id", None)
+                if isinstance(tid, str):
+                    result_ids.add(tid)
+        orphan_uses = call_ids - result_ids
+        orphan_results = result_ids - call_ids
+        if orphan_uses or orphan_results:
+            logger.warning(
+                "summarization produced orphan tool_call pairs after rescue: tool_use_without_result=%s tool_result_without_use=%s",
+                sorted(orphan_uses),
+                sorted(orphan_results),
+            )
 
     def _warn_if_preserved_over_budget(self, preserved: list[AnyMessage]) -> None:
         threshold = self._last_trigger_threshold

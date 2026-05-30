@@ -103,7 +103,19 @@ class PlanFollowupMiddleware(AgentMiddleware[PlanFollowupState]):
     state_schema = PlanFollowupState
 
     def _has_plan_context(self, state: PlanFollowupState) -> bool:
-        return bool(state.get("plan") or state.get("todo_graph"))
+        # Avoid asymmetric truthiness: empty plan={} is falsy, but an empty
+        # todo_graph={"nodes":[]} is a truthy non-empty dict, so a naive
+        # `or` check returns True for "plan context present" when only the
+        # graph shell exists. Require real content in either side.
+        plan = state.get("plan")
+        if isinstance(plan, dict) and plan:
+            return True
+        graph = state.get("todo_graph")
+        if isinstance(graph, dict):
+            nodes = graph.get("nodes")
+            if isinstance(nodes, list) and nodes:
+                return True
+        return False
 
     @override
     def before_model(self, state: PlanFollowupState, runtime: Runtime) -> dict | None:

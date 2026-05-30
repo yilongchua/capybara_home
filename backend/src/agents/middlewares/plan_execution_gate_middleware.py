@@ -96,6 +96,8 @@ def _normalize_plan_status(raw: Any) -> str:
     value = str(raw or "").strip().lower()
     if value in {"draft", "approved", "executing", "completed"}:
         return value
+    if value:
+        logger.warning("Unknown plan status %r coerced to 'draft'", value)
     return "draft"
 
 

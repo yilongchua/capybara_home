@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from threading import Lock
@@ -15,6 +16,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.runtime import Runtime
 
 from src.control_plane.service import get_control_plane_service
+
+logger = logging.getLogger(__name__)
 
 _AUTORESEARCH_WITH_TOPIC_RE = re.compile(
     r"^\s*autoresearch\s*-\s*(?P<topic>.+?)\s*$",
@@ -164,12 +167,16 @@ class AutoresearchMiddleware(AgentMiddleware[AgentState]):
             objective = result["objective"]
             run = result["bootstrap_run"]
         except Exception as exc:
+            # Log the full exception (with traceback) but surface only the class
+            # name to the model — exception messages can leak internal paths,
+            # token names, or other implementation details into user-visible text.
+            logger.exception("Autoresearch scheduling failed for topic %s", topic)
             return ModelResponse(
                 result=[
                     AIMessage(
                         content=(
                             "Autoresearch command was detected, but scheduling failed.\n\n"
-                            f"Reason: {exc}"
+                            f"Reason: {exc.__class__.__name__}"
                         )
                     )
                 ]

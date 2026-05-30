@@ -58,7 +58,6 @@ def test_planner_creates_plan_todos_and_handoffs(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr("src.agents.middlewares.planner_middleware.create_chat_model", lambda **kwargs: _Model())
     middleware = PlannerMiddleware(
-        router=_router(),
         requested_model="primary",
         max_plan_steps=PlannerConfig().max_plan_steps,
         dag_enabled=True,
@@ -102,7 +101,6 @@ def test_planner_uses_original_request_when_latest_human_is_synthetic(monkeypatc
 
     monkeypatch.setattr("src.agents.middlewares.planner_middleware.create_chat_model", lambda **kwargs: _Model())
     middleware = PlannerMiddleware(
-        router=_router(),
         requested_model="primary",
         max_plan_steps=PlannerConfig().max_plan_steps,
         dag_enabled=True,
@@ -139,7 +137,6 @@ def test_planner_skips_direct_answer_comparison_without_llm(monkeypatch, tmp_pat
 
     monkeypatch.setattr("src.agents.middlewares.planner_middleware.create_chat_model", _fail_create_chat_model)
     middleware = PlannerMiddleware(
-        router=_router(),
         requested_model="primary",
         max_plan_steps=PlannerConfig().max_plan_steps,
         dag_enabled=True,
@@ -170,7 +167,6 @@ def test_planner_writes_versioned_plan_and_latest_alias(monkeypatch, tmp_path: P
     monkeypatch.setattr("src.agents.middlewares.planner_middleware.create_chat_model", lambda **kwargs: _Model())
     workspace = tmp_path / "workspace"
     middleware = PlannerMiddleware(
-        router=_router(),
         requested_model="primary",
         max_plan_steps=PlannerConfig().max_plan_steps,
         dag_enabled=True,
@@ -209,7 +205,6 @@ def test_planner_marks_research_ambiguity_as_clarification_pending(monkeypatch, 
 
     monkeypatch.setattr("src.agents.middlewares.planner_middleware.create_chat_model", lambda **kwargs: _Model())
     middleware = PlannerMiddleware(
-        router=_router(),
         requested_model="primary",
         max_plan_steps=PlannerConfig().max_plan_steps,
         dag_enabled=True,
@@ -230,7 +225,6 @@ def test_planner_marks_research_ambiguity_as_clarification_pending(monkeypatch, 
 
 def test_planner_clears_clarification_pending_after_user_answer(tmp_path: Path):
     middleware = PlannerMiddleware(
-        router=_router(),
         requested_model="primary",
         max_plan_steps=PlannerConfig().max_plan_steps,
         dag_enabled=True,
@@ -275,7 +269,6 @@ def test_planner_auto_mode_clarification_resolution_spawns_work_handoff(tmp_path
         lambda **kwargs: spawn_calls.append(kwargs),
     )
     middleware = PlannerMiddleware(
-        router=_router(),
         requested_model="primary",
         max_plan_steps=PlannerConfig().max_plan_steps,
         dag_enabled=True,
@@ -320,7 +313,6 @@ def test_planner_auto_mode_clarification_resolution_spawns_work_handoff(tmp_path
 
 def test_planner_clears_clarification_pending_after_auto_mode_selection(tmp_path: Path):
     middleware = PlannerMiddleware(
-        router=_router(),
         requested_model="primary",
         max_plan_steps=PlannerConfig().max_plan_steps,
         dag_enabled=True,

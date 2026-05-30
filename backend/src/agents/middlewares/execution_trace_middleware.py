@@ -6,6 +6,7 @@ harness middleware decisions, and subagent lifecycle updates.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, NotRequired, override
 
 from langchain.agents import AgentState
@@ -49,6 +50,16 @@ _SOURCE_STAGE: dict[str, str] = {
     "subagent_limit_middleware": "harness",
     "tool_disclosure_middleware": "harness",
     "execution_trace_middleware": "harness",
+    # Additional emitters that were defaulting to "harness" via fallback.
+    # Mapping them explicitly lets the trace UI filter by their real stage.
+    "summarization_middleware": "harness",
+    "web_search_summary": "harness",
+    "quality_gate_middleware": "harness",
+    "loop_detection_middleware": "harness",
+    "model_timeout_middleware": "harness",
+    "thread_data_middleware": "harness",
+    "activity_timeline_middleware": "harness",
+    "autoresearch_middleware": "harness",
 }
 
 _TRACEABLE_RUNTIME_EVENTS = {
@@ -139,6 +150,11 @@ def _inline_trace_from_runtime_event(runtime: Runtime, runtime_event: dict[str, 
         event["run_id"] = resolve_trace_run_id(runtime)
     if not isinstance(event.get("schema"), str):
         event["schema"] = TRACE_SCHEMA_VERSION
+    # Ensure every trace event has a stable id. The SSE dedup downstream
+    # keys on event["id"] (see `streamed_event_ids` in `after_model`); without
+    # this, producers that forget to set one get streamed twice.
+    if not isinstance(event.get("id"), str) or not event.get("id"):
+        event["id"] = uuid.uuid4().hex
     return event
 
 

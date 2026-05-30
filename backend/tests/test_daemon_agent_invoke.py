@@ -56,6 +56,60 @@ def test_run_work_mode_handoff_uses_async_invoke(monkeypatch):
     mock_agent.ainvoke.assert_awaited_once()
 
 
+def test_work_handoff_update_state_payload_has_no_title_key(monkeypatch):
+    """#15: work-handoff `update_state` payloads must contain only `plan`.
+
+    The title-handoff writes the top-level `title` key; the work-handoff writes
+    only `plan`. The contract is documented in `work_run_handoff.py`. If a
+    future change bundles `title` into the work-handoff payload, two daemons
+    would target the same key and the original concurrency race could surface.
+    This test pins the contract at the call site.
+    """
+    captured: list[dict] = []
+
+    class _Threads:
+        def get_state(self, _thread_id):
+            return {"values": {"plan": {"status": "approved", "title": "Plan title"}}}
+
+        def update_state(self, _thread_id, payload):
+            captured.append(payload)
+
+    class _LGClient:
+        threads = _Threads()
+
+    monkeypatch.setattr("langgraph_sdk.get_client", lambda url=None: _LGClient())
+
+    mock_agent = MagicMock()
+    mock_agent.ainvoke = AsyncMock(return_value={"messages": []})
+    mock_client = MagicMock()
+    mock_client._get_runnable_config.return_value = {"configurable": {}}
+    mock_client._agent = mock_agent
+    monkeypatch.setattr("src.client.CapyHomeClient", lambda **kwargs: mock_client)
+    monkeypatch.setattr(
+        "src.agents.middlewares.work_run_handoff.spawn_title_handoff_if_missing",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
+    _run_work_mode_handoff(
+        thread_id="thread-contract",
+        requested_model_name=None,
+        auto_mode=False,
+        original_user_request="hello",
+        delay_seconds=0,
+    )
+
+    assert captured, "expected at least one update_state call from the work handoff"
+    for payload in captured:
+        assert "title" not in payload, (
+            f"work-handoff update_state payload must not include 'title' "
+            f"(disjoint-key contract); got {payload!r}"
+        )
+        assert set(payload.keys()) <= {"plan"}, (
+            f"work-handoff update_state payload should only carry 'plan'; got keys {list(payload.keys())!r}"
+        )
+
+
 def test_work_mode_handoff_spawn_cleans_guard_when_submit_fails(monkeypatch):
     work_run_handoff._IN_FLIGHT_HANDOFFS.clear()
 

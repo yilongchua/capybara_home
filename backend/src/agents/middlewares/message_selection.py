@@ -10,6 +10,7 @@ _SYNTHETIC_HUMAN_NAMES = {
     "task_deferred",
     "work_mode_instruction",
     "todo_reminder",
+    "todo_dag_reminder",
     "todo_failure_recovery",
     "plan_followup_prompt",
     "work_mode_plan_rerun",
@@ -26,8 +27,13 @@ _SYNTHETIC_REQUEST_PATTERNS = (
     "work mode detected this request is too complex for direct execution",
     "what was the content of the previous user request",
     "what is the original user request",
-    "continue the previous plan-mode answer in the background",
 )
+# The "continue the previous plan-mode answer in the background" pattern was
+# removed: that prompt is emitted by `pro_followup_middleware` as
+# `HumanMessage(name="plan_followup_prompt", ...)` and is already caught by
+# the `plan_followup_prompt` entry in `_SYNTHETIC_HUMAN_NAMES`. Matching on
+# the name (structural) instead of the prompt body (free-text) means the
+# wording can evolve without breaking detection here.
 
 
 def extract_text(content: Any) -> str:
