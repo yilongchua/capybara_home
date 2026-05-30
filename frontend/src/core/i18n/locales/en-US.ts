@@ -308,8 +308,10 @@ export const enUS: Translations = {
     title: "Settings",
     description: "Adjust how CapyHome looks and behaves for you.",
     sections: {
+      general: "General",
       appearance: "Appearance",
       memory: "Memory",
+      knowledgeVault: "Knowledge Vault",
       pipelineCleanup: "Pipeline Cleanup",
       autoresearchCleanup: "Autoresearch Cleanup",
       tools: "Tools",
@@ -356,6 +358,15 @@ export const enUS: Translations = {
           view: "View",
         },
       },
+    },
+    general: {
+      title: "Workspace",
+      description: "Workspace-wide preferences that affect how CapyHome interprets and displays time-sensitive information.",
+      timezoneTitle: "Workspace timezone",
+      timezoneDescription:
+        "Used when scheduling pipelines, rendering timestamps, and grounding the agent's understanding of \"today\".",
+      timezoneCurrent: (offset: string, now: string) =>
+        `Currently ${offset} • ${now}`,
     },
     appearance: {
       themeTitle: "Theme",
@@ -458,6 +469,33 @@ export const enUS: Translations = {
       title: "Embedding Models",
       description: "Add and manage OpenAI-compatible embedding endpoints used by the knowledge graph (Ollama, LM Studio, or custom).",
       knowledgeGraphHint: "These endpoints feed the knowledge graph vector index. The first enabled embedding endpoint is used.",
+    },
+    knowledgeVault: {
+      title: "Knowledge Vault",
+      description: "Configure where the vault lives and which models are used for ingestion and indexing.",
+      folderPath: "Folder path",
+      folderPathPlaceholder: ".capyhome/knowledge_vault",
+      folderPathHint:
+        "Absolute path to your Obsidian-compatible vault directory. Leave blank to use the default location under .capyhome/knowledge_vault.",
+      llmModel: "LLM model",
+      llmModelHint:
+        "Model used for vault source analysis and generation. Pick a configured LLM model.",
+      embeddingModel: "Embedding model",
+      embeddingModelHint:
+        "Embedding model used to index vault pages for hybrid search. Pick a model from a configured embedding endpoint.",
+      noModelOption: "Use default (first enabled)",
+      save: "Save",
+      saving: "Saving…",
+      saved: "Saved.",
+      saveError: "Failed to save.",
+      dangerZone: "Danger Zone",
+      deleteGraphTitle: "Delete Knowledge Graph",
+      deleteGraphDescription:
+        "Removes all sources, concepts, entities, and queued ingest items from the vault. This cannot be undone.",
+      deleteGraphButton: "Delete Knowledge Graph",
+      deleteGraphConfirm:
+        "Delete the entire knowledge graph? This removes all sources, concepts, entities, and pending queue items. This cannot be undone.",
+      deleteGraphPending: "Deleting…",
     },
     browser: {
       title: "Browser Tool",

@@ -41,3 +41,27 @@ export interface GenericTestResult {
   status_code: number | null;
   error: string | null;
 }
+
+export interface KnowledgeVaultConfig {
+  path: string;
+  llmModel: string;
+  embeddingModel: string;
+}
+
+export interface CanonicalThresholds {
+  autoLexicalStrong: number;
+  autoLexicalHigh: number;
+  autoLexicalHighCooc: number;
+  autoAbbreviationCooc: number;
+  autoLexicalMid: number;
+  autoLexicalMidCooc: number;
+  reviewAbbreviationCooc: number;
+  reviewCoocStrong: number;
+  reviewLexical: number;
+  reviewAbbreviationAlone: boolean;
+}
+
+export interface CanonicalThresholdsResponse {
+  effective: CanonicalThresholds;
+  defaults: CanonicalThresholds;
+}

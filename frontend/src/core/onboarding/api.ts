@@ -1,10 +1,13 @@
 import { getBackendBaseURL } from "@/core/config";
 
 import type {
+  CanonicalThresholds,
+  CanonicalThresholdsResponse,
   ComfyuiTestResult,
   EmbeddingEndpointsData,
   EmbeddingTestResult,
   GenericTestResult,
+  KnowledgeVaultConfig,
   LlmEndpointsData,
   LlmTestResult,
   UserLlmEndpoint,
@@ -97,4 +100,52 @@ export async function saveEmbeddingEndpoints(
     },
   );
   return response.json() as Promise<EmbeddingEndpointsData>;
+}
+
+export async function loadKnowledgeVaultConfig() {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/onboarding/knowledge-vault`,
+  );
+  return response.json() as Promise<KnowledgeVaultConfig>;
+}
+
+export async function saveKnowledgeVaultConfig(config: KnowledgeVaultConfig) {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/onboarding/knowledge-vault`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config),
+    },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Failed to save knowledge vault config (${response.status})`);
+  }
+  return response.json() as Promise<KnowledgeVaultConfig>;
+}
+
+export async function loadCanonicalThresholds() {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/onboarding/canonical-thresholds`,
+  );
+  return response.json() as Promise<CanonicalThresholdsResponse>;
+}
+
+export async function saveCanonicalThresholds(
+  thresholds: CanonicalThresholds | null,
+) {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/onboarding/canonical-thresholds`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(thresholds),
+    },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Failed to save canonical thresholds (${response.status})`);
+  }
+  return response.json() as Promise<CanonicalThresholdsResponse>;
 }

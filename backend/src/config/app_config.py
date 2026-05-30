@@ -263,6 +263,24 @@ class AppConfig(BaseModel):
         ] + existing_models
 
         result = cls.model_validate(config_data)
+
+        # Apply user-controlled knowledge_vault overrides from extensions_config.json
+        # so the UI can set path / llm_model / embedding_model without touching
+        # config.yaml (which carries comments).
+        kv_override = extensions_config.knowledge_vault
+        if kv_override is not None:
+            if kv_override.path:
+                result.knowledge_vault.path = kv_override.path
+            if kv_override.llm_model:
+                result.knowledge_vault.cot_model = kv_override.llm_model
+            if kv_override.embedding_model:
+                result.knowledge_vault.vector_embedding_model = kv_override.embedding_model
+            if kv_override.canonical is not None:
+                canonical_override = kv_override.canonical.model_dump(exclude_none=True)
+                for field_name, value in canonical_override.items():
+                    if hasattr(result.knowledge_vault.canonical, field_name):
+                        setattr(result.knowledge_vault.canonical, field_name, value)
+
         return result
 
     @classmethod

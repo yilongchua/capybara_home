@@ -22,7 +22,8 @@ class EntitiesMixin:
 
         entity_index[slug] = {label, degree, source_ids: set, concept_slugs: set}
         concept_index[slug] = {label}
-        Both indexes skip dismissed entities.
+        Both indexes skip dismissed entities and collapse aliases through the
+        canonical table (so `JP Morgan` / `JPM` show as one row).
         """
         sources = self._manifest.get("sources", {}) or {}
         dismissals = self._manifest.get("entity_dismissals", {}) or {}
@@ -31,6 +32,26 @@ class EntitiesMixin:
             for slug, entry in dismissals.items()
             if isinstance(entry, dict)
         }
+
+        try:
+            entity_canonical_map = self.canonical_alias_map(kind="entity")
+            concept_canonical_map = self.canonical_alias_map(kind="concept")
+        except AttributeError:
+            entity_canonical_map = {}
+            concept_canonical_map = {}
+
+        canonical_labels: dict[tuple[str, str], str] = {}
+        try:
+            canonical_table = self._load_canonical()
+            for slug, entry in (canonical_table.get("entries") or {}).items():
+                if not isinstance(entry, dict):
+                    continue
+                label = str(entry.get("canonical_label") or "").strip()
+                kind = str(entry.get("kind") or "")
+                if label and kind:
+                    canonical_labels[(kind, slug)] = label
+        except AttributeError:
+            pass
 
         entity_index: dict[str, dict[str, Any]] = {}
         concept_index: dict[str, dict[str, Any]] = {}
@@ -49,20 +70,27 @@ class EntitiesMixin:
                 slug = _slugify(label)
                 if not slug:
                     continue
-                # Skip dismissals that aren't aliased; rewrite when alias_for is set.
+                slug = entity_canonical_map.get(slug, slug)
                 if slug in dismissals:
                     alias = alias_map.get(slug) or ""
                     if not alias:
                         continue
                     slug = alias
+                canonical_label = canonical_labels.get(("entity", slug))
                 bucket = entity_index.setdefault(
                     slug,
-                    {"slug": slug, "label": label, "source_ids": set(), "concept_slugs": set()},
+                    {
+                        "slug": slug,
+                        "label": canonical_label or label,
+                        "source_ids": set(),
+                        "concept_slugs": set(),
+                    },
                 )
                 bucket["source_ids"].add(str(source_id))
                 local_entity_slugs.add(slug)
-                # Prefer the longest original-case label seen.
-                if len(label) > len(bucket["label"]):
+                if canonical_label:
+                    bucket["label"] = canonical_label
+                elif len(label) > len(bucket["label"]):
                     bucket["label"] = label
 
             local_concept_slugs: set[str] = set()
@@ -73,12 +101,15 @@ class EntitiesMixin:
                 slug = _slugify(label)
                 if not slug:
                     continue
+                slug = concept_canonical_map.get(slug, slug)
+                canonical_label = canonical_labels.get(("concept", slug))
                 local_concept_slugs.add(slug)
-                bucket = concept_index.setdefault(slug, {"slug": slug, "label": label})
-                if len(label) > len(bucket["label"]):
+                bucket = concept_index.setdefault(slug, {"slug": slug, "label": canonical_label or label})
+                if canonical_label:
+                    bucket["label"] = canonical_label
+                elif len(label) > len(bucket["label"]):
                     bucket["label"] = label
 
-            # Wire concept co-occurrence into every entity in this source.
             for entity_slug in local_entity_slugs:
                 entity_index[entity_slug]["concept_slugs"].update(local_concept_slugs)
 
@@ -149,12 +180,17 @@ class EntitiesMixin:
         less_covered = [_serialize(entry) for entry in non_critical[: max(0, int(bottom_n))]]
 
         dismissals_raw = self._manifest.get("entity_dismissals", {}) or {}
+        try:
+            canonical_entries = self.list_canonical_entries(kind="entity")
+        except AttributeError:
+            canonical_entries = []
 
         return {
             "generated_at": _utcnow_iso(),
             "counts": {
                 "total_entities": len(entity_index),
                 "dismissed": len(dismissals_raw),
+                "canonical_merges": len(canonical_entries),
                 "critical_max_degree": int(critical_max_degree),
             },
             "top": top,

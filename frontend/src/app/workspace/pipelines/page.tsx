@@ -1,6 +1,8 @@
 "use client";
 
-import { CalendarClockIcon, ListChecksIcon, Loader2Icon, PlayIcon, PlusIcon, SquareIcon, Trash2Icon } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { CalendarClockIcon, ExternalLinkIcon, FileTextIcon, FolderIcon, Loader2Icon, PlayIcon, PlusIcon, SquareIcon, Trash2Icon } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -21,6 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -28,7 +31,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
+import { MarkdownContent } from "@/components/workspace/messages/markdown-content";
 import {
   WorkspaceBody,
   WorkspaceContainer,
@@ -111,6 +122,27 @@ export default function PipelinesPage() {
   const [openCreateDialog, setOpenCreateDialog] = useState(false);
   const [newTopic, setNewTopic] = useState("");
   const [endpointGoal, setEndpointGoal] = useState("");
+  const [ledgerObjectiveId, setLedgerObjectiveId] = useState<string | null>(null);
+
+  const previewObjective = useMemo(
+    () => objectives.find((obj) => obj.objective_id === ledgerObjectiveId) ?? null,
+    [objectives, ledgerObjectiveId],
+  );
+  const ledgerPreviewUrl = previewObjective
+    ? `${getBackendBaseURL()}/api/vault/objectives/${encodeURIComponent(previewObjective.objective_id)}/ledger.md`
+    : "";
+
+  const ledgerPreviewQuery = useQuery({
+    queryKey: ["autoresearch-ledger-preview", ledgerObjectiveId],
+    queryFn: async () => {
+      const response = await fetch(ledgerPreviewUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to load ledger: ${response.statusText}`);
+      }
+      return response.text();
+    },
+    enabled: Boolean(ledgerObjectiveId) && Boolean(previewObjective?.ledger_markdown_path),
+  });
 
   const toText = (value: unknown) => (typeof value === "string" ? value : "");
   const firstNonEmpty = (...values: string[]) =>
@@ -194,13 +226,6 @@ export default function PipelinesPage() {
               </Card>
             ) : (
               objectives.map((objective) => {
-                const coverage = objective.cluster_coverage ?? {};
-                const coveredClusters = Object.entries(coverage)
-                  .map(([cid, depth]) => `C${cid} L${depth}`)
-                  .sort();
-                const ledgerLink = `${getBackendBaseURL()}/api/vault/objectives/${encodeURIComponent(
-                  objective.objective_id,
-                )}/ledger.md`;
                 const progressPercent = objectiveProgress[objective.objective_id] ?? 0;
                 const noveltyPercent = ((objective.last_novelty_rate ?? 1) * 100).toFixed(0);
                 const job = scheduleJobByObjectiveId.get(objective.objective_id);
@@ -350,14 +375,14 @@ export default function PipelinesPage() {
                       <div className="rounded-md border p-3 space-y-1">
                         <p className="text-xs font-medium">Question Ledger</p>
                         {hasLedger ? (
-                          <a
+                          <button
+                            type="button"
                             className="text-primary inline-flex items-center gap-1 text-xs underline"
-                            href={ledgerLink}
-                            target="_blank"
-                            rel="noreferrer"
+                            onClick={() => setLedgerObjectiveId(objective.objective_id)}
                           >
+                            <FileTextIcon className="size-3" />
                             Open ledger.md
-                          </a>
+                          </button>
                         ) : (
                           <p className="text-muted-foreground text-xs">
                             No ledger yet — run an iteration to populate.
@@ -367,18 +392,6 @@ export default function PipelinesPage() {
                           Iteration #{objective.loop_iteration} · novelty {noveltyPercent}%
                           {objective.last_stop_reason ? ` · ${objective.last_stop_reason}` : ""}
                         </p>
-                      </div>
-
-                      <div className="rounded-md border p-3 space-y-1">
-                        <p className="inline-flex items-center gap-1 text-xs font-medium">
-                          <ListChecksIcon className="size-3.5" />
-                          Cluster Coverage
-                        </p>
-                        {coveredClusters.length === 0 ? (
-                          <p className="text-muted-foreground text-xs">No clusters covered yet.</p>
-                        ) : (
-                          <p className="text-xs">{coveredClusters.join(" · ")}</p>
-                        )}
                       </div>
                     </CardContent>
                   </Card>
@@ -401,6 +414,83 @@ export default function PipelinesPage() {
               <PlusIcon className="size-5" />
             </Button>
           </div>
+
+          <Sheet
+            open={ledgerObjectiveId !== null}
+            onOpenChange={(open) => {
+              if (!open) setLedgerObjectiveId(null);
+            }}
+          >
+            <SheetContent side="right" className="w-full sm:max-w-xl">
+              <SheetHeader className="border-b">
+                <SheetTitle className="flex items-center gap-2 text-base">
+                  <FileTextIcon className="size-4" />
+                  {previewObjective?.topic ?? "Question Ledger"}
+                </SheetTitle>
+                <SheetDescription className="truncate text-xs">
+                  ledger.md preview · iteration #{previewObjective?.loop_iteration ?? 0}
+                </SheetDescription>
+              </SheetHeader>
+
+              <div className="px-4 pb-2">
+                <p className="text-xs font-medium mb-2 inline-flex items-center gap-1">
+                  <FolderIcon className="size-3.5" />
+                  Directories
+                </p>
+                <div className="flex flex-col gap-1 text-xs">
+                  <Link
+                    href="/workspace/vault"
+                    className="text-primary inline-flex items-center gap-1 underline"
+                  >
+                    <ExternalLinkIcon className="size-3" />
+                    Open Knowledge Vault
+                  </Link>
+                  {previewObjective?.ledger_markdown_path ? (
+                    <span
+                      className="text-muted-foreground truncate"
+                      title={previewObjective.ledger_markdown_path}
+                    >
+                      {previewObjective.ledger_markdown_path}
+                    </span>
+                  ) : null}
+                  {ledgerPreviewUrl ? (
+                    <a
+                      href={ledgerPreviewUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-primary inline-flex items-center gap-1 underline"
+                    >
+                      <ExternalLinkIcon className="size-3" />
+                      Open raw ledger.md
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+
+              <ScrollArea className="flex-1 border-t">
+                <div className="p-4 text-sm">
+                  {ledgerPreviewQuery.isLoading ? (
+                    <div className="text-muted-foreground inline-flex items-center gap-2 text-xs">
+                      <Loader2Icon className="size-3 animate-spin" />
+                      Loading ledger...
+                    </div>
+                  ) : ledgerPreviewQuery.isError ? (
+                    <p className="text-destructive text-xs">
+                      {ledgerPreviewQuery.error?.message ?? "Failed to load ledger."}
+                    </p>
+                  ) : ledgerPreviewQuery.data ? (
+                    <MarkdownContent
+                      content={ledgerPreviewQuery.data}
+                      isLoading={false}
+                      rehypePlugins={[]}
+                    />
+                  ) : (
+                    <p className="text-muted-foreground text-xs">No ledger content available.</p>
+                  )}
+                </div>
+              </ScrollArea>
+            </SheetContent>
+          </Sheet>
 
           <Dialog open={openCreateDialog} onOpenChange={setOpenCreateDialog}>
             <DialogContent>

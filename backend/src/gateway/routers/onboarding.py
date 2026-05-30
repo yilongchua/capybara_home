@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.config.extensions_config import (
     ExtensionsConfig,
+    KnowledgeVaultUserConfig,
     UserLlmEndpointConfig,
     get_extensions_config,
     reload_extensions_config,
@@ -128,6 +129,42 @@ class EmbeddingEndpointsResponse(BaseModel):
     )
 
 
+class KnowledgeVaultConfigRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    path: str = Field(default="", description="Absolute folder path for the Obsidian-compatible vault")
+    llm_model: str = Field(default="", description="Model used for vault analysis/generation", alias="llmModel")
+    embedding_model: str = Field(default="", description="Embedding model used for vault indexing", alias="embeddingModel")
+
+
+class KnowledgeVaultConfigResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    path: str = Field(default="")
+    llm_model: str = Field(default="", alias="llmModel")
+    embedding_model: str = Field(default="", alias="embeddingModel")
+
+
+class CanonicalThresholdsModel(BaseModel):
+    """Wire-format thresholds for the canonical alias merge engine."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    auto_lexical_strong: float = Field(default=0.95, ge=0.0, le=1.0, alias="autoLexicalStrong")
+    auto_lexical_high: float = Field(default=0.9, ge=0.0, le=1.0, alias="autoLexicalHigh")
+    auto_lexical_high_cooc: float = Field(default=0.2, ge=0.0, le=1.0, alias="autoLexicalHighCooc")
+    auto_abbreviation_cooc: float = Field(default=0.3, ge=0.0, le=1.0, alias="autoAbbreviationCooc")
+    auto_lexical_mid: float = Field(default=0.75, ge=0.0, le=1.0, alias="autoLexicalMid")
+    auto_lexical_mid_cooc: float = Field(default=0.5, ge=0.0, le=1.0, alias="autoLexicalMidCooc")
+    review_abbreviation_cooc: float = Field(default=0.2, ge=0.0, le=1.0, alias="reviewAbbreviationCooc")
+    review_cooc_strong: float = Field(default=0.6, ge=0.0, le=1.0, alias="reviewCoocStrong")
+    review_lexical: float = Field(default=0.7, ge=0.0, le=1.0, alias="reviewLexical")
+    review_abbreviation_alone: bool = Field(default=True, alias="reviewAbbreviationAlone")
+
+
+class CanonicalThresholdsResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    effective: CanonicalThresholdsModel
+    defaults: CanonicalThresholdsModel
+
+
 class TestEmbeddingRequest(BaseModel):
     base_url: str = Field(..., description="OpenAI-compatible base URL (e.g. http://localhost:11434/v1)")
     api_key: str = Field(default="", description="Optional API key")
@@ -173,6 +210,60 @@ def _resolve_save_path() -> Path:
 
     backend_dir = Path(__file__).resolve().parents[3]
     return backend_dir.parent / "extensions_config.json"
+
+
+def _load_extensions_knowledge_vault_override() -> KnowledgeVaultUserConfig | None:
+    """Read the knowledge-vault override block from extensions_config.json without writing."""
+    config_path = _resolve_save_path()
+    if not config_path.exists():
+        return None
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            raw = json.load(f) or {}
+    except (json.JSONDecodeError, OSError):
+        return None
+    block = raw.get("knowledgeVault") or raw.get("knowledge_vault")
+    if not isinstance(block, dict):
+        return None
+    try:
+        return KnowledgeVaultUserConfig.model_validate(block)
+    except Exception:
+        logger.warning("knowledgeVault override block is malformed; ignoring")
+        return None
+
+
+def _save_extensions_knowledge_vault(kv: KnowledgeVaultUserConfig) -> None:
+    config_path = _resolve_save_path()
+    if not config_path.exists():
+        logger.info("No existing extensions config found; creating at %s", config_path)
+
+    raw: dict[str, Any] = {}
+    if config_path.exists():
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                raw = json.load(f) or {}
+        except json.JSONDecodeError as exc:
+            logger.warning("Existing extensions config is not valid JSON (%s); overwriting", exc)
+            raw = {}
+
+    raw["knowledgeVault"] = kv.model_dump()
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(raw, f, indent=2)
+    tmp_path.replace(config_path)
+
+    logger.info("Knowledge vault config saved to: %s", config_path)
+    reload_extensions_config()
+
+    try:
+        from src.config.app_config import reload_app_config
+
+        reload_app_config()
+        logger.info("App config reloaded after knowledge vault config update.")
+    except Exception as exc:
+        logger.warning("Failed to reload app config after saving knowledge vault config: %s", exc)
 
 
 def _save_extensions_with_user_models(
@@ -425,3 +516,100 @@ async def test_embedding_endpoint(request: TestEmbeddingRequest) -> TestEmbeddin
         return TestEmbeddingResponse(ok=False, error=f"HTTP {exc.response.status_code}: {exc.response.text[:200]}")
     except Exception as exc:
         return TestEmbeddingResponse(ok=False, error=str(exc))
+
+
+def _knowledge_vault_response_from_app() -> KnowledgeVaultConfigResponse:
+    """Compose the effective knowledge vault config from app + extensions overrides."""
+    from src.config.app_config import get_app_config
+
+    app = get_app_config()
+    kv = app.knowledge_vault
+    return KnowledgeVaultConfigResponse(
+        path=kv.path or "",
+        llm_model=kv.cot_model or "",
+        embedding_model=kv.vector_embedding_model or "",
+    )
+
+
+@router.get(
+    "/knowledge-vault",
+    response_model=KnowledgeVaultConfigResponse,
+    summary="Get Knowledge Vault Config",
+    description="Return the effective knowledge vault folder path, LLM model, and embedding model.",
+)
+async def get_knowledge_vault_config() -> KnowledgeVaultConfigResponse:
+    return _knowledge_vault_response_from_app()
+
+
+@router.put(
+    "/knowledge-vault",
+    response_model=KnowledgeVaultConfigResponse,
+    summary="Save Knowledge Vault Config",
+    description="Persist knowledge vault overrides (folder path, LLM model, embedding model) to extensions_config.json.",
+)
+async def save_knowledge_vault_config(request: KnowledgeVaultConfigRequest) -> KnowledgeVaultConfigResponse:
+    try:
+        existing = _load_extensions_knowledge_vault_override()
+        kv = KnowledgeVaultUserConfig(
+            path=request.path.strip(),
+            llm_model=request.llm_model.strip(),
+            embedding_model=request.embedding_model.strip(),
+            canonical=existing.canonical if existing else None,
+        )
+        _save_extensions_knowledge_vault(kv)
+        return _knowledge_vault_response_from_app()
+    except Exception as exc:
+        logger.error("Failed to save knowledge vault config: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to save knowledge vault config: {exc}")
+
+
+def _canonical_thresholds_response() -> CanonicalThresholdsResponse:
+    from src.config.app_config import get_app_config
+    from src.config.control_plane_config import CanonicalThresholdsConfig
+
+    effective = get_app_config().knowledge_vault.canonical
+    defaults = CanonicalThresholdsConfig()
+    return CanonicalThresholdsResponse(
+        effective=CanonicalThresholdsModel.model_validate(effective.model_dump()),
+        defaults=CanonicalThresholdsModel.model_validate(defaults.model_dump()),
+    )
+
+
+@router.get(
+    "/canonical-thresholds",
+    response_model=CanonicalThresholdsResponse,
+    summary="Get Canonical Alias Merge Thresholds",
+    description="Return the effective canonical merge thresholds and the built-in defaults so the UI can show a reset target.",
+)
+async def get_canonical_thresholds() -> CanonicalThresholdsResponse:
+    return _canonical_thresholds_response()
+
+
+@router.put(
+    "/canonical-thresholds",
+    response_model=CanonicalThresholdsResponse,
+    summary="Save Canonical Alias Merge Thresholds",
+    description="Persist canonical-thresholds overrides to extensions_config.json. Pass null to reset to defaults.",
+)
+async def save_canonical_thresholds(
+    request: CanonicalThresholdsModel | None = None,
+) -> CanonicalThresholdsResponse:
+    from src.config.extensions_config import CanonicalThresholdsUserConfig
+
+    try:
+        existing = _load_extensions_knowledge_vault_override()
+        if request is None:
+            canonical_override: CanonicalThresholdsUserConfig | None = None
+        else:
+            canonical_override = CanonicalThresholdsUserConfig.model_validate(request.model_dump())
+        kv = KnowledgeVaultUserConfig(
+            path=(existing.path if existing else ""),
+            llm_model=(existing.llm_model if existing else ""),
+            embedding_model=(existing.embedding_model if existing else ""),
+            canonical=canonical_override,
+        )
+        _save_extensions_knowledge_vault(kv)
+        return _canonical_thresholds_response()
+    except Exception as exc:
+        logger.error("Failed to save canonical thresholds: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to save canonical thresholds: {exc}")

@@ -256,8 +256,10 @@ export interface Translations {
     title: string;
     description: string;
     sections: {
+      general: string;
       appearance: string;
       memory: string;
+      knowledgeVault: string;
       pipelineCleanup: string;
       autoresearchCleanup: string;
       tools: string;
@@ -303,6 +305,13 @@ export interface Translations {
           view: string;
         };
       };
+    };
+    general: {
+      title: string;
+      description: string;
+      timezoneTitle: string;
+      timezoneDescription: string;
+      timezoneCurrent: (offset: string, now: string) => string;
     };
     appearance: {
       themeTitle: string;
@@ -402,6 +411,28 @@ export interface Translations {
       title: string;
       description: string;
       knowledgeGraphHint: string;
+    };
+    knowledgeVault: {
+      title: string;
+      description: string;
+      folderPath: string;
+      folderPathPlaceholder: string;
+      folderPathHint: string;
+      llmModel: string;
+      llmModelHint: string;
+      embeddingModel: string;
+      embeddingModelHint: string;
+      noModelOption: string;
+      save: string;
+      saving: string;
+      saved: string;
+      saveError: string;
+      dangerZone: string;
+      deleteGraphTitle: string;
+      deleteGraphDescription: string;
+      deleteGraphButton: string;
+      deleteGraphConfirm: string;
+      deleteGraphPending: string;
     };
     browser: {
       title: string;

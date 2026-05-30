@@ -73,6 +73,46 @@ class UserLlmEndpointConfig(BaseModel):
     supports_vision: bool = Field(default=False, description="Whether models on this endpoint support vision")
 
 
+class CanonicalThresholdsUserConfig(BaseModel):
+    """User-controlled override for canonical alias merge thresholds.
+
+    Mirrors ``CanonicalThresholdsConfig`` but every field is optional so the
+    UI can save partial overrides. Unset fields fall back to the defaults
+    declared on the base config.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    auto_lexical_strong: float | None = Field(default=None, ge=0.0, le=1.0, alias="autoLexicalStrong")
+    auto_lexical_high: float | None = Field(default=None, ge=0.0, le=1.0, alias="autoLexicalHigh")
+    auto_lexical_high_cooc: float | None = Field(default=None, ge=0.0, le=1.0, alias="autoLexicalHighCooc")
+    auto_abbreviation_cooc: float | None = Field(default=None, ge=0.0, le=1.0, alias="autoAbbreviationCooc")
+    auto_lexical_mid: float | None = Field(default=None, ge=0.0, le=1.0, alias="autoLexicalMid")
+    auto_lexical_mid_cooc: float | None = Field(default=None, ge=0.0, le=1.0, alias="autoLexicalMidCooc")
+    review_abbreviation_cooc: float | None = Field(default=None, ge=0.0, le=1.0, alias="reviewAbbreviationCooc")
+    review_cooc_strong: float | None = Field(default=None, ge=0.0, le=1.0, alias="reviewCoocStrong")
+    review_lexical: float | None = Field(default=None, ge=0.0, le=1.0, alias="reviewLexical")
+    review_abbreviation_alone: bool | None = Field(default=None, alias="reviewAbbreviationAlone")
+
+
+class KnowledgeVaultUserConfig(BaseModel):
+    """User-controlled overrides for the knowledge vault.
+
+    Stored in extensions_config.json so config.yaml (with its comments)
+    is not touched when the UI updates these. Applied in
+    AppConfig.from_file() as overrides on top of config.yaml's
+    knowledge_vault block.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+    path: str = Field(default="", description="Absolute folder path for the Obsidian-compatible vault")
+    llm_model: str = Field(default="", description="Model used for vault analysis/generation (overrides knowledge_vault.cot_model)")
+    embedding_model: str = Field(default="", description="Embedding model used for vault indexing (overrides knowledge_vault.vector_embedding_model)")
+    canonical: CanonicalThresholdsUserConfig | None = Field(
+        default=None,
+        description="Optional overrides for canonical alias merge thresholds (overrides knowledge_vault.canonical).",
+    )
+
+
 class ExtensionsConfig(BaseModel):
     """Unified configuration for MCP servers and skills."""
 
@@ -99,6 +139,11 @@ class ExtensionsConfig(BaseModel):
         default_factory=dict,
         description="Map of user-added embedding-model endpoint name to configuration",
         alias="userEmbeddingModels",
+    )
+    knowledge_vault: KnowledgeVaultUserConfig | None = Field(
+        default=None,
+        description="User-controlled overrides for the knowledge vault (path, llm_model, embedding_model)",
+        alias="knowledgeVault",
     )
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 

@@ -14,6 +14,7 @@ from src.control_plane.services.unified_vault_search import UnifiedVaultSearchSe
 
 from ._analysis import AnalysisMixin
 from ._base import _VaultLearningBase
+from ._canonical import CanonicalMixin
 from ._cleanup import CleanupMixin
 from ._compile import CompileMixin
 from ._documents import DocumentsMixin
@@ -50,6 +51,7 @@ class VaultLearningManager(
     LoopGuardMixin,
     DocumentsMixin,
     EntitiesMixin,
+    CanonicalMixin,
     LintMixin,
     SynthesisMixin,
     SearchSummaryMixin,

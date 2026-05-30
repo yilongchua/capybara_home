@@ -1,6 +1,8 @@
 import type { AgentThreadContext } from "../threads";
 import { DEFAULT_TOOL_ICON_BY_TOOL } from "../tools/presentation";
 
+export const DEFAULT_WORKSPACE_TIMEZONE = "Asia/Singapore";
+
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = {
   notification: {
     enabled: true,
@@ -15,6 +17,9 @@ export const DEFAULT_LOCAL_SETTINGS: LocalSettings = {
   },
   toolPresentation: {
     iconByTool: DEFAULT_TOOL_ICON_BY_TOOL,
+  },
+  general: {
+    timezone: DEFAULT_WORKSPACE_TIMEZONE,
   },
 };
 
@@ -37,6 +42,9 @@ export interface LocalSettings {
   };
   toolPresentation: {
     iconByTool: Record<string, string>;
+  };
+  general: {
+    timezone: string;
   };
 }
 
@@ -75,6 +83,10 @@ export function getLocalSettings(): LocalSettings {
         notification: {
           ...DEFAULT_LOCAL_SETTINGS.notification,
           ...settings.notification,
+        },
+        general: {
+          ...DEFAULT_LOCAL_SETTINGS.general,
+          ...settings.general,
         },
       };
       return mergedSettings;

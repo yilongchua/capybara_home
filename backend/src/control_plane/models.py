@@ -96,7 +96,7 @@ class PipelineStepRun(BaseModel):
     step_id: str
     name: str
     kind: str
-    status: Literal["pending", "running", "completed", "failed", "skipped"] = "pending"
+    status: Literal["pending", "running", "completed", "failed", "skipped", "cancelled"] = "pending"
     logs: list[str] = Field(default_factory=list)
     output: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None

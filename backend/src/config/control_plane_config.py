@@ -91,6 +91,76 @@ class GenerationAsyncConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class CanonicalThresholdsConfig(BaseModel):
+    """Thresholds controlling canonical entity/concept alias merging during lint.
+
+    Two action tiers — auto-merge happens silently, review surfaces in the UI
+    inbox. Each numeric field is a *minimum* score for the named signal; the
+    similarity engine fires the first matching rule in declaration order.
+    """
+
+    auto_lexical_strong: float = Field(
+        default=0.95,
+        ge=0.0,
+        le=1.0,
+        description="Auto-merge if lexical similarity alone meets this threshold (handles 'JP Morgan' / 'J.P. Morgan').",
+    )
+    auto_lexical_high: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=1.0,
+        description="Auto-merge if lexical similarity meets this AND co-occurrence >= auto_lexical_high_cooc.",
+    )
+    auto_lexical_high_cooc: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description="Co-occurrence floor required when lexical similarity is auto_lexical_high.",
+    )
+    auto_abbreviation_cooc: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Auto-merge for abbreviation matches when same-source co-occurrence meets this threshold (handles 'SG' / 'Singapore').",
+    )
+    auto_lexical_mid: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        description="Auto-merge if lexical similarity meets this AND co-occurrence >= auto_lexical_mid_cooc.",
+    )
+    auto_lexical_mid_cooc: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Co-occurrence floor required when lexical similarity is auto_lexical_mid.",
+    )
+    review_abbreviation_cooc: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description="Queue for human review when abbreviation match has co-occurrence above this threshold (but below auto bar).",
+    )
+    review_cooc_strong: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Queue for review on strong co-occurrence alone (no lexical/abbreviation signal).",
+    )
+    review_lexical: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Queue for review on moderate lexical similarity alone.",
+    )
+    review_abbreviation_alone: bool = Field(
+        default=True,
+        description="When true, abbreviation matches without co-occurrence still surface in the review inbox (low confidence).",
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class KnowledgeVaultConfig(BaseModel):
     enabled: bool = Field(default=True, description="Whether knowledge vault workflows are enabled")
     path: str = Field(default="", description="Path to Obsidian-compatible vault directory")
@@ -186,5 +256,9 @@ class KnowledgeVaultConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description="Embedding cosine threshold above which a new question is treated as a duplicate of an existing ledger question.",
+    )
+    canonical: CanonicalThresholdsConfig = Field(
+        default_factory=CanonicalThresholdsConfig,
+        description="Thresholds for canonical entity/concept alias merging during lint.",
     )
     model_config = ConfigDict(extra="allow")

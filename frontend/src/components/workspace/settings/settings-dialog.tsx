@@ -13,6 +13,8 @@ import {
   ImageIcon,
   PuzzleIcon,
   Share2Icon,
+  LibraryIcon,
+  SettingsIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -30,6 +32,8 @@ import { BrowserExtensionSettingsPage } from "@/components/workspace/settings/br
 import { BrowserSettingsPage } from "@/components/workspace/settings/browser-settings-page";
 import { ComfyuiSettingsPage } from "@/components/workspace/settings/comfyui-settings-page";
 import { EmbeddingSettingsPage } from "@/components/workspace/settings/embedding-settings-page";
+import { GeneralSettingsPage } from "@/components/workspace/settings/general-settings-page";
+import { KnowledgeVaultSettingsPage } from "@/components/workspace/settings/knowledge-vault-settings-page";
 import { LlmSettingsPage } from "@/components/workspace/settings/llm-settings-page";
 import { MemorySettingsPage } from "@/components/workspace/settings/memory-settings-page";
 import { NotificationSettingsPage } from "@/components/workspace/settings/notification-settings-page";
@@ -39,8 +43,10 @@ import { useI18n } from "@/core/i18n/hooks";
 import { cn } from "@/lib/utils";
 
 type SettingsSection =
+  | "general"
   | "appearance"
   | "memory"
+  | "knowledgeVault"
   | "pipelineCleanup"
   | "autoresearchCleanup"
   | "tools"
@@ -57,7 +63,7 @@ type SettingsDialogProps = React.ComponentProps<typeof Dialog> & {
 };
 
 export function SettingsDialog(props: SettingsDialogProps) {
-  const { defaultSection = "appearance", ...dialogProps } = props;
+  const { defaultSection = "general", ...dialogProps } = props;
   const { t } = useI18n();
   const [activeSection, setActiveSection] =
     useState<SettingsSection>(defaultSection);
@@ -73,6 +79,11 @@ export function SettingsDialog(props: SettingsDialogProps) {
   const sections = useMemo(
     () => [
       {
+        id: "general",
+        label: t.settings.sections.general,
+        icon: SettingsIcon,
+      },
+      {
         id: "appearance",
         label: t.settings.sections.appearance,
         icon: PaletteIcon,
@@ -86,6 +97,11 @@ export function SettingsDialog(props: SettingsDialogProps) {
         id: "memory",
         label: t.settings.sections.memory,
         icon: BrainIcon,
+      },
+      {
+        id: "knowledgeVault",
+        label: t.settings.sections.knowledgeVault,
+        icon: LibraryIcon,
       },
       {
         id: "pipelineCleanup",
@@ -114,8 +130,10 @@ export function SettingsDialog(props: SettingsDialogProps) {
       { id: "about", label: t.settings.sections.about, icon: InfoIcon },
     ],
     [
+      t.settings.sections.general,
       t.settings.sections.appearance,
       t.settings.sections.memory,
+      t.settings.sections.knowledgeVault,
       t.settings.sections.pipelineCleanup,
       t.settings.sections.autoresearchCleanup,
       t.settings.sections.tools,
@@ -170,8 +188,10 @@ export function SettingsDialog(props: SettingsDialogProps) {
           </nav>
           <ScrollArea className="h-full min-h-0 rounded-lg border">
             <div className="space-y-8 p-6">
+              {activeSection === "general" && <GeneralSettingsPage />}
               {activeSection === "appearance" && <AppearanceSettingsPage />}
               {activeSection === "memory" && <MemorySettingsPage />}
+              {activeSection === "knowledgeVault" && <KnowledgeVaultSettingsPage />}
               {activeSection === "pipelineCleanup" && <PipelineCleanupSettingsPage />}
               {activeSection === "autoresearchCleanup" && <AutoresearchCleanupSettingsPage />}
               {activeSection === "tools" && <ToolSettingsPage />}

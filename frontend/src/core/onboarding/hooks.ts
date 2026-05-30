@@ -1,9 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  loadCanonicalThresholds,
   loadEmbeddingEndpoints,
+  loadKnowledgeVaultConfig,
   loadLlmEndpoints,
+  saveCanonicalThresholds,
   saveEmbeddingEndpoints,
+  saveKnowledgeVaultConfig,
   saveLlmEndpoints,
   testComfyuiEndpoint,
   testEmbeddingEndpoint,
@@ -11,9 +15,12 @@ import {
   testLlmEndpoint,
 } from "./api";
 import type {
+  CanonicalThresholds,
+  CanonicalThresholdsResponse,
   ComfyuiTestResult,
   EmbeddingTestResult,
   GenericTestResult,
+  KnowledgeVaultConfig,
   LlmTestResult,
   UserLlmEndpoint,
 } from "./types";
@@ -91,5 +98,50 @@ export function useTestEmbeddingEndpoint() {
   >({
     mutationFn: ({ baseUrl, apiKey, model }) =>
       testEmbeddingEndpoint(baseUrl, apiKey, model),
+  });
+}
+
+export function useKnowledgeVaultConfig() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["knowledgeVaultConfig"],
+    queryFn: () => loadKnowledgeVaultConfig(),
+  });
+  return {
+    config:
+      data ?? ({ path: "", llmModel: "", embeddingModel: "" } as KnowledgeVaultConfig),
+    isLoading,
+    error,
+  };
+}
+
+export function useSaveKnowledgeVaultConfig() {
+  const queryClient = useQueryClient();
+  return useMutation<KnowledgeVaultConfig, Error, KnowledgeVaultConfig>({
+    mutationFn: (config) => saveKnowledgeVaultConfig(config),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["knowledgeVaultConfig"] });
+    },
+  });
+}
+
+export function useCanonicalThresholds() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["canonicalThresholds"],
+    queryFn: () => loadCanonicalThresholds(),
+  });
+  return { data, isLoading, error };
+}
+
+export function useSaveCanonicalThresholds() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    CanonicalThresholdsResponse,
+    Error,
+    CanonicalThresholds | null
+  >({
+    mutationFn: (thresholds) => saveCanonicalThresholds(thresholds),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["canonicalThresholds"] });
+    },
   });
 }
