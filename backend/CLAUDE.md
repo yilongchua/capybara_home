@@ -376,6 +376,8 @@ Cross-domain calls inside sub-services route through a back-reference `self._cps
 
 Pure text/time utilities used by `vault_learning.py` live in `src/control_plane/vault_text_utils.py`: `utcnow`, `utcnow_iso`, `slugify`, `strip_html`, `extract_title`, `word_tokens`, `frontmatter_dump`, `parse_frontmatter`.
 
+**Vault explorer is shallow + lazy** (large vaults can hold 10k+ files). `get_vault_explorer()` returns only the top level of the file tree (`_vault_tree(..., max_depth=1)`); directory nodes carry `has_children`/`child_count` but empty `children`. The deprecated `knowledge`/`raw_sources` fields are returned empty (no frontend consumer) to keep the payload small. The frontend lazy-loads deeper levels on expand via `GET /api/vault/explorer/children?path=<rel>` → `get_vault_explorer_children()`, which validates the path against the vault root (`_resolve_vault_dir_path`). The shallow root is still cached for 300 s.
+
 ### Autoresearch loop (`src/control_plane/autoresearch_loop/`)
 
 The agentic learning loop that powers `/autoresearch`. One scheduled run = one iteration: a generator LLM proposes sub-questions across the 12-cluster taxonomy (`{vault_root}/00_schema/QUESTION_TAXONOMY.json`, user-editable), Jaccard-based dedup filters duplicates against the per-objective ledger and the vault, the `vault-source-researcher` subagent answers each survivor and writes a vault entry, and a reflector LLM emits follow-up questions. The loop stops on novelty decay (default: 70% of recent generator questions are duplicates).

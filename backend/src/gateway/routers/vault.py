@@ -163,7 +163,14 @@ class VaultFileNode(BaseModel):
     path: str
     kind: str
     size: int | None = None
+    has_children: bool = False
+    child_count: int | None = None
     children: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class VaultExplorerChildrenResponse(BaseModel):
+    path: str
+    children: list[VaultFileNode] = Field(default_factory=list)
 
 
 class VaultExplorerSourceItem(BaseModel):
@@ -364,6 +371,18 @@ async def refresh_vault_explorer() -> VaultExplorerResponse:
     service = get_control_plane_service()
     payload = service.get_vault_explorer(force_refresh=True)
     return VaultExplorerResponse.model_validate(payload)
+
+
+@router.get("/explorer/children", response_model=VaultExplorerChildrenResponse)
+async def get_vault_explorer_children(
+    path: str = Query(..., min_length=1, description="Directory path relative to the vault root."),
+) -> VaultExplorerChildrenResponse:
+    service = get_control_plane_service()
+    try:
+        payload = service.get_vault_explorer_children(relative_path=path)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return VaultExplorerChildrenResponse.model_validate(payload)
 
 
 @router.post("/ingest/start", response_model=VaultIngestStatusResponse)

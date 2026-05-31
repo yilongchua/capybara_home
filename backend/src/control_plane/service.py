@@ -9,7 +9,7 @@ import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
@@ -1530,62 +1530,72 @@ class ControlPlaneService:
             }
         return payload
 
-    def _build_vault_explorer_payload(self, manager: VaultLearningManager) -> dict[str, Any]:
-        def _safe_rel(path: Path) -> str:
+    def _vault_tree(self, manager: VaultLearningManager, path: Path, *, max_depth: int = 1, _depth: int = 0) -> list[dict[str, Any]]:
+        """Build a file-tree listing for ``path``.
+
+        Shallow by default (``max_depth=1`` lists only immediate children). Directory
+        nodes carry ``has_children``/``child_count`` and an empty ``children`` list when
+        the tree is cut off at ``max_depth`` so the frontend can lazy-load deeper levels.
+        """
+        def _safe_rel(item: Path) -> str:
             try:
-                return str(path.resolve().relative_to(manager.vault_root))
+                return str(item.resolve().relative_to(manager.vault_root))
             except Exception:
-                return str(path.resolve())
+                return str(item.resolve())
 
-        def _tree(path: Path) -> list[dict[str, Any]]:
-            entries: list[dict[str, Any]] = []
-            for item in sorted(path.iterdir() if path.exists() else [], key=lambda p: (not p.is_dir(), p.name.lower())):
-                node: dict[str, Any] = {
-                    "name": item.name,
-                    "path": _safe_rel(item),
-                    "kind": "directory" if item.is_dir() else "file",
-                }
-                if item.is_dir():
-                    node["children"] = _tree(item)
+        entries: list[dict[str, Any]] = []
+        for item in sorted(path.iterdir() if path.exists() else [], key=lambda p: (not p.is_dir(), p.name.lower())):
+            node: dict[str, Any] = {
+                "name": item.name,
+                "path": _safe_rel(item),
+                "kind": "directory" if item.is_dir() else "file",
+            }
+            if item.is_dir():
+                # Count children via scandir (no Path allocation / stat per entry).
+                # On error (e.g. permissions, or a dir mutated mid-scan) stay
+                # optimistic — leave the count unknown but keep the directory
+                # expandable so its contents aren't silently hidden.
+                try:
+                    with os.scandir(item) as scan:
+                        child_count = sum(1 for _ in scan)
+                    node["child_count"] = child_count
+                    node["has_children"] = child_count > 0
+                except OSError:
+                    node["child_count"] = None
+                    node["has_children"] = True
+                if _depth + 1 < max_depth:
+                    node["children"] = self._vault_tree(manager, item, max_depth=max_depth, _depth=_depth + 1)
                 else:
-                    try:
-                        node["size"] = int(item.stat().st_size)
-                    except OSError:
-                        node["size"] = 0
-                entries.append(node)
-            return entries
+                    node["children"] = []
+            else:
+                try:
+                    node["size"] = int(item.stat().st_size)
+                except OSError:
+                    node["size"] = 0
+            entries.append(node)
+        return entries
 
-        sources = list(manager._manifest.get("sources", {}).items())
-        raw_sources = sorted(
-            [
-                {
-                    "source_id": source_id,
-                    "title": str(record.get("title") or record.get("url") or source_id),
-                    "url": str(record.get("url") or ""),
-                    "ingested_at": str(record.get("last_ingested_at") or record.get("created_at") or ""),
-                    "raw_path": _safe_rel(Path(str(record.get("raw_path") or ""))) if str(record.get("raw_path") or "").strip() else "",
-                    "compiled_path": _safe_rel(Path(str(record.get("compiled_path") or ""))) if str(record.get("compiled_path") or "").strip() else "",
-                }
-                for source_id, record in sources
-                if isinstance(record, dict)
-            ],
-            key=lambda item: item["ingested_at"],
-            reverse=True,
-        )
-
-        knowledge_groups = {
-            "entities": _tree(manager.compiled_entities_dir),
-            "concepts": _tree(manager.compiled_concepts_dir),
-            "sources": _tree(manager.compiled_sources_dir),
-            "others": _tree(manager.compiled_dir / "syntheses") + _tree(manager.compiled_dir / "queries"),
-        }
-
+    def _build_vault_explorer_payload(self, manager: VaultLearningManager) -> dict[str, Any]:
+        # Only the shallow `files` tree is consumed by the frontend; `knowledge` and
+        # `raw_sources` are intentionally left empty (they duplicated subtrees already
+        # present in `files` and had no consumers). The keys remain for schema
+        # backward-compatibility. Deeper levels are fetched on demand via
+        # get_vault_explorer_children().
         return {
             "generated_at": datetime.now(UTC).isoformat(),
             "cache_ttl_seconds": self._vault_explorer_cache_ttl_seconds,
-            "raw_sources": raw_sources,
-            "knowledge": knowledge_groups,
-            "files": _tree(manager.vault_root),
+            "raw_sources": [],
+            "knowledge": {"entities": [], "concepts": [], "sources": [], "others": []},
+            "files": self._vault_tree(manager, manager.vault_root, max_depth=1),
+        }
+
+    def get_vault_explorer_children(self, *, relative_path: str) -> dict[str, Any]:
+        """Return the immediate children (one level) of a directory inside the vault."""
+        manager = self._default_vault_manager()
+        target = self._resolve_vault_path(manager, relative_path, expect="dir")
+        return {
+            "path": str(target.relative_to(manager.vault_root)),
+            "children": self._vault_tree(manager, target, max_depth=1),
         }
 
     def get_vault_file(self, *, relative_path: str) -> dict[str, Any]:
@@ -1638,16 +1648,26 @@ class ControlPlaneService:
             self._vault_explorer_cache = {}
         return result
 
-    def _resolve_vault_file_path(self, manager: VaultLearningManager, relative_path: str) -> Path:
+    def _resolve_vault_path(self, manager: VaultLearningManager, relative_path: str, *, expect: Literal["file", "dir"]) -> Path:
+        """Resolve a vault-relative path, enforcing it stays inside the vault root.
+
+        Shared traversal guard for the file/dir resolvers so the containment check
+        lives in one place. ``expect`` asserts the resolved target's kind.
+        """
         normalized = relative_path.strip().lstrip("/")
         if not normalized:
             raise ValueError("Path is required.")
         target = (manager.vault_root / normalized).resolve()
         if manager.vault_root not in target.parents and target != manager.vault_root:
             raise ValueError("Path is outside vault root.")
-        if not target.exists() or not target.is_file():
+        if expect == "file" and (not target.exists() or not target.is_file()):
             raise ValueError("Vault file not found.")
+        if expect == "dir" and (not target.exists() or not target.is_dir()):
+            raise ValueError("Vault directory not found.")
         return target
+
+    def _resolve_vault_file_path(self, manager: VaultLearningManager, relative_path: str) -> Path:
+        return self._resolve_vault_path(manager, relative_path, expect="file")
 
     def _is_vault_raw_source_path(self, manager: VaultLearningManager, path: Path) -> bool:
         try:

@@ -175,7 +175,10 @@ export function VaultEntityBrowser({
 }: {
   onSourceOpen?: (sourcePathOrId: string) => void;
 }) {
-  const { entityBrowser, isLoading } = useVaultEntityBrowser({ top: 15, bottom: 10, criticalMaxDegree: 2 });
+  // The entity-browser payload is large, so poll on a slow cadence (3× slower than
+  // the old 20s default) — enough to surface background writes while the tab is open
+  // without the previous churn; the hook also refreshes on "vault" events + tab focus.
+  const { entityBrowser, isLoading } = useVaultEntityBrowser({ top: 15, bottom: 10, criticalMaxDegree: 2, refetchInterval: 60_000 });
   const { dismissals } = useVaultEntityDismissals();
   const dismissMutation = useDismissVaultEntity();
   const restoreMutation = useRestoreVaultEntityDismissal();

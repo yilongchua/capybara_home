@@ -18,7 +18,7 @@ import {
   SquareIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { toast } from "sonner";
 
@@ -54,11 +54,12 @@ import {
   useSaveVaultFile,
   useStartVaultIngest,
   useVaultExplorer,
+  useVaultExplorerChildren,
   useVaultFile,
   useVaultIngestStatus,
   useVaultStatus,
 } from "@/core/control-plane";
-import type { VaultExplorerResponse, VaultLintResponse } from "@/core/control-plane";
+import type { VaultExplorerFileNode, VaultExplorerResponse, VaultLintResponse } from "@/core/control-plane";
 import { useI18n } from "@/core/i18n/hooks";
 import { streamdownPlugins } from "@/core/streamdown";
 
@@ -67,7 +68,142 @@ type TreeNode = {
   path: string;
   kind: "directory" | "file";
   children?: TreeNode[];
+  hasChildren?: boolean;
+  childCount?: number;
 };
+
+const TREE_CHILDREN_PAGE_SIZE = 150;
+
+function toTreeNodes(nodes: VaultExplorerFileNode[] | undefined): TreeNode[] {
+  return (nodes ?? []).map((node) => ({
+    name: node.name,
+    path: node.path,
+    kind: node.kind === "directory" ? "directory" : "file",
+    // Backend payloads are shallow (max_depth=1) so nested children never arrive;
+    // each level is fetched on demand. The recursive mapping is dead — kept for reference.
+    // children: node.children ? toTreeNodes(node.children) : undefined,
+    children: undefined,
+    hasChildren: node.has_children,
+    childCount: node.child_count ?? undefined,
+  }));
+}
+
+/**
+ * Renders a single vault tree node. Directories lazy-load their children from
+ * the backend on expand (the explorer payload is shallow), and large folders
+ * render incrementally to keep the main thread responsive.
+ */
+function VaultTreeNode({
+  node,
+  depth,
+  expandedPaths,
+  onToggle,
+  selectedPath,
+  onSelectFile,
+  refetchInterval,
+}: {
+  node: TreeNode;
+  depth: number;
+  expandedPaths: Record<string, boolean>;
+  onToggle: (path: string) => void;
+  selectedPath: string | null;
+  onSelectFile: (path: string) => void;
+  refetchInterval: number | false;
+}) {
+  const isDir = node.kind === "directory";
+  const isOpen = isDir && Boolean(expandedPaths[node.path]);
+  const hasChildren = isDir && (node.hasChildren ?? (node.children?.length ?? 0) > 0);
+
+  const { children: lazyChildren, isLoading } = useVaultExplorerChildren(node.path, {
+    enabled: isDir && isOpen,
+    // Refresh expanded folders so background writes (e.g. autoresearch) surface.
+    refetchInterval,
+  });
+
+  const children = useMemo<TreeNode[]>(() => {
+    if (!isDir || !isOpen) return [];
+    return toTreeNodes(lazyChildren ?? undefined);
+    // Backend is shallow, so there are never inline children to fall back to while
+    // the request is in flight — the loading spinner below covers that. (Dead fallback:)
+    // return fetched.length > 0 ? fetched : (node.children ?? []);
+  }, [isDir, isOpen, lazyChildren]);
+
+  const [visibleCount, setVisibleCount] = useState(TREE_CHILDREN_PAGE_SIZE);
+  const visibleChildren = children.slice(0, visibleCount);
+  const remaining = children.length - visibleChildren.length;
+
+  return (
+    <div>
+      <button
+        type="button"
+        className="flex w-full items-center gap-1 rounded px-2 py-1 text-left hover:bg-muted"
+        style={{ paddingLeft: `${8 + depth * 14}px` }}
+        onClick={() => {
+          if (isDir) {
+            onToggle(node.path);
+            return;
+          }
+          onSelectFile(node.path);
+        }}
+      >
+        {isDir ? (
+          <>
+            {hasChildren ? (
+              isOpen ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />
+            ) : (
+              <span className="inline-block size-3.5" />
+            )}
+            <FolderIcon className="size-3.5" />
+          </>
+        ) : (
+          <>
+            <span className="inline-block size-3.5" />
+            <FileTextIcon className="size-3.5" />
+          </>
+        )}
+        <span className={selectedPath === node.path ? "font-medium" : ""}>{node.name}</span>
+        {isDir && typeof node.childCount === "number" && node.childCount > 0 ? (
+          <span className="text-muted-foreground ml-auto pl-2 text-[10px] tabular-nums">{node.childCount}</span>
+        ) : null}
+      </button>
+      {isDir && isOpen ? (
+        <>
+          {isLoading && children.length === 0 ? (
+            <div
+              className="text-muted-foreground flex items-center gap-1 px-2 py-1"
+              style={{ paddingLeft: `${8 + (depth + 1) * 14}px` }}
+            >
+              <Loader2Icon className="size-3.5 animate-spin" />
+              <span>Loading…</span>
+            </div>
+          ) : null}
+          {visibleChildren.map((child) => (
+            <VaultTreeNode
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              expandedPaths={expandedPaths}
+              onToggle={onToggle}
+              selectedPath={selectedPath}
+              onSelectFile={onSelectFile}
+              refetchInterval={refetchInterval}
+            />
+          ))}
+          {remaining > 0 ? (
+            <button
+              type="button"
+              className="text-muted-foreground hover:text-foreground px-2 py-1 text-left text-[11px]"
+              style={{ paddingLeft: `${8 + (depth + 1) * 14}px` }}
+              onClick={() => setVisibleCount((current) => current + TREE_CHILDREN_PAGE_SIZE)}
+            >
+              Show {Math.min(remaining, TREE_CHILDREN_PAGE_SIZE)} more ({remaining} hidden)
+            </button>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
 
 function formatEtaLabel(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "";
@@ -79,29 +215,37 @@ function formatEtaLabel(seconds: number): string {
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}min${minutes === 1 ? "" : "s"}`;
 }
 
-function sortTree(nodes: TreeNode[]): TreeNode[] {
-  return [...nodes]
-    .sort((a, b) => {
-      if (a.kind !== b.kind) return a.kind === "directory" ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    })
-    .map((item) => ({
-      ...item,
-      children: item.children ? sortTree(item.children) : undefined,
-    }));
-}
+// Dead: the backend returns every level already sorted (directories first, then
+// name) for both the shallow root and each /explorer/children response, so the
+// client-side re-sort is redundant. Kept commented in case backend ordering changes.
+// function sortTree(nodes: TreeNode[]): TreeNode[] {
+//   return [...nodes]
+//     .sort((a, b) => {
+//       if (a.kind !== b.kind) return a.kind === "directory" ? -1 : 1;
+//       return a.name.localeCompare(b.name);
+//     })
+//     .map((item) => ({
+//       ...item,
+//       children: item.children ? sortTree(item.children) : undefined,
+//     }));
+// }
 
 export default function VaultPage() {
   const { t } = useI18n();
   const { vaultStatus } = useVaultStatus({ refetchInterval: 20_000 });
+  const { ingestStatus } = useVaultIngestStatus();
+  // The big 3 MB explorer payload is gone (shallow + lazy), so a slow baseline poll
+  // is cheap and keeps the tree live during background writes (autoresearch,
+  // pipelines) that don't flip the manual ingest status; faster while ingesting.
+  const ingesting = ingestStatus?.status === "running";
+  const treeRefetchInterval = ingesting ? 10_000 : 30_000;
   const { explorer, isLoading: explorerLoading } = useVaultExplorer({
-    refetchInterval: 10_000,
+    refetchInterval: treeRefetchInterval,
     listenForRefreshEvents: true,
   });
   const refreshExplorer = useRefreshVaultExplorer();
   const saveVaultFile = useSaveVaultFile();
   const deleteVaultFile = useDeleteVaultFile();
-  const { ingestStatus } = useVaultIngestStatus();
   const startIngest = useStartVaultIngest();
   const cancelIngest = useCancelVaultIngest();
   const lintVaultMutation = useLintVault();
@@ -113,7 +257,7 @@ export default function VaultPage() {
   const cancelRequested = Boolean(ingestStatus?.cancel_requested) || cancelIngest.isPending;
   const activeWorkers = ingestStatus?.workers_active ?? ingestStatus?.workers_requested ?? 0;
   const ingestEtaLabel = (() => {
-    if (!ingestStatus || ingestStatus.status !== "running") return "";
+    if (ingestStatus?.status !== "running") return "";
     const total = ingestStatus.total || 0;
     const current = ingestStatus.current_index || 0;
     const startedAt = ingestStatus.started_at ? Date.parse(ingestStatus.started_at) : NaN;
@@ -154,20 +298,12 @@ export default function VaultPage() {
   const [editorCollapsed, setEditorCollapsed] = useState(false);
   const editorPanelRef = usePanelRef();
   const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
-  const { vaultFile, isLoading: vaultFileLoading } = useVaultFile(selectedPath);
+  const { vaultFile, isLoading: vaultFileLoading, error: vaultFileError } = useVaultFile(selectedPath);
   const [editableContent, setEditableContent] = useState("");
   const effectiveExplorer: VaultExplorerResponse | null = explorer;
 
   const filesTree = useMemo(
-    () =>
-      sortTree(
-        (effectiveExplorer?.files ?? []).map((node) => ({
-          name: node.name,
-          path: node.path,
-          kind: node.kind === "directory" ? "directory" : "file",
-          children: node.children as TreeNode[] | undefined,
-        })),
-      ),
+    () => toTreeNodes(effectiveExplorer?.files),
     [effectiveExplorer?.files],
   );
 
@@ -175,46 +311,10 @@ export default function VaultPage() {
     setExpandedPaths((current) => ({ ...current, [path]: !current[path] }));
   };
 
-  const renderTree = (nodes: TreeNode[], depth = 0): ReactNode =>
-    nodes.map((node) => {
-      const isDir = node.kind === "directory";
-      const isOpen = Boolean(expandedPaths[node.path]);
-      const hasChildren = Boolean(node.children && node.children.length > 0);
-      return (
-        <div key={node.path}>
-          <button
-            className="flex w-full items-center gap-1 rounded px-2 py-1 text-left hover:bg-muted"
-            style={{ paddingLeft: `${8 + depth * 14}px` }}
-            onClick={() => {
-              if (isDir) {
-                togglePath(node.path);
-                return;
-              }
-              setSelectedPath(node.path);
-              setPreviewTab("preview");
-            }}
-          >
-            {isDir ? (
-              <>
-                {hasChildren ? (
-                  isOpen ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />
-                ) : (
-                  <span className="inline-block size-3.5" />
-                )}
-                <FolderIcon className="size-3.5" />
-              </>
-            ) : (
-              <>
-                <span className="inline-block size-3.5" />
-                <FileTextIcon className="size-3.5" />
-              </>
-            )}
-            <span className={selectedPath === node.path ? "font-medium" : ""}>{node.name}</span>
-          </button>
-          {isDir && isOpen && hasChildren ? renderTree(node.children ?? [], depth + 1) : null}
-        </div>
-      );
-    });
+  const handleSelectFile = (path: string) => {
+    setSelectedPath(path);
+    setPreviewTab("preview");
+  };
 
   useEffect(() => {
     document.title = `${t.pages.vault} - ${t.pages.appName}`;
@@ -416,7 +516,19 @@ export default function VaultPage() {
                         <FolderIcon className="size-3.5" />
                         <span>vault</span>
                       </button>
-                      {!rootCollapsed && renderTree(filesTree, 1)}
+                      {!rootCollapsed &&
+                        filesTree.map((node) => (
+                          <VaultTreeNode
+                            key={node.path}
+                            node={node}
+                            depth={1}
+                            expandedPaths={expandedPaths}
+                            onToggle={togglePath}
+                            selectedPath={selectedPath}
+                            onSelectFile={handleSelectFile}
+                            refetchInterval={treeRefetchInterval}
+                          />
+                        ))}
                       {!explorerLoading &&
                       (effectiveExplorer?.files?.length ?? 0) === 0 && (
                         <p className="text-muted-foreground px-1">No cached vault items yet.</p>
@@ -437,30 +549,10 @@ export default function VaultPage() {
                     {previewTab === "entities" ? (
                       <VaultEntityBrowser
                         onSourceOpen={(sourceId) => {
-                          // Best-effort: try to locate the corresponding compiled source file
-                          // and switch to the preview tab. The compiled source path lives at
-                          // sources/{source_id}.md inside the explorer tree.
-                          const targetName = `${sourceId}.md`;
-                          const findInTree = (
-                            nodes: TreeNode[] | undefined,
-                          ): TreeNode | null => {
-                            if (!nodes) return null;
-                            for (const node of nodes) {
-                              if (node.kind === "file" && node.name === targetName) return node;
-                              if (node.children) {
-                                const hit = findInTree(node.children);
-                                if (hit) return hit;
-                              }
-                            }
-                            return null;
-                          };
-                          const match = findInTree(filesTree);
-                          if (match) {
-                            setSelectedPath(match.path);
-                            setPreviewTab("preview");
-                          } else {
-                            toast.message("Source file not yet compiled.");
-                          }
+                          // The explorer tree is loaded lazily, so resolve the compiled
+                          // source by its deterministic path (02_compiled/sources/{id}.md)
+                          // and let the preview pane report if it isn't compiled yet.
+                          handleSelectFile(`02_compiled/sources/${sourceId}.md`);
                         }}
                       />
                     ) : previewTab === "preview" ? (
@@ -577,12 +669,19 @@ export default function VaultPage() {
                             minSize={30}
                             className="min-h-0 overflow-y-auto rounded border p-3 text-sm"
                           >
-                            <MarkdownContent
-                              content={editableContent}
-                              isLoading={vaultFileLoading}
-                              rehypePlugins={streamdownPlugins.rehypePlugins}
-                              className="prose prose-sm max-w-none"
-                            />
+                            {selectedPath && vaultFileError && !vaultFileLoading ? (
+                              <p className="text-muted-foreground text-xs">
+                                Couldn&apos;t open <span className="font-mono">{selectedPath}</span>. It may not be
+                                compiled yet, or no longer exists.
+                              </p>
+                            ) : (
+                              <MarkdownContent
+                                content={editableContent}
+                                isLoading={vaultFileLoading}
+                                rehypePlugins={streamdownPlugins.rehypePlugins}
+                                className="prose prose-sm max-w-none"
+                              />
+                            )}
                           </ResizablePanel>
                           <ResizableHandle
                             id="vault-preview-editor-handle"

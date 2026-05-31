@@ -21,6 +21,7 @@ import {
   getPipelineRunArtifact,
   getVaultActionItems,
   getVaultExplorer,
+  getVaultExplorerChildren,
   getVaultFile,
   getVaultEntityBrowser,
   listVaultEntityDismissals,
@@ -71,6 +72,7 @@ import type {
   VaultSufficiencyRequest,
   VaultStatusResponse,
   VaultExplorerResponse,
+  VaultExplorerChildrenResponse,
   VaultFileWriteRequest,
   VaultIngestStatusResponse,
   VaultEntityBrowserResponse,
@@ -207,6 +209,26 @@ export function useVaultExplorer(options?: { refetchInterval?: number; listenFor
   return { explorer: data ?? null, isLoading, error };
 }
 
+export function useVaultExplorerChildren(
+  path: string | null,
+  options?: { enabled?: boolean; refetchInterval?: number | false },
+) {
+  const isVisible = useDocumentVisible();
+  const { data, isLoading, error } = useWorkspaceRefreshQuery<VaultExplorerChildrenResponse>({
+    queryKey: ["control-plane", "vault-explorer-children", path ?? ""],
+    queryFn: () => getVaultExplorerChildren(path!),
+    enabled: Boolean(path) && options?.enabled !== false,
+    // Pick up background writes (e.g. autoresearch) for expanded folders without
+    // a heavy fixed poll; off when the tab is hidden.
+    refetchInterval: isVisible ? (options?.refetchInterval ?? false) : false,
+    refreshDomains: ["vault"],
+    // A vault refresh should re-fetch every expanded folder, not just one path.
+    invalidateQueryKey: ["control-plane", "vault-explorer-children"],
+    invalidateExact: false,
+  });
+  return { children: data?.children ?? null, isLoading, error };
+}
+
 export function useVaultFile(path: string | null) {
   const { data, isLoading, error } = useWorkspaceRefreshQuery({
     queryKey: ["control-plane", "vault-file", path ?? ""],
@@ -232,7 +254,7 @@ export function useVaultEntityBrowser(options?: {
   top?: number;
   bottom?: number;
   criticalMaxDegree?: number;
-  refetchInterval?: number;
+  refetchInterval?: number | false;
 }) {
   const isVisible = useDocumentVisible();
   const top = options?.top ?? 15;

@@ -31,6 +31,7 @@ import type {
   VaultStatusResponse,
   VaultWriteResponse,
   VaultExplorerResponse,
+  VaultExplorerChildrenResponse,
   VaultFileResponse,
   VaultFileWriteRequest,
   VaultIngestStatusResponse,
@@ -321,6 +322,16 @@ export async function refreshVaultExplorer(): Promise<VaultExplorerResponse> {
     await parseError(response, `Failed to refresh vault explorer: ${response.statusText}`);
   }
   return response.json() as Promise<VaultExplorerResponse>;
+}
+
+export async function getVaultExplorerChildren(path: string): Promise<VaultExplorerChildrenResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/vault/explorer/children?path=${encodeURIComponent(path)}`,
+  );
+  if (!response.ok) {
+    await parseError(response, `Failed to load vault folder: ${response.statusText}`);
+  }
+  return response.json() as Promise<VaultExplorerChildrenResponse>;
 }
 
 export async function startVaultIngest(

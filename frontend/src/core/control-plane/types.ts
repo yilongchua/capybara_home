@@ -383,7 +383,14 @@ export interface VaultExplorerFileNode {
   path: string;
   kind: "directory" | "file" | string;
   size?: number;
+  has_children?: boolean;
+  child_count?: number | null;
   children?: VaultExplorerFileNode[];
+}
+
+export interface VaultExplorerChildrenResponse {
+  path: string;
+  children: VaultExplorerFileNode[];
 }
 
 export interface VaultExplorerSourceItem {
